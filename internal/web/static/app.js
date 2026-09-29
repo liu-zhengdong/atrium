@@ -11,7 +11,6 @@ const icon = {
   escalate: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M8 13V3.5M4 7.5l4-4 4 4"/></svg>',
   check: '<svg class="check" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 8.5 6.5 12 13 4.5"/></svg>',
   repeat: '<svg class="rep" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12.5 6.5A4.8 4.8 0 0 0 3.6 5.2M3.5 9.5a4.8 4.8 0 0 0 8.9 1.3"/><path d="M3.3 2.6v2.8h2.8M12.7 13.4v-2.8H9.9"/></svg>',
-  refresh: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M13 8a5 5 0 1 1-1.6-3.7"/><path d="M13 2.5v2.8h-2.8"/></svg>',
   chev: '<svg class="chev" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M6 3.5 10.5 8 6 12.5"/></svg>',
   sort: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M5 13V3M2.5 5.5 5 3l2.5 2.5M11 3v10M8.5 10.5 11 13l2.5-2.5"/></svg>',
   newline: '<svg class="nl" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12.5 3.5v4a2 2 0 0 1-2 2h-7M6 7 3.5 9.5 6 12"/></svg>',
@@ -244,28 +243,16 @@ function renderDept(d, id, tab) {
       </div>${body}</section>`;
 }
 
-/* 执行者。额度是现读的：先摆上次读数，标题旁转一个小刷新图标，读到就换；读不到留着上次读数，每行写上读的时刻 */
-// 转圈的图标直接加到标题上、读完直接拿掉，不为它重画整页（推送一来就读一次）
-let quotaReading = null, quotaErr = "";
-const spin = `<span class="spin" title="正在读">${icon.refresh}</span>`;
-function readQuota() {
-  if (quotaReading) return;
-  quotaErr = "";
-  $("#quota-h")?.insertAdjacentHTML("beforeend", spin);
-  quotaReading = api("quota").then(q => { const d = last.get("legion"); if (d) Object.assign(d, q); })
-    .catch(err => { quotaErr = err.message; })
-    .finally(() => { quotaReading = null; $("#quota-h .spin")?.remove(); if (parseHash().page === "legion") showPage(); });
-}
+/* 执行者。额度是后台读取存下的读数（推送一来随整页重取）；旧数每行写上读的时刻 */
 const readAt = ms => (day(ms) === "今天" ? "" : date(ms) + " ") + clock(ms) + " 的读数";
 function renderLegion(d) {
   const reserve = d.reserve;
   const accts = d.accounts.length ? `<div class="accts">${d.accounts.map(a => {
     const left = a.left ?? 0;
-    const note = [a.note, (a.stale || quotaErr) && a.at ? readAt(a.at) : ""].filter(Boolean).join(" · ");
+    const note = [a.note, a.stale && a.at ? readAt(a.at) : ""].filter(Boolean).join(" · ");
     return `<div class="acct"><span class="n">${brandMark(a.name)}${esc(a.name)}</span><div class="bar"><i style="width:${left}%;${left < 20 ? "background:var(--wait)" : ""}"></i><span class="reserve" style="width:${reserve}%"></span></div>
     <span class="r">${a.left === null ? esc(a.note || "没有读数") : `剩 <span class="num">${a.left}%</span>${note ? " · " + esc(note) : ""}`}</span></div>`;
   }).join("")}</div>` : `<div class="empty">还没有额度读数</div>`;
-  const reading = quotaReading ? spin : quotaErr ? `<span class="qerr">读不到：${esc(quotaErr)}</span>` : "";
   const hosts = d.hosts.length ? `<div class="hosts">${d.hosts.map(h => `
     <div class="host"><div class="n"><span class="dot ${h.online ? (h.busy ? "run" : "idle") : "off"}"></span><span class="id">${esc(h.id)}</span>${esc(h.name)}</div>
     <div class="s">${esc(h.status)} · ${h.busy}/${h.slots} 在用</div>
@@ -279,7 +266,7 @@ function renderLegion(d) {
     : `<div class="empty">还没有拉起记录</div>`;
   $("#page").innerHTML = `<h1 class="hello">执行者</h1>
   <p class="pulse-line">派活按额度富余挑人${reserve ? `，斜线部分是给你自己留的 ${reserve}%` : ""}。</p>
-  <section class="section"><h2 id="quota-h">额度${reading}</h2>${accts}</section>
+  <section class="section"><h2>额度</h2>${accts}</section>
   <section class="section"><h2>机器</h2>${hosts}</section>
   <section class="section"><h2>表现</h2>${perf}</section>`;
 }
@@ -478,7 +465,7 @@ const skeleton = `<div class="skel">${`<section class="section"><i class="h"></i
 let shownPage = "", shownKey = "", shownDrawer = "";
 function showPage(force) {
   const { page, tab } = parseHash(), p = pageOf(page, tab), d = last.get(p.path);
-  const key = page + "/" + tab + JSON.stringify(d ?? null) + (page === "legion" ? quotaErr : "");
+  const key = page + "/" + tab + JSON.stringify(d ?? null);
   if (key === shownKey && !force) return;
   const top = page === shownPage ? $("#scroll").scrollTop : 0; // 换了页回到顶，同一页（含换页签）保留滚动
   shownPage = page; shownKey = key;
@@ -502,7 +489,6 @@ async function route() {
   clearTimeout(liveTimer);
   try {
     renderTree(page);
-    if (page === "legion") readQuota();
     showPage();
     if (open) { showDrawer(open, page); openDrawer(); } else closeDrawer();
     await Promise.all([...new Set(["nav", pageOf(page, tab).path, open && drawerOf(open, page).path])].filter(Boolean).map(api));

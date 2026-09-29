@@ -309,11 +309,6 @@ func TestRoutes(t *testing.T) {
 	if legion.Accounts == nil || legion.Hosts == nil || len(legion.Perf) != 0 {
 		t.Errorf("空的额度与机器应是空数组，不是 null；还没结果的拉起不计：%+v", legion)
 	}
-	var q Quota
-	read("quota", &q)
-	if len(q.Accounts) != len(legion.Accounts) || q.Reserve != legion.Reserve {
-		t.Errorf("现读的额度与上次读数应是同一组账号：%+v %+v", q, legion.Quota)
-	}
 	// 表现与 atrium workers 同一份统计（workers.Stats）：拉起有了结果才计；不可用标记挂在它挡住的组合下。
 	exit, _ := json.Marshal(workers.Exit{N: 1, Outcome: workers.OutOK})
 	ledger.Record(ctx, db, task.ID, workers.ExitKind, "dispatch", string(exit))

@@ -358,15 +358,12 @@ func TestLinesAndSpare(t *testing.T) {
 	}
 }
 
-func TestRecordAndRead(t *testing.T) {
+func TestRecordAndLast(t *testing.T) {
 	db, err := store.Open(filepath.Join(t.TempDir(), "a.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	// 隔离实例：本机登录与 OpenQuota 都不该去读。
-	localFn = func() *Local { t.Error("隔离实例不该读本机登录"); return nil }
-	openquotaFn = func(context.Context) ([]Pace, error) { t.Error("隔离实例不该读 OpenQuota"); return nil, nil }
 	ctx := context.Background()
 	now := store.Now()
 	w := []Window{{ID: "weekly", Used: 40, Period: week}}
@@ -397,7 +394,11 @@ func TestRecordAndRead(t *testing.T) {
 	}
 	db.Exec(`INSERT INTO quota_settings (name, value) VALUES ('reserve_percent', 50)`)
 	env := &app.Env{DB: db, Paths: config.Paths{Data: t.TempDir()}}
-	ov, err := Read(ctx, env)
+	// 隔离实例没有后台读取，一览只摆存下的读数。
+	if err := loop(ctx, env); err != nil {
+		t.Fatal(err)
+	}
+	ov, err := Last(ctx, env)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -411,18 +412,74 @@ func TestRecordAndRead(t *testing.T) {
 	if !strings.Contains(Format(ov), "claude") {
 		t.Error("Format")
 	}
-	// Last 只摆存下的读数。
-	last, err := Last(ctx, env)
-	used := func(ov Overview) any {
+}
+
+// 后台读取：本机自带读数与 OpenQuota 都存进库，重启后（新的读取器）一览照样有；OpenQuota 到期才再跑。
+func TestPoller(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "a.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+	env := &app.Env{DB: db, Paths: config.Paths{Data: t.TempDir()}}
+	d := fakeDeps(t, map[string]string{"/home/a/.local/share/opencode/auth.json": `{"opencode-go":{"key":"k"}}`},
+		func(w http.ResponseWriter, r *http.Request) {
+			w.Write([]byte(`{"usage":{"rolling":{"percent":1},"weekly":{"percent":2},"monthly":{"percent":3}}}`))
+		})
+	now := time.UnixMilli(1_800_000_000_000)
+	d.Now = func() time.Time { return now }
+	used := 30.0
+	runs := 0
+	var oqErr error
+	p := &poller{local: NewLocal(d), now: d.Now, oq: func(context.Context) ([]Pace, error) {
+		runs++
+		if oqErr != nil {
+			return nil, oqErr
+		}
+		return []Pace{{Account: "kimi", UsedPercent: &used}}, nil
+	}}
+	line := func(acct string) Line {
+		ov, err := Last(ctx, env)
+		if err != nil {
+			t.Fatal(err)
+		}
 		for _, l := range ov.Lines {
-			if l.Account == "claude" && l.UsedPercent != nil {
-				return *l.UsedPercent
+			if l.Account == acct {
+				return l
 			}
 		}
-		return nil
+		t.Fatalf("没有 %s", acct)
+		return Line{}
 	}
-	if err != nil || len(last.Lines) != len(ov.Lines) || used(last) == nil || used(last) != used(ov) {
-		t.Errorf("上次读数应与刚读的一致：%v %+v", err, last)
+	if err := p.round(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	if l := line("opencode"); l.Source != "builtin" || l.UsedPercent == nil {
+		t.Errorf("自带读数应存下：%+v", l)
+	}
+	// 服务重启：内存里什么都没有，一览仍有 OpenQuota 的读数。
+	if l := line("kimi"); l.Source != "openquota" || l.UsedPercent == nil || *l.UsedPercent != 30 {
+		t.Errorf("OpenQuota 读数应落盘：%+v", l)
+	}
+	now = now.Add(time.Minute)
+	p.round(ctx, db)
+	if runs != 1 {
+		t.Errorf("OpenQuota 5 分钟内不该再跑：%d 次", runs)
+	}
+	now = now.Add(okTTL)
+	oqErr = errors.New("OpenQuota 读取失败")
+	if err := p.round(ctx, db); err != nil || runs != 2 {
+		t.Fatalf("到期应再跑：%v %d", err, runs)
+	}
+	ov, _ := Last(ctx, env)
+	if len(ov.Notes) != 2 || ov.Notes[0] != "OpenQuota 读取失败" || line("kimi").Source == "openquota" {
+		t.Errorf("读不到时写原因：%+v", ov.Notes)
+	}
+	// OpenQuota 那一行不混进各台读数。
+	all, err := stored(ctx, db)
+	if err != nil || len(all) != 3 {
+		t.Errorf("各台读数应是三家自带：%v %d", err, len(all))
 	}
 }
 

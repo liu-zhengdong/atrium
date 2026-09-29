@@ -681,7 +681,7 @@ func deptTasks(ctx context.Context, q store.Querier, ix *orgIndex, id string) ([
 	return nest(tasks, out), nil
 }
 
-// Legion 是执行者页：额度（上次读数，现读另走 /ui/api/quota）、机器、组合表现。
+// Legion 是执行者页：额度（后台存下的读数）、机器、组合表现。
 type Legion struct {
 	Quota
 	Hosts  []Host `json:"hosts"`
@@ -759,12 +759,6 @@ func loadLegion(ctx context.Context, env *app.Env, now int64) (Legion, error) {
 	}
 	out.Perf = perfRows(stats, marks)
 	return out, nil
-}
-
-// loadQuota 现读额度（到期的账号真去读，可能要几秒）；执行者页先摆 Legion 里的上次读数，读到再换。
-func loadQuota(ctx context.Context, env *app.Env) (Quota, error) {
-	ov, err := quota.Read(ctx, env)
-	return quotaOf(ov), err
 }
 
 func quotaOf(ov quota.Overview) Quota {

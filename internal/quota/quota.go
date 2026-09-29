@@ -1,6 +1,6 @@
 // Package quota 是额度：自带读取 Claude Code、Codex、OpenCode Go 的用量（读本机已登录凭据调供应商用量接口，只读），
 // 其余账号本机有 OpenQuota 就用 `openquota pace --json` 补；远程机器上报的读数按账号指纹合并。
-// 读数存 quota_cache；给用户留的份额（缺省 20%）扣掉后才算富余。「工具+模型@机器」撞了额度的标记在 workers。
+// 读取只在服务的后台循环里做（loop），读数存 quota_cache；派活、网页、命令都只取存下的读数（Last）。给用户留的份额（缺省 20%）扣掉后才算富余。「工具+模型@机器」撞了额度的标记在 workers。
 //
 // 给 dispatch：Spares(ctx, env) → 账号 → 富余。给 hosts：Local（代理读本机）、Record（服务收远程读数）。
 package quota
@@ -32,36 +32,16 @@ const (
 
 func goos() string { return runtime.GOOS }
 
-// Local 是一台机器上自带读取的缓存：到期才真去请求，同一时刻只有一轮在读。
+// Local 是一台机器上自带读取的到期表：到期才真去请求。只由一个后台循环调用（服务的 loop 或代理的上报）。
 type Local struct {
 	deps Deps
-	mu   sync.Mutex
 	next map[string]time.Time
 }
 
 func NewLocal(d Deps) *Local { return &Local{deps: d, next: map[string]time.Time{}} }
 
-// Default 是这个进程的本机读取（按当前环境）。
-func Default() *Local {
-	defaultOnce.Do(func() {
-		home, _ := os.UserHomeDir()
-		defaultLocal = NewLocal(LocalDeps(runtime.GOOS, home, platform.EnvMap(os.Environ())))
-	})
-	return defaultLocal
-}
-
-var (
-	defaultOnce  sync.Once
-	defaultLocal *Local
-)
-
 // Due 读到期的账号并返回这些新读数（没到期的不读、不返回）。
 func (l *Local) Due(ctx context.Context) []Reading {
-	if l == nil {
-		return nil
-	}
-	l.mu.Lock()
-	defer l.mu.Unlock()
 	now := l.deps.Now()
 	var due []string
 	for _, a := range Builtin {
@@ -136,7 +116,7 @@ func isAccount(a string) bool {
 }
 
 func stored(ctx context.Context, q store.Querier) ([]Stored, error) {
-	rows, err := q.QueryContext(ctx, `SELECT body FROM quota_cache ORDER BY read_at DESC LIMIT 500`)
+	rows, err := q.QueryContext(ctx, `SELECT body FROM quota_cache WHERE account != ? ORDER BY read_at DESC LIMIT 500`, oqKey)
 	if err != nil {
 		return nil, err
 	}
@@ -166,41 +146,97 @@ func Reserve(ctx context.Context, q store.Querier) (int, error) {
 	return v, err
 }
 
-// ---- 读一览 ----
+// ---- 后台读取 ----
 
-var oqCache struct {
-	read sync.Mutex // 同一时刻只有一轮在跑 openquota
-	mu   sync.Mutex // 护着下面的上次结果：Last 取它时不等正在跑的那一轮
-	at   time.Time
-	rows []Pace
-	err  error
+// oqKey 是 quota_cache 里 OpenQuota 那一行的键（account 与 tool 都是它）：存最近一次 `openquota pace --json` 的全部行。
+const oqKey = "openquota"
+
+// oqStored 是 OpenQuota 那一行的内容。
+type oqStored struct {
+	Rows  []Pace `json:"rows"`
+	Error string `json:"error,omitempty"`
 }
 
-func openquota(ctx context.Context) ([]Pace, error) {
-	oqCache.read.Lock()
-	defer oqCache.read.Unlock()
-	if rows, at, err := openquotaLast(); time.Since(at) < okTTL {
-		return rows, err
+// poller 是服务的后台读取：本机自带读取到期就读（到期由 Local 管），OpenQuota 每 okTTL 跑一次，读数都存进 quota_cache。
+// 派活、网页、命令只取存下的读数（Last），不等读取。
+type poller struct {
+	local *Local
+	oq    func(context.Context) ([]Pace, error)
+	now   func() time.Time
+	oqAt  time.Time
+}
+
+// round 读一轮到期的并存下。
+func (p *poller) round(ctx context.Context, db *store.DB) error {
+	if r := p.local.Due(ctx); len(r) > 0 {
+		if err := Record(ctx, db, LocalHost, r); err != nil {
+			return err
+		}
 	}
-	rows, err := readOpenquota(ctx, platform.EnvMap(os.Environ()))
-	oqCache.mu.Lock()
-	oqCache.rows, oqCache.err, oqCache.at = rows, err, time.Now()
-	oqCache.mu.Unlock()
-	return rows, err
+	now := p.now()
+	if now.Sub(p.oqAt) < okTTL {
+		return nil
+	}
+	p.oqAt = now
+	rows, err := p.oq(ctx)
+	st := oqStored{Rows: rows}
+	if err != nil {
+		st.Error = err.Error()
+	}
+	body, _ := json.Marshal(st)
+	_, err = db.ExecContext(ctx, `INSERT INTO quota_cache (account, tool, body, read_at) VALUES (?, ?, ?, ?)
+		ON CONFLICT (account) DO UPDATE SET body = excluded.body, read_at = excluded.read_at`, oqKey, oqKey, string(body), now.UnixMilli())
+	return err
 }
 
-// openquotaLast 是上次 openquota 的结果与读的时刻（服务起来后还没读过为零值）。
-func openquotaLast() ([]Pace, time.Time, error) {
-	oqCache.mu.Lock()
-	defer oqCache.mu.Unlock()
-	return oqCache.rows, oqCache.at, oqCache.err
+// poll 每分钟读一轮，ctx 取消时返回。
+func poll(ctx context.Context, db *store.DB, p *poller) error {
+	for {
+		if err := p.round(ctx, db); err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-time.After(time.Minute):
+		}
+	}
 }
 
-// 测试换成假的：不读开发者本机的登录与 OpenQuota。
-var (
-	localFn     = Default
-	openquotaFn = openquota
-)
+// loop 是服务的后台循环。隔离实例（config.Paths.Isolated）不读本机：不碰开发者的登录、钥匙串与 OpenQuota，只摆存下的读数。
+func loop(ctx context.Context, env *app.Env) error {
+	if env.Paths.Isolated() {
+		return nil
+	}
+	home, _ := os.UserHomeDir()
+	osEnv := platform.EnvMap(os.Environ())
+	return poll(ctx, env.DB, &poller{
+		local: NewLocal(LocalDeps(runtime.GOOS, home, osEnv)),
+		oq:    func(ctx context.Context) ([]Pace, error) { return readOpenquota(ctx, osEnv) },
+		now:   time.Now,
+	})
+}
+
+func openquotaStored(ctx context.Context, q store.Querier) (oqStored, error) {
+	var body string
+	err := q.QueryRowContext(ctx, `SELECT body FROM quota_cache WHERE account = ?`, oqKey).Scan(&body)
+	if store.IsNotFound(err) {
+		return oqStored{}, nil
+	}
+	if err != nil {
+		return oqStored{}, err
+	}
+	var st oqStored
+	if err := json.Unmarshal([]byte(body), &st); err != nil {
+		return oqStored{}, fmt.Errorf("quota_cache 的 OpenQuota 行坏了：%w", err)
+	}
+	return st, nil
+}
+
+// ---- 读一览 ----
 
 // Overview 是 quota 一览。
 type Overview struct {
@@ -209,30 +245,13 @@ type Overview struct {
 	Notes   []string `json:"notes"`
 }
 
-// Read 刷新本机到期的读数，合并各台与 OpenQuota，得出一览。到期时要真去读，可能要几秒。
-// 隔离实例（config.Paths.Isolated）不读本机：不碰开发者的登录、钥匙串与 OpenQuota，只摆存下的读数。
-func Read(ctx context.Context, env *app.Env) (Overview, error) {
-	if env.Paths.Isolated() {
-		return overview(ctx, env, nil, nil)
-	}
-	if r := localFn().Due(ctx); len(r) > 0 {
-		if err := Record(ctx, env.DB, LocalHost, r); err != nil {
-			return Overview{}, err
-		}
-	}
-	oq, err := openquotaFn(ctx)
-	return overview(ctx, env, oq, err)
-}
-
-// Last 是上次读数的一览：不去读，马上返回（网页先摆上次读数，现读交给 Read）。
+// Last 是存下的读数的一览：不去读，马上返回（读取由后台循环做）。
 func Last(ctx context.Context, env *app.Env) (Overview, error) {
-	oq, _, err := openquotaLast()
-	return overview(ctx, env, oq, err)
-}
-
-// overview 把存下的各台读数与 OpenQuota 的一份合成一览。
-func overview(ctx context.Context, env *app.Env, oq []Pace, oqErr error) (Overview, error) {
 	all, err := stored(ctx, env.DB)
+	if err != nil {
+		return Overview{}, err
+	}
+	oq, err := openquotaStored(ctx, env.DB)
 	if err != nil {
 		return Overview{}, err
 	}
@@ -241,19 +260,19 @@ func overview(ctx context.Context, env *app.Env, oq []Pace, oqErr error) (Overvi
 		return Overview{}, err
 	}
 	ov := Overview{Reserve: reserve, Notes: []string{}}
-	if oqErr != nil {
-		ov.Notes = append(ov.Notes, oqErr.Error())
+	if oq.Error != "" {
+		ov.Notes = append(ov.Notes, oq.Error)
 	}
 	if env.Paths.Isolated() {
 		ov.Notes = append(ov.Notes, "隔离实例不读本机额度（自带读取与 OpenQuota）")
 	}
-	ov.Lines = Lines(mergeHosts(all, LocalHost, store.Now()), oq)
+	ov.Lines = Lines(mergeHosts(all, LocalHost, store.Now()), oq.Rows)
 	return ov, nil
 }
 
 // Spares 给派活：每个账号的富余（已扣给用户留的份额）。
 func Spares(ctx context.Context, env *app.Env) (map[string]Spare, error) {
-	ov, err := Read(ctx, env)
+	ov, err := Last(ctx, env)
 	if err != nil {
 		return nil, err
 	}
@@ -266,14 +285,16 @@ func Spares(ctx context.Context, env *app.Env) (map[string]Spare, error) {
 
 // ---- 接入 ----
 
-func Module() app.Module { return app.Module{Name: "quota", Commands: Commands, Routes: Routes} }
+func Module() app.Module {
+	return app.Module{Name: "quota", Commands: Commands, Routes: Routes, Run: loop}
+}
 
 type setBody struct {
 	Reserve *int `json:"reserve,omitempty"`
 }
 
 func Routes(r *api.Router, env *app.Env) {
-	r.Handle("GET /api/quota", func(q *api.Req) (any, error) { return Read(q.Context(), env) })
+	r.Handle("GET /api/quota", func(q *api.Req) (any, error) { return Last(q.Context(), env) })
 	r.Handle("POST /api/quota", func(q *api.Req) (any, error) {
 		if q.Actor.Kind != "user" {
 			return nil, api.Forbidden("只有用户能改额度设置")
@@ -292,7 +313,7 @@ func Routes(r *api.Router, env *app.Env) {
 				return nil, err
 			}
 		}
-		return Read(ctx, env)
+		return Last(ctx, env)
 	})
 }
 

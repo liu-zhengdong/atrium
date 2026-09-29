@@ -1,4 +1,4 @@
-// Atrium 只读网页。地址：#today、#legion、#oN[/tasks|rules|files]；末段是 tN 或 cN 时打开抽屉。
+// Atrium 只读网页。地址：#today、#legion、#oN[/tasks|rules|files]；末段是 tN、cN 或 sN 时打开抽屉。
 // 数据只从 /ui/api/… 读；/ui/stream 推「changed」时重取当前页与抽屉。
 "use strict";
 
@@ -10,6 +10,7 @@ const icon = {
   stuck: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M8 4v5"/><circle cx="8" cy="11.8" r=".6" fill="currentColor"/></svg>',
   escalate: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M8 13V3.5M4 7.5l4-4 4 4"/></svg>',
   check: '<svg class="check" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 8.5 6.5 12 13 4.5"/></svg>',
+  repeat: '<svg class="rep" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12.5 6.5A4.8 4.8 0 0 0 3.6 5.2M3.5 9.5a4.8 4.8 0 0 0 8.9 1.3"/><path d="M3.3 2.6v2.8h2.8M12.7 13.4v-2.8H9.9"/></svg>',
   x: '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 4l8 8M12 4l-8 8"/></svg>',
 };
 
@@ -42,13 +43,23 @@ function size(n) {
   if (n >= 1 << 10) return Math.round(n / (1 << 10)) + " KB";
   return n + " B";
 }
+/* 下一轮：一小时内「N 分后」，今天「HH:MM」，明天「明天 HH:MM」，一周内「周X HH:MM」，更远「MM-DD」 */
+const WD = "日一二三四五六";
+function ahead(ms) {
+  const d = ms - Date.now(), t = new Date(ms), day = Math.round((new Date(t).setHours(0, 0, 0, 0) - new Date().setHours(0, 0, 0, 0)) / 864e5);
+  if (d < 3600e3) return Math.max(1, Math.round(d / 60e3)) + " 分后";
+  if (day === 0) return clock(ms);
+  if (day === 1) return "明天 " + clock(ms);
+  if (day < 7) return "周" + WD[t.getDay()] + " " + clock(ms);
+  return date(ms);
+}
 const deptName = id => nav.depts.find(d => d.id === id)?.name || id;
 
 /* 地址 */
 function parseHash() {
   const segs = location.hash.slice(1).split("/").filter(Boolean);
   let open = null;
-  if (segs.length && /^[tc][1-9]\d*$/.test(segs[segs.length - 1])) open = segs.pop();
+  if (segs.length && /^[tcs][1-9]\d*$/.test(segs[segs.length - 1])) open = segs.pop();
   return { page: segs[0] || "today", tab: segs[1] || "", open };
 }
 function hashWith(open) {
@@ -62,6 +73,21 @@ function taskRow(r, timeFn = ago, depth = 0, who = r.who) {
   return `<div class="row ${["done", "draft", "off"].includes(r.state) ? "done" : ""}" data-task="${esc(r.id)}" tabindex="0"${depth ? ` style="--d:${Math.min(depth, 4)}"` : ""}>
     ${lead}<div class="title"><span class="id">${esc(r.id)}</span>${esc(r.title)}</div>
     <div class="who">${esc(who)}</div><div class="time num">${esc(timeFn(r.at))}</div></div>`;
+}
+
+/* 周期任务一行：多久一轮写在行尾标签，下一轮写在时间列；暂停范围内写「暂停中」。窄屏时间列隐藏，改用下一轮顶替标签（见 app.css）。
+   dept：部门页，下面挂上一轮（点开是那件任务）；today：今天页，不挂上一轮，只在出了问题时把问题写在行尾。 */
+// 下一轮总写到钟点：窄屏只剩这一列，省了钟点就看不出几点跑。
+const schedWhen = s => s.paused ? "暂停中" : ahead(s.next_at);
+function schedRow(s, where, deptLabel = "") {
+  const tag = [deptLabel, s.cadence, s.kind].filter(Boolean).join(" · ");
+  const warn = where === "today" && s.trouble;
+  const head = `<div class="row sched${warn ? " trouble" : ""}" data-sched="${esc(s.id)}" tabindex="0">${icon.repeat}
+    <div class="title"><span class="id">${esc(s.id)}</span>${esc(s.title)}</div>
+    <div class="who">${warn ? `<span class="warn">上一轮派活失败</span>` : esc(tag)}</div><div class="time num">${esc(schedWhen(s))}</div></div>`;
+  if (where !== "dept" || !s.last) return head;
+  const who = s.trouble ? `<span class="warn">派活失败</span>` : esc(s.last.who) + (s.skips ? ` · <span class="warn">跳过 ${s.skips} 轮</span>` : "");
+  return head + taskRow({ ...s.last, title: "上一轮" }, ago, 1).replace(/<div class="who">.*?<\/div>/, `<div class="who">${who}</div>`);
 }
 
 /* 任务树：没结束的子任务都摆出来（卡在哪一件一眼可见）；结束的两件以上折成一行，点开再看。展开状态跨刷新保留。 */
@@ -118,12 +144,30 @@ async function renderToday() {
     <h1 class="hello">${d.paused.includes("all") ? "已全部暂停" : d.asks.length ? `${d.asks.length} 件事等你` : d.paused.length ? `部分暂停：${esc(d.paused.join("、"))}` : "军团在自己运转"}</h1>
     <p class="pulse-line"><span class="dot ${d.running.length ? "run" : "idle"}"></span>&nbsp; ${d.running.length} 件在做 · ${d.queued} 件排队 · 今天上线 ${d.shipped.length} 件${draftsLink(d.drafts)}</p>
     <section class="section"><h2>等你</h2>${asks}</section>
-    <section class="section"><h2>在做${d.running.length > 1 ? `<button class="sort" id="sort">按${sortMode} ▾</button>` : ""}</h2><div class="rows">${live}</div>
-      ${d.shipped.length ? `<div class="dept-h" style="padding-top:18px">今天上线</div><div class="rows">${d.shipped.map(r => taskRow(r, clock)).join("")}</div>` : ""}
-    </section>
+    <section class="section"><h2>在做${d.running.length > 1 ? `<button class="sort" id="sort">按${sortMode} ▾</button>` : ""}</h2><div class="rows">${live}</div></section>
+    <section class="section"><h2>接下来 7 天</h2>${soonHTML(d.soon)}</section>
+    ${d.shipped.length ? `<section class="section"><h2>今天上线</h2><div class="rows">${shippedRows(d.shipped)}</div></section>` : ""}
     <section class="section"><h2>三个目标</h2><dl class="facts"><dt>近 7 天</dt><dd>${esc(d.goals.week.text)}</dd><dt>累计</dt><dd>${esc(d.goals.all.text)}</dd></dl></section>`;
   const sort = $("#sort");
   if (sort) sort.onclick = () => { sortMode = sortMode === "部门" ? "用时" : "部门"; renderToday().catch(fail); };
+}
+
+/* 今天上线：先摆最近 5 件，其余折成一行（与任务树里「已结束 N 件」同一种折法） */
+const shipFold = 5;
+function shippedRows(rows) {
+  const open = openKids.has("shipped"), rest = rows.length - shipFold;
+  return rows.slice(0, rest > 1 && !open ? shipFold : rows.length).map(r => taskRow(r, clock)).join("")
+    + (rest > 1 ? `<button class="row kfold" data-kids="shipped" aria-expanded="${open}"><span class="chev">›</span><div class="title">${open ? "收起" : `还有 ${rest} 件`}</div></button>` : "");
+}
+
+/* 接下来 7 天：按一级部门分组，组内按下一轮先后；不在一级部门本身的，行尾带部门名 */
+function soonHTML(soon) {
+  if (!soon.rows.length) return `<div class="empty">7 天内没有定期的事</div>`;
+  const groups = new Map();
+  soon.rows.forEach(s => { if (!groups.has(s.group)) groups.set(s.group, []); groups.get(s.group).push(s); });
+  return `<div class="rows">${[...groups].map(([g, rows]) => `<div class="dept-h"><a href="#${esc(g)}">${esc(deptName(g))}</a></div>`
+    + rows.map(s => schedRow(s, "today", s.org !== g ? s.dept_name : "")).join("")).join("")}</div>`
+    + (soon.later ? `<div class="more">另有 ${soon.later} 条在 7 天以后</div>` : "");
 }
 
 /* 部门 */
@@ -138,6 +182,8 @@ async function renderDept(id, tab) {
       <span class="w">${esc(s.what)}</span><span class="c">${esc(c)}</span></button>`;
   }).join("");
   const intro = [["怎么用", dept.uses], ["现状", dept.now], ["下一步", dept.next]].filter(x => x[1]);
+  const sched = d.schedules.length ? `<section class="section"><h2>周期任务<span class="cap">${d.schedules.length}/${d.schedule_max}</span></h2>
+    <div class="rows">${d.schedules.map(s => schedRow(s, "dept")).join("")}</div></section>` : "";
   let body = "";
   if (tab === "tasks") body = d.tasks.length ? taskGroups(d.tasks) : `<div class="empty">这个部门现在没有任务</div>`;
   if (tab === "rules") {
@@ -159,6 +205,7 @@ async function renderDept(id, tab) {
     ${intro.length ? `<dl class="intro">${intro.map(x => `<dt>${x[0]}</dt><dd>${esc(x[1])}</dd>`).join("")}</dl>` : ""}
     ${d.leader ? `<div class="lead"><b>${esc([...d.leader.name][0] || "负")}</b>${esc(d.leader.name)}${d.leader.inherited ? "（上级）" : ""}<span>${esc(d.leader.workers)}</span></div>`
       : `<div class="lead"><b>你</b>你直接管<span>秘书帮你盯着</span></div>`}
+    ${sched}
     ${d.subs.length ? `<section class="section"><h2>下属部门</h2><div class="subs">${subCards}</div></section>` : ""}
     <section class="section">
       <div class="tabs">
@@ -320,6 +367,27 @@ async function openChoice(id) {
       ${c.status === "open" ? `<p class="status-line">选哪几个，在终端里告诉秘书。</p>` : ""}
     </div>`;
 }
+/* 周期任务抽屉：下一轮的完整时刻、每轮做什么、最近几轮（点开是那件任务）、最近一笔记录，详述折起 */
+const kindDoes = { "调研": "写一张选项单给你挑", "体验巡检": "把主路径走一遍，能修的开 PR" };
+async function openSchedule(id) {
+  const s = await api("schedule/" + id);
+  const w = ahead(s.next_at), next = new Date(s.next_at);
+  const when = s.paused ? "暂停中：到点不生成，恢复后只补一轮"
+    : /^\d\d-/.test(w) ? `${w} ${clock(s.next_at)}` : `${/^\d\d:/.test(w) ? "今天 " : ""}${w}（${pad(next.getMonth() + 1)}-${pad(next.getDate())}）`;
+  const facts = [["每轮", kindDoes[s.kind] || firstPara(s.detail)], ["技能", s.skill]].filter(x => x[1]);
+  const day = r => (r.title.match(/（(\d\d-\d\d)）$/) || [])[1];
+  $("#drawer").innerHTML = `
+    <div class="dhead"><span class="id">${esc(s.id)} · ${esc(s.dept_name)}</span><button class="x" data-close aria-label="关闭">${icon.x}</button></div>
+    <div class="dbody"><h3>${esc(s.title)}</h3>
+      <p class="sub-t">${esc([s.cadence, s.kind].filter(Boolean).join(" · "))} · ${esc({ secretary: "秘书", u1: "你" }[s.by] || s.by)} ${esc(date(s.created_at))} 建</p>
+      <div class="holder"><b>下一轮</b>　${esc(when)}</div>
+      ${facts.length ? `<dl class="facts">${facts.map(f => `<dt>${f[0]}</dt><dd>${esc(f[1])}</dd>`).join("")}</dl>` : ""}
+      <div class="jh"><b>最近几轮</b>${s.skips ? `<span>跳过过 ${s.skips} 轮</span>` : ""}</div>
+      ${s.rounds.length ? `<div class="rows">${s.rounds.map(r => taskRow({ ...r, title: day(r) ? day(r) + " 这一轮" : r.title })).join("")}</div>` : `<div class="quiet-line">还没跑过</div>`}
+      ${s.note ? `<p class="status-line${s.trouble ? " warn" : ""}">${esc(s.note)}</p>` : ""}
+      ${s.detail ? `<details class="full"><summary>详述</summary><div class="result">${md(s.detail.trim())}</div></details>` : ""}
+    </div>`;
+}
 function openDrawer() { $("#island").classList.add("open"); setTimeout(() => $("#drawer").focus(), 50); }
 function closeDrawer() { $("#island").classList.remove("open"); }
 
@@ -358,7 +426,7 @@ async function route(keepScroll) {
     if (keepScroll) $("#scroll").scrollTop = scroll;
     if (toDrafts) { toDrafts = false; $("#drafts")?.scrollIntoView({ block: "start" }); }
     if (open) {
-      await (open[0] === "c" ? openChoice(open) : openTask(open));
+      await (open[0] === "c" ? openChoice(open) : open[0] === "s" ? openSchedule(open) : openTask(open));
       if (!$("#island").classList.contains("open")) openDrawer();
     } else closeDrawer();
   } catch (err) { fail(err); }
@@ -388,12 +456,15 @@ document.addEventListener("click", e => {
   const cmd = e.target.closest("#drawer [data-c]");
   if (cmd) { const k = cmd.dataset.c; unfolded.has(k) ? unfolded.delete(k) : unfolded.add(k); return renderTask(drawerTask); }
   const t = e.target.closest("[data-task]"); if (t) { location.hash = hashWith(t.dataset.task); return; }
+  const sc = e.target.closest("[data-sched]"); if (sc) { location.hash = hashWith(sc.dataset.sched); return; }
   const a = e.target.closest("[data-open]"); if (a) { location.hash = hashWith(a.dataset.open); return; }
   const g = e.target.closest("[data-go]"); if (g) { location.hash = g.dataset.go; return; }
   if (e.target.closest("[data-close]") || e.target.id === "scrim") location.hash = hashWith(null);
 });
 document.addEventListener("keydown", e => {
   if (e.key === "Escape" && parseHash().open) location.hash = hashWith(null);
+  const sc = e.target.closest?.("[data-sched]");
+  if (sc && e.key === "Enter") location.hash = hashWith(sc.dataset.sched);
   const t = e.target.closest?.("[data-task]");
   if (t && e.key === "Enter") location.hash = hashWith(t.dataset.task);
   if (t && (e.key === "ArrowDown" || e.key === "ArrowUp")) {

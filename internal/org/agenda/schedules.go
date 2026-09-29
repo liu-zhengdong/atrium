@@ -27,6 +27,9 @@ var Enqueue func(ctx context.Context, env *app.Env, task, actor string) error
 
 var Kinds = map[string]string{"task": "自定义", "patrol": "体验巡检", "research": "调研"}
 
+// DispatchFailed 是一轮派活失败时记在 last_note 里的字样；网页据此把这一轮标红。
+const DispatchFailed = "派活失败"
+
 const (
 	maxScheduleTitle  = 150
 	maxScheduleDetail = 8000
@@ -193,6 +196,36 @@ func RemoveSchedule(ctx context.Context, db *store.DB, id string) (Schedule, err
 	return x, err
 }
 
+// Rounds 是周期任务最近生成的 n 轮任务（created 经历的 actor 是 sN，含手动生成的），新的在前。
+func Rounds(ctx context.Context, q store.Querier, id string, n int) ([]ledger.Task, error) {
+	rows, err := q.QueryContext(ctx, `SELECT task FROM task_events WHERE kind = 'created' AND actor = ? ORDER BY id DESC LIMIT ?`, id, n)
+	if err != nil {
+		return nil, err
+	}
+	var ids []string
+	for rows.Next() {
+		var t string
+		if err := rows.Scan(&t); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		ids = append(ids, t)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	out := make([]ledger.Task, 0, len(ids))
+	for _, t := range ids {
+		x, err := ledger.Get(ctx, q, t)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, x)
+	}
+	return out, nil
+}
+
 // openRound 是上一轮还没结束的任务；没有为空。
 func openRound(ctx context.Context, q store.Querier, x Schedule) (string, error) {
 	if x.LastTask == "" {
@@ -282,7 +315,7 @@ func runRound(ctx context.Context, env *app.Env, x Schedule, next int64, note st
 		runErr = Enqueue(ctx, env, t.ID, x.ID)
 	}
 	if runErr != nil {
-		note = strings.TrimSpace(note + " 派活失败：" + runErr.Error())
+		note = strings.TrimSpace(note + " " + DispatchFailed + "：" + runErr.Error())
 	}
 	if _, err := env.DB.ExecContext(ctx, `UPDATE schedules SET last_task = ?, last_run_at = ?, next_at = ?, last_note = ? WHERE id = ?`,
 		t.ID, now, next, note, x.ID); err != nil {

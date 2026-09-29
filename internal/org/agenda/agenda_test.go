@@ -111,6 +111,32 @@ func TestClock(t *testing.T) {
 	}
 }
 
+func TestCadence(t *testing.T) {
+	wed := ms(time.Date(2026, 9, 30, 9, 0, 0, 0, time.UTC)) // 周三
+	at := func(every int64, at string) Schedule { return Schedule{EveryMs: every, At: at, NextAt: wed} }
+	for _, c := range []struct {
+		x    Schedule
+		want string
+	}{
+		{at(7*day, "09:00"), "每周三 09:00"},
+		{at(7*day, ""), "每周三"},
+		{at(14*day, "10:00"), "每 2 周 周三 10:00"},
+		{at(day, "09:00"), "每天 09:00"},
+		{at(day, ""), "每天"},
+		{at(3*day, "21:30"), "每 3 天 21:30"},
+		{at(12*hour, ""), "每 12 小时"},
+		{at(90*minute, ""), "每 90 分钟"},
+	} {
+		if got := Cadence(c.x, time.UTC); got != c.want {
+			t.Errorf("%d %q：得到 %q，应为 %q", c.x.EveryMs, c.x.At, got, c.want)
+		}
+	}
+	// 星期按 loc 算：UTC 周三 01:00 在纽约还是周二。
+	if got := Cadence(Schedule{EveryMs: 7 * day, NextAt: ms(time.Date(2026, 9, 30, 1, 0, 0, 0, time.UTC))}, time.FixedZone("NY", -4*3600)); got != "每周二" {
+		t.Errorf("按 loc 算星期：%q", got)
+	}
+}
+
 func sample(n int) ChoiceInput {
 	in := ChoiceInput{Title: "下一步", Recommend: []int{1}, Reason: "最快见效"}
 	for i := 0; i < n; i++ {
@@ -347,6 +373,15 @@ func TestScheduleTick(t *testing.T) {
 	ledger.Apply(ctx, env.DB, queued[2], ledger.Event{Kind: ledger.Cancel}, "u1", "")
 	if tk, err := RunNow(ctx, env, "s1", loc); err == nil || tk.ID == "" {
 		t.Fatal("派活未接入应报错")
+	}
+	// 最近几轮：到点生成的和手动生成的都算，新的在前。
+	x, _ = GetSchedule(ctx, env.DB, "s1")
+	rounds, err := Rounds(ctx, env.DB, "s1", 5)
+	if err != nil || len(rounds) != 4 || rounds[3].ID != queued[0] || rounds[0].ID != x.LastTask {
+		t.Fatalf("最近几轮：%+v %v", rounds, err)
+	}
+	if rounds, _ := Rounds(ctx, env.DB, "s1", 2); len(rounds) != 2 {
+		t.Fatalf("最多 n 轮：%d", len(rounds))
 	}
 	if _, err := RemoveSchedule(ctx, env.DB, "s1"); err != nil {
 		t.Fatal(err)

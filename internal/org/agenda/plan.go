@@ -66,6 +66,32 @@ func ParseAt(s string, every int64) (int, error) {
 
 func AtText(at int) string { return fmt.Sprintf("%02d:%02d", at/60, at%60) }
 
+// Cadence 是给人看的周期：「每周三 09:00」「每 2 周 周三」「每天 09:00」「每 12 小时」；星期按下一轮在 loc 里算。
+// 命令行与网页共用这一份。
+func Cadence(x Schedule, loc *time.Location) string {
+	clock := ""
+	if x.At != "" {
+		clock = " " + x.At
+	}
+	week := 7 * day
+	switch ms := x.EveryMs; {
+	case ms%week == 0:
+		wd := "周" + string([]rune("日一二三四五六")[time.UnixMilli(x.NextAt).In(loc).Weekday()])
+		if ms == week {
+			return "每" + wd + clock
+		}
+		return fmt.Sprintf("每 %d 周 %s%s", ms/week, wd, clock)
+	case ms == day:
+		return "每天" + clock
+	case ms%day == 0:
+		return fmt.Sprintf("每 %d 天%s", ms/day, clock)
+	case ms%hour == 0:
+		return fmt.Sprintf("每 %d 小时", ms/hour)
+	default:
+		return fmt.Sprintf("每 %d 分钟", ms/minute)
+	}
+}
+
 // clockOn 是 t 所在本机日期往后 days 天的 at 钟点。
 func clockOn(t time.Time, days, at int, loc *time.Location) int64 {
 	l := t.In(loc)

@@ -160,11 +160,7 @@ func parsePicks(list []string) ([]int, error) {
 }
 
 func scheduleLine(x Schedule) string {
-	when := "每 " + x.Every
-	if x.At != "" {
-		when += " " + x.At
-	}
-	s := fmt.Sprintf("%s  %s  %s  %s  %s  下一轮 %s", x.ID, x.Org, Kinds[x.Kind], when, x.Title,
+	s := fmt.Sprintf("%s  %s  %s  %s  %s  下一轮 %s", x.ID, x.Org, Kinds[x.Kind], Cadence(x, time.Local), x.Title,
 		time.UnixMilli(x.NextAt).Local().Format("01-02 15:04"))
 	if x.LastTask != "" {
 		s += "  上一轮 " + x.LastTask

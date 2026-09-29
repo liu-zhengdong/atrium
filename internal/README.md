@@ -45,7 +45,7 @@ Go 代码怎么分包、包之间怎么调用、并行开发时各自改哪里�
 | `quota` | 完成 | 额度读取、多机合并、富余（`Spares`）；`quota` | `quota_cache` `quota_settings` |
 | `web` | 完成 | 只读网页与只读接口；`map`；今天页末尾一块是三个目标的数；「等你」= 待拍板的选项单 + 等你验收的交付 + 递到你这层的卡住任务 + 上交到秘书还没确认的事；部门页负责人一行点开是负责人抽屉（执行者组合、负责哪些部门、备忘按行分段，地址 `#oN/aN`，数据就用部门页的）；部门页任务按父子排成树（结束的子任务两件以上折成一行，没派的行尾写「等 tN」），任务抽屉给上级、子任务、要等的、在等它的，来源后的负责人名字点开是他的负责人抽屉；任务抽屉的「经过」是执行者真日志按段解析（`workers.ReadTrace`，与 `task log` 同一份解析）；周期任务在部门页（挂上一轮）、今天页「接下来 7 天」和抽屉（最近 5 轮，`agenda.Rounds`）里看得到，多久一轮与 `schedule ls` 共用 `agenda.Cadence`；代为注册一次性的 `import`（实现在 `importer`） | — |
 | `importer` | 完成 | 从旧 TS 库只读导入部门、要点、负责人、备忘、技能、资料、档案、机器 | — |
-| `secretary` | 完成 | 把事件注入 Claude Code 会话；`secretary bridge`（`--install-hook` 装 SessionStart hook 与 `ATRIUM_AS=secretary`；`--detach` 起好后输出此刻全景与秘书备忘进会话；执行者环境里 `--detach` 静默退出）、`statusline`（状态栏调用，不列在帮助里） | — |
+| `secretary` | 完成 | 把事件注入 Claude Code 会话；`secretary bridge`（`--install-hook` 装 SessionStart hook 与 `ATRIUM_AS=secretary`；`--detach` 起好后输出根部门要点、此刻全景与秘书备忘进会话；执行者环境里 `--detach` 静默退出）、`statusline`（状态栏调用，不列在帮助里） | — |
 
 ## 共同约定
 

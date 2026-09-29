@@ -81,3 +81,9 @@ func SelfUpgrade(data, defaultData, version string) (bool, string) {
 	}
 	return true, ""
 }
+
+// Upgrade 判发版巡检这一轮升不升：本实例开了自升级（默认数据目录、发版版本，见 SelfUpgrade）、
+// 没有全局暂停、最新发布比运行中的新，且本进程没在这个版本上升失败过（失败只报一次，不反复重试）。
+func Upgrade(current, latest string, enabled, paused bool, failed string) bool {
+	return enabled && !paused && latest != failed && Compare(latest, current) > 0
+}

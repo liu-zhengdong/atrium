@@ -22,9 +22,10 @@ import (
 
 // 事件种类。新增种类在这里加常量，别处不写字符串字面量。
 const (
-	TaskStatus = "task.status" // 任务状态变化（含转入已合入）；Body: {"from","to","stage","title","note"?}
-	Overdue    = "overdue"     // 持球人到期（watch 包发）；Body: {"holder","held_ms","next",…}
-	ChoiceOpen = "choice.open" // 有选项单等用户拍板（org/agenda 发，投秘书）；Body: {"choice","title"}
+	TaskStatus   = "task.status"   // 任务状态变化（含转入已合入）；Body: {"from","to","stage","title","note"?}
+	Overdue      = "overdue"       // 持球人到期（watch 包发）；Body: {"holder","held_ms","next",…}
+	ChoiceOpen   = "choice.open"   // 有选项单等用户拍板（org/agenda 发，投秘书）；Body: {"choice","title"}
+	OnlineFailed = "online.failed" // 自升级失败（release 发，投秘书；同一版本本进程只发一次）；Body: {"from","to","error"}
 )
 
 // 级别。

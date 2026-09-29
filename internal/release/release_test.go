@@ -17,6 +17,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/liu-zhengdong/atrium/internal/events"
 	"github.com/liu-zhengdong/atrium/internal/gates"
 	"github.com/liu-zhengdong/atrium/internal/ledger"
 	"github.com/liu-zhengdong/atrium/internal/pause"
@@ -225,9 +226,68 @@ func TestPausedNoUpgrade(t *testing.T) {
 	e.merged("c2")
 	(&pause.Store{DB: e.db}).Set(e.ctx, pause.All, "u1")
 	e.r.Sweep(e.ctx)
+	if e.downloads() != 0 {
+		t.Fatal("暂停时不该升级")
+	}
+}
+
+func (e *env) downloads() int {
+	n := 0
 	for _, c := range e.gh.calls {
 		if strings.HasPrefix(c, "release download") {
-			t.Fatal("暂停时不该升级")
+			n++
 		}
+	}
+	return n
+}
+
+// 没有任务等上线也升级：发版巡检自己看最新发布。
+func TestUpgradesWithoutWaitingTask(t *testing.T) {
+	e := setup(t, true)
+	e.gh.tags = append(e.gh.tags, "v2.0.2")
+	restarted := make(chan string, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		restarted <- r.URL.Path
+		fmt.Fprint(w, `{"ok":true,"result":{}}`)
+	}))
+	defer srv.Close()
+	u, _ := url.Parse(srv.URL)
+	e.r.Cfg.Port, _ = strconv.Atoi(u.Port())
+	if err := e.r.Sweep(e.ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := <-restarted; got != "/api/service/restart" {
+		t.Fatal(got)
+	}
+	if raw, _ := os.ReadFile(e.r.Exe); string(raw) != "new binary v2.0.2" {
+		t.Fatalf("没换成新版本：%q", raw)
+	}
+}
+
+// 同一版本升失败：发一次 online.failed 给秘书，之后不再重试。
+func TestUpgradeFailsOnce(t *testing.T) {
+	e := setup(t, true)
+	e.gh.tags = append(e.gh.tags, "v2.0.2")
+	e.gh.badSum = true
+	for range 3 {
+		if err := e.r.Sweep(e.ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := e.downloads(); n != 1 {
+		t.Fatalf("同一版本升失败不该重试，下载了 %d 次", n)
+	}
+	var n int
+	var target, level, body string
+	e.db.QueryRow(`SELECT COUNT(*), MAX(target), MAX(level), MAX(body) FROM events WHERE kind = ?`, events.OnlineFailed).
+		Scan(&n, &target, &level, &body)
+	if n != 1 || target != events.Secretary || level != events.Act || !strings.Contains(body, "校验和不符") {
+		t.Fatalf("应给秘书发一条要处理的 online.failed：%d %s %s %s", n, target, level, body)
+	}
+	// 失败后当前版本已含的任务照常上线。
+	id := e.merged("c1")
+	e.r.Sweep(e.ctx)
+	if got := e.get(id); got.Stage != ledger.StageReleased {
+		t.Fatalf("升失败不挡当前版本的上线：%+v", got)
 	}
 }

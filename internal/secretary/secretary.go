@@ -6,7 +6,6 @@
 // 收件地址不在了立即退出，地址还在但连不上要连续 2 分钟；没送进去的留着下一轮重送）。
 // statusline 给 Claude Code 状态栏一行字；服务不在只显示「未运行」，不拉起。
 // --install-hook 同时在项目设置 env 里写 ATRIUM_AS=secretary：秘书会话发的命令署名秘书（权限同用户）。
-// 执行者的工作树顺着读到秘书目录的项目设置，SessionStart hook 也会在执行者会话里跑：那里 --detach 静默退出。
 // --detach 起好后再输出根部门要点、此刻全景与秘书备忘（Brief）：hook 的输出进会话上下文，进展以账本为准，备忘不记进展。
 // 判定在 plan.go、statusline.go（纯函数）。
 package secretary
@@ -50,7 +49,7 @@ func Commands(t *cli.Table) {
 			{Name: "status", Bool: true, Help: "看 bridge 在不在跑、秘书在不在听"},
 			{Name: "batch", Value: "秒", Help: "首条事件到了之后攒多久再送（缺省 30）"},
 		},
-		Read: true, Run: bridgeCommand}) // 读写由 bridgeCommand 自己判：执行者里只放行 --detach 静默退出
+		Run: bridgeCommand})
 	// statusline 由 Claude Code 状态栏调用（settings.json 的 statusLine），不是人敲的：不列在帮助里。
 	t.Add(cli.Command{Path: "statusline", Read: true, Summary: "一行状态给 Claude Code 状态栏：等你拍板、未结束任务各在谁手里、秘书在不在听", Hidden: true,
 		Run: func(c *cli.Ctx) error {
@@ -72,12 +71,6 @@ func Commands(t *cli.Table) {
 }
 
 func bridgeCommand(c *cli.Ctx) error {
-	if cli.Guarded(c.Env.Getenv) {
-		if c.Bool("detach") {
-			return nil // 执行者会话里跑到了秘书目录的 SessionStart hook：不是秘书会话，安静退出
-		}
-		return cli.WorkerDenied()
-	}
 	if err := c.MaxArgs(0); err != nil {
 		return err
 	}

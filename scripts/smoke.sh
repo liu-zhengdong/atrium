@@ -371,6 +371,62 @@ grep -q "原地干" "$ATRIUM_DATA/tasks/$dirt/prompt-1.md" || fail "提示词应
 [ ! -e "$ATRIUM_DATA/tasks/$dirt/repo" ] && [ ! -e "$ATRIUM_DATA/tasks/$dirt/work" ] || fail "不该建工作树或 work/"
 [ ! -e "$place/.git" ] || fail "不该在工作地点建 git 仓库"
 
+step "技能声明交付检查项：文章与视频（gates 运行时自己跑检查并记产物路径进经历）"
+out=$(json skill add web-article "$work/skill" --checks article); has '.ok'
+out=$(json skill add remotion-video "$work/skill" --checks video); has '.ok'
+
+until_bounced() {
+  local id="$1"
+  for _ in $(seq 150); do
+    out=$(json task show "$id")
+    if jq -e '.result.history|map(select(.kind == "bounce"))|length > 0' >/dev/null <<<"$out"; then
+      return 0
+    fi
+    sleep 0.2
+  done
+  fail "$id 没出现 bounce 经历：$out"
+}
+
+# 1. 文章小样工程：构建通过，运行时自己起本地预览并生成明暗两张截图
+art_dir="$work/art-sample"; mkdir -p "$art_dir"
+cat >"$art_dir/package.json" <<'EOF'
+{"name":"art-sample","scripts":{"build":"mkdir -p dist && echo '<h1>文章小样</h1>' > dist/index.html"}}
+EOF
+out=$(json task add 文章通过 --dir "$art_dir" --skill web-article); art_pass=$(jq -r .result.id <<<"$out")
+json task run "$art_pass" --worker fakewrite >/dev/null
+out=$(json task wait "$art_pass" --timeout 30); has '.result.task.status == "done"'
+out=$(json task show "$art_pass"); has '(.result.history|map(select(.kind == "artifacts"))|length) >= 2'
+[ -f "$ATRIUM_DATA/tasks/$art_pass/article-light.png" ] || fail "文章明色截图未生成"
+[ -f "$ATRIUM_DATA/tasks/$art_pass/article-dark.png" ] || fail "文章暗色截图未生成"
+
+# 2. 文章故意破坏：构建失败 → 关卡不过并交回
+art_bad="$work/art-bad"; mkdir -p "$art_bad"
+cat >"$art_bad/package.json" <<'EOF'
+{"name":"art-bad","scripts":{"build":"echo '构建编译出错' >&2 && exit 1"}}
+EOF
+out=$(json task add 文章构建失败 --dir "$art_bad" --skill web-article); art_fail=$(jq -r .result.id <<<"$out")
+json task run "$art_fail" --worker fakewrite >/dev/null
+until_bounced "$art_fail"
+out=$(json task show "$art_fail"); has '(.result.history|map(select(.kind == "bounce"))|.[0].body|test("构建失败"))'
+
+# 3. 视频小样工程：运行时自己用 ffprobe 读时长、分辨率、响度，抽帧拼联系表与导出第一帧
+vid_dir="$work/vid-sample"; mkdir -p "$vid_dir/out"
+ffmpeg -y -f lavfi -i testsrc=duration=2:size=320x240:rate=10 -f lavfi -i sine=duration=2:frequency=1000 -c:v libx264 -c:a aac "$vid_dir/out/sample.mp4" >/dev/null 2>&1
+out=$(json task add 视频通过 --dir "$vid_dir" --skill remotion-video); vid_pass=$(jq -r .result.id <<<"$out")
+json task run "$vid_pass" --worker fakewrite >/dev/null
+out=$(json task wait "$vid_pass" --timeout 30); has '.result.task.status == "done"'
+out=$(json task show "$vid_pass"); has '(.result.history|map(select(.kind == "artifacts"))|length) >= 2'
+[ -f "$ATRIUM_DATA/tasks/$vid_pass/video-first-frame.png" ] || fail "视频第一帧未生成"
+[ -f "$ATRIUM_DATA/tasks/$vid_pass/video-contact-sheet.png" ] || fail "视频联系表未生成"
+
+# 4. 视频故意破坏：第一帧空白 → 关卡不过并交回
+vid_bad="$work/vid-bad"; mkdir -p "$vid_bad/out"
+ffmpeg -y -f lavfi -i color=c=black:duration=2:size=320x240:rate=10 -c:v libx264 "$vid_bad/out/blank.mp4" >/dev/null 2>&1
+out=$(json task add 视频第一帧空白 --dir "$vid_bad" --skill remotion-video); vid_fail=$(jq -r .result.id <<<"$out")
+json task run "$vid_fail" --worker fakewrite >/dev/null
+until_bounced "$vid_fail"
+out=$(json task show "$vid_fail"); has '(.result.history|map(select(.kind == "bounce"))|.[0].body|test("第一帧为空白图片"))'
+
 step "stop"
 out=$(json stop); has '.result.stopped'
 out=$(json status); has '.result.running == false'

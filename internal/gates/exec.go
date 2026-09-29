@@ -70,6 +70,10 @@ func (x *Exec) Run(ctx context.Context, dir, name string, args ...string) (strin
 	if err != nil {
 		return out.String(), &CmdError{Cmd: name + " " + strings.Join(firstN(args, 3), " "), Stderr: errb.String(), Err: err}
 	}
+	base := filepath.Base(name)
+	if (base == "ffmpeg" || strings.HasPrefix(base, "ffmpeg")) && out.Len() == 0 && errb.Len() > 0 {
+		return errb.String(), nil
+	}
 	return out.String(), nil
 }
 

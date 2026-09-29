@@ -281,6 +281,17 @@ func GetChoice(ctx context.Context, q store.Querier, id string) (Choice, error) 
 	return c, rows.Err()
 }
 
+// ChoiceOf 是任务牵着的选项单：它交出的（调研任务）优先，其次是它从哪份选项单选出来的；都没有为空。
+func ChoiceOf(ctx context.Context, q store.Querier, task string) (string, error) {
+	var id string
+	err := q.QueryRowContext(ctx, `SELECT id FROM choices WHERE task = ?
+		UNION ALL SELECT choice FROM choice_options WHERE task = ? LIMIT 1`, task, task).Scan(&id)
+	if store.IsNotFound(err) {
+		return "", nil
+	}
+	return id, err
+}
+
 // Choices 列选项单（不含选项正文）：缺省只列等拍板的。
 func Choices(ctx context.Context, q store.Querier, dept string, all bool) ([]Choice, error) {
 	where, args := []string{"1 = 1"}, []any{}

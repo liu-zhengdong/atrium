@@ -181,7 +181,10 @@ async function renderDept(id, tab) {
     return `<button class="sub" data-go="${esc(s.id)}"><span class="n"><span class="dot ${st}"></span>${esc(s.name)}</span>
       <span class="w">${esc(s.what)}</span><span class="c">${esc(c)}</span></button>`;
   }).join("");
-  const intro = [["怎么用", dept.uses], ["现状", dept.now], ["下一步", dept.next]].filter(x => x[1]);
+  const acc = d.accept && { leader: "负责人", user: "你" }[d.accept.who];
+  const intro = [["怎么用", dept.uses], ["现状", dept.now], ["下一步", dept.next],
+    ["验收", acc && (d.accept.from !== dept.id ? `${acc}（沿用 ${d.accept.from_name}）` : acc)],
+    ["仓库", dept.repos.map(r => r.split("/").filter(Boolean).pop()).join("、")]].filter(x => x[1]);
   const sched = d.schedules.length ? `<section class="section"><h2>周期任务<span class="cap">${d.schedules.length}/${d.schedule_max}</span></h2>
     <div class="rows">${d.schedules.map(s => schedRow(s, "dept")).join("")}</div></section>` : "";
   let body = "";
@@ -198,6 +201,7 @@ async function renderDept(id, tab) {
     <div class="who">${m.kind === "overview" ? "总览 · " : ""}v${m.rev} · ${size(m.size)}</div><div class="time num">${date(m.created_at)}</div></div>`).join("")}</div>`
     : `<div class="empty">还没有资料</div>`;
   const cap = d.rules.length > d.rule_max ? "cap over" : "cap";
+  const used = d.materials.reduce((n, m) => n + m.units, 0);
   $("#page").innerHTML = `
     <div class="crumb">${d.path.map(p => `<a href="#${esc(p.id)}">${esc(p.name)}</a><span>/</span>`).join("")}</div>
     <h1 class="dept-title">${esc(dept.name)}</h1>
@@ -213,6 +217,7 @@ async function renderDept(id, tab) {
         <button data-tab="rules" class="${tab === "rules" ? "on" : ""}">规矩</button>
         <button data-tab="files" class="${tab === "files" ? "on" : ""}">资料</button>
         ${tab === "rules" ? `<span class="${cap}">${d.rules.length > d.rule_max ? "超限 " : ""}${d.rules.length}/${d.rule_max}</span>` : ""}
+        ${tab === "files" ? `<span class="cap${used > d.material_max ? " over" : ""}">${used}/${d.material_max} 字</span>` : ""}
       </div>${body}</section>`;
   document.querySelectorAll("[data-tab]").forEach(b => b.onclick = () => { location.hash = id + "/" + b.dataset.tab; });
 }
@@ -341,7 +346,7 @@ function renderTask(d) {
       <h3>${esc(t.title)}</h3>
       ${draft ? "" : `<div class="steps">${d.steps.map((s, i) => `<div class="step ${i < d.step ? "past" : i === d.step ? "now" + (stuck ? " stuck" : "") : ""}"><i></i>${s}</div>`).join("")}</div>`}
       <div class="holder"><b>${label}</b>　${esc(draft ? "还没想清楚，不派活、不计时" : d.holder)} · ${esc(ago(t.updated_at))}</div>
-      ${draft ? `<p class="draft-detail">${t.detail ? esc(t.detail) : "没有详述"}</p>` : `<dl class="facts"><dt>执行者</dt><dd>${esc(t.worker || "还没派")}</dd><dt>机器</dt><dd>${t.host ? esc(t.host + (d.host_name ? " " + d.host_name : "")) : "还没派"}</dd><dt>PR</dt><dd>${pr}</dd></dl>`}
+      ${draft ? `<p class="draft-detail">${t.detail ? esc(t.detail) : "没有详述"}</p>` : `<dl class="facts"><dt>执行者</dt><dd>${esc(t.worker || "还没派")}</dd><dt>机器</dt><dd>${t.host ? esc(t.host + (d.host_name ? " " + d.host_name : "")) : "还没派"}</dd><dt>PR</dt><dd>${pr}</dd>${t.skill ? `<dt>技能</dt><dd>${esc(t.skill)}</dd>` : ""}${d.schedule ? `<dt>来自</dt><dd><a href="${esc(hashWith(d.schedule))}">周期任务 ${esc(d.schedule)}</a></dd>` : ""}${d.choice ? `<dt>选项单</dt><dd><a href="${esc(hashWith(d.choice))}">${esc(d.choice)}</a></dd>` : ""}</dl>`}
       ${t.source || t.class ? `<dl class="facts"><dt>来源</dt><dd>${esc(sourceLabel[t.source] || "没写")}</dd><dt>类</dt><dd>${esc(t.class || "没归类")}</dd></dl>` : ""}
       ${relHTML(d)}
       ${traceHTML(d)}

@@ -6,8 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
-	"syscall"
 )
 
 // Client 是命令行到服务的调用。没有超时：长轮询（task wait、events wait）的时长由服务端参数决定。
@@ -49,7 +49,9 @@ func (c *Client) Do(ctx context.Context, method, path string, body, out any) err
 	}
 	resp, err := hc.Do(req)
 	if err != nil {
-		if errors.Is(err, syscall.ECONNREFUSED) {
+		// 按拨号失败判定，不比对 ECONNREFUSED：Windows 上拒绝连接是 WSAECONNREFUSED（10061），syscall 里没有这个常量。
+		var op *net.OpError
+		if errors.As(err, &op) && op.Op == "dial" {
 			return (&Error{Code: "not_running", Message: "连不上服务（" + c.Base + "）"}).WithNext("atrium start")
 		}
 		return err

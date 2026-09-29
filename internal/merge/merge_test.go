@@ -325,20 +325,21 @@ func TestHasFailures(t *testing.T) {
 	}
 }
 
-// 模拟 watch：检查进程登记后记一笔 watch 经历并结束进程树。
+// 模拟 watch：每登记一个新的检查进程，记一笔 watch 经历并结束它的进程树。
+// 按登记数认新进程：重跑的检查还没登记时不能再杀上一个（Windows 上拉起慢，t366）。
 func killWhenTracked(e *env, id string, times int) {
 	go func() {
 		seen := 0
 		for seen < times {
+			var procs int
+			e.db.QueryRowContext(e.ctx, `SELECT count(*) FROM task_events WHERE task = ? AND kind = 'proc'`, id).Scan(&procs)
 			var body string
 			var pid int
 			e.db.QueryRowContext(e.ctx, `SELECT body FROM task_events WHERE task = ? AND kind = 'proc' ORDER BY id DESC LIMIT 1`, id).Scan(&body)
 			if i := strings.Index(body, `"pid":`); i >= 0 {
 				fmt.Sscanf(body[i+6:], "%d", &pid)
 			}
-			var killed int
-			e.db.QueryRowContext(e.ctx, `SELECT count(*) FROM task_events WHERE task = ? AND kind = 'watch'`, id).Scan(&killed)
-			if pid > 0 && killed == seen {
+			if pid > 0 && procs > seen {
 				time.Sleep(200 * time.Millisecond) // 等脚本先打出输出
 				ledger.Record(e.ctx, e.db, id, "watch", "runtime", `{"role":"check","action":"kill"}`)
 				platform.KillTree(pid)

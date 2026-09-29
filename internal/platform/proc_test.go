@@ -1,21 +1,26 @@
 package platform
 
 import (
+	"bytes"
 	"os"
+	"path/filepath"
 	"runtime"
 	"testing"
 	"time"
 )
 
-// 真拉起一棵进程树（sh → sleep），KillTree 后两者都不在。
+// 真拉起一棵进程树（sh → 两个 sleep，一个在后台），KillTree 后整棵树都不在：子孙握着输出管道，Wait 能返回才算都结束了。
+// Windows 上 Git for Windows 的 sh 模拟 fork/exec，sleep 的父进程已退出，taskkill /T 找不到它（t366）。
 func TestStartDetachedAndKillTree(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("Windows 由远端 CI 覆盖")
+	script := filepath.Join(t.TempDir(), "tree")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nsleep 30 &\nsleep 30\n"), 0o755); err != nil {
+		t.Fatal(err)
 	}
-	env := WorkerEnv(runtime.GOOS, EnvMap(os.Environ()))
-	spec := Shell("sleep 30 & echo $! ; wait")
-	spec.Env = env
-	spec.Detached = true
+	spec, err := Script(script, WorkerEnv(runtime.GOOS, EnvMap(os.Environ())))
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec.Stdout, spec.Detached = &bytes.Buffer{}, true
 	cmd, err := Start(spec)
 	if err != nil {
 		t.Fatal(err)
@@ -24,13 +29,16 @@ func TestStartDetachedAndKillTree(t *testing.T) {
 	if !Alive(pid) {
 		t.Fatal("刚拉起就不在了")
 	}
+	time.Sleep(500 * time.Millisecond) // 等 sleep 都拉起来
 	if err := KillTree(pid); err != nil {
 		t.Fatal(err)
 	}
-	cmd.Wait()
-	deadline := time.Now().Add(2 * time.Second)
-	for Alive(pid) && time.Now().Before(deadline) {
-		time.Sleep(20 * time.Millisecond)
+	done := make(chan struct{})
+	go func() { cmd.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("KillTree 后还有子孙进程握着输出")
 	}
 	if Alive(pid) {
 		t.Fatal("KillTree 后进程还在")

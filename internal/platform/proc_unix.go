@@ -16,6 +16,10 @@ func sysProcAttr(detached bool, _ string) *syscall.SysProcAttr {
 	return nil
 }
 
+func adopt(int) error { return nil } // 进程组在拉起时已由 setsid 建好
+
+func killJob(int) (bool, error) { return false, nil }
+
 func killGroup(pid int) error {
 	err := syscall.Kill(-pid, syscall.SIGKILL)
 	if errors.Is(err, syscall.ESRCH) {

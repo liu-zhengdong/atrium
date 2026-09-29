@@ -136,6 +136,44 @@ func Assignee(in NewTask, actor string) string {
 	return in.Owner
 }
 
+// DeptRepo 纯判定：task add 没写仓库时沿用部门的哪个仓库（repos 是部门自己的仓库）。部门恰有一个仓库才沿用，
+// 多个时分不出是哪个，照旧不写；写了仓库或工作地点、交给别的负责人去拆（--owner aN，含草稿）的不沿用。
+// 不在仓库里干的活建好后 task set tN --repo= 清掉。
+func DeptRepo(in NewTask, actor string, repos []string) string {
+	if in.Repo != "" || in.Dir != "" || len(repos) != 1 || (in.Owner != actor && api.IsRef(in.Owner, "a")) {
+		return in.Repo
+	}
+	return repos[0]
+}
+
+// withDeptRepo 给 task add 补上部门的仓库（DeptRepo）；部门缺省沿用父任务的，与 Add 同一规则。
+// 只在命令行建任务的入口用：运行时自己建的（审阅、周期任务、选项单拍板）不沿用。
+func withDeptRepo(ctx context.Context, q store.Querier, in NewTask, actor string) (NewTask, error) {
+	dept := in.Org
+	if dept == "" && in.Parent != "" {
+		if err := mustExist(ctx, q, "tasks", "t", "parent", in.Parent); err != nil {
+			return in, err
+		}
+		p, err := Get(ctx, q, in.Parent)
+		if err != nil {
+			return in, err
+		}
+		dept = p.Org
+	}
+	if dept == "" {
+		return in, nil
+	}
+	if err := mustExist(ctx, q, "departments", "o", "org", dept); err != nil {
+		return in, err
+	}
+	d, err := org.Get(ctx, q, dept)
+	if err != nil {
+		return in, err
+	}
+	in.Repo = DeptRepo(in, actor, d.Repos)
+	return in, nil
+}
+
 // setDir 写工作地点：空为没有。
 func setDir(ctx context.Context, tx *sql.Tx, id, dir string) error {
 	if dir == "" {

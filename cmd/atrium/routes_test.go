@@ -64,7 +64,6 @@ func TestLeaderRulesCoverRealRoutes(t *testing.T) {
 		"DELETE /api/hosts/{id}":              leaders.RuleDeny,
 		"POST /api/quota":                     leaders.RuleDeny,
 		"POST /api/events/listen":             leaders.RuleDeny, // 「在听」只给秘书会话
-		"POST /api/web/link":                  leaders.RuleDeny,
 	}
 	seen := map[string]bool{}
 	for _, p := range r.Patterns() {

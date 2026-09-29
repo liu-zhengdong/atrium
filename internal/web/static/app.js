@@ -14,14 +14,9 @@ const icon = {
 
 let nav = { depts: [], asks: 0 };
 let sortMode = "部门";
-let signedOut = false;
-
-class SignedOut extends Error {}
 
 async function api(path) {
-  const res = await fetch("/ui/api/" + path, { credentials: "same-origin" });
-  const body = await res.json();
-  if (res.status === 401) throw new SignedOut();
+  const body = await (await fetch("/ui/api/" + path)).json();
   if (!body.ok) throw new Error(body.error?.message || "读取失败");
   return body.result;
 }
@@ -292,13 +287,7 @@ function renderTree(cur) {
 }
 
 /* 路由 */
-function showSignedOut() {
-  signedOut = true;
-  closeDrawer();
-  $("#page").innerHTML = `<div class="gate"><h1>需要重新打开</h1><p>网页链接只能用一次，服务重启后会话也会失效。</p><p>在终端运行 <code>atrium map</code></p></div>`;
-}
 function fail(err) {
-  if (err instanceof SignedOut) return showSignedOut();
   $("#page").innerHTML = `<div class="empty">读取失败：${esc(err.message)}</div>`;
 }
 let rendering = null;
@@ -320,7 +309,6 @@ async function route(keepScroll) {
   } catch (err) { fail(err); }
 }
 function refresh() {
-  if (signedOut) return;
   clearTimeout(rendering);
   rendering = setTimeout(() => route(true), 250);
 }
@@ -364,9 +352,5 @@ $("#theme").onclick = () => {
   try { localStorage.setItem("atrium-theme", r.dataset.theme); } catch (_) { /* 同上 */ }
 };
 
-if (location.hash === "#expired") showSignedOut();
-else {
-  route(false);
-  const stream = new EventSource("/ui/stream");
-  stream.onmessage = e => { if (e.data === "changed") refresh(); };
-}
+route(false);
+new EventSource("/ui/stream").onmessage = e => { if (e.data === "changed") refresh(); };

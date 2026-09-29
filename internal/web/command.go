@@ -1,45 +1,40 @@
 package web
 
 import (
-	"fmt"
 	"os"
 	"runtime"
-	"strconv"
-	"time"
 
 	"github.com/liu-zhengdong/atrium/internal/cli"
 	"github.com/liu-zhengdong/atrium/internal/platform"
 )
 
-func itoa(n int) string { return strconv.Itoa(n) }
-
 func mapCommand() cli.Command {
 	return cli.Command{
 		Path:    "map",
-		Summary: "打开只读网页（今天、部门、决定、执行者）；交互终端里直接开浏览器，否则打印一次性链接",
+		Summary: "打开只读网页（今天、部门、决定、执行者）；交互终端里直接开浏览器，否则打印网址（可收藏）",
 		Run: func(c *cli.Ctx) error {
 			if err := c.MaxArgs(0); err != nil {
 				return err
 			}
-			var link Link
-			if err := c.Call("POST", "/api/web/link", nil, &link); err != nil {
+			base, err := c.Base()
+			if err != nil {
 				return err
 			}
-			text := fmt.Sprintf("网页：%s\n链接 %s 前有效，只能打开一次", link.URL,
-				time.UnixMilli(link.ExpiresAt).Format("15:04:05"))
+			url := base + "/"
+			text := "网页：" + url
 			if !c.JSON && interactive(c) {
-				if err := openBrowser(link.URL); err != nil {
-					text += "\n没能自动打开浏览器（" + err.Error() + "），请手动打开上面的链接"
+				if err := openBrowser(url); err != nil {
+					text += "\n没能自动打开浏览器（" + err.Error() + "），请手动打开上面的网址"
 				} else {
 					text += "\n已在浏览器打开"
 				}
 			}
-			return c.Done(link, text, "atrium task ls")
+			return c.Done(map[string]string{"url": url}, text, "atrium task ls")
 		},
 	}
 }
 
-// interactive：标准输出是终端时才自动开浏览器（被 Agent 或管道调用时只打印链接）。
+// interactive：标准输出是终端时才自动开浏览器（被 Agent 或管道调用时只打印网址）。
 func interactive(c *cli.Ctx) bool {
 	f, ok := c.Env.Stdout.(*os.File)
 	if !ok {

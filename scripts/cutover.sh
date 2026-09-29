@@ -93,7 +93,7 @@ run atrium leader ls
 run atrium workers
 run atrium host ls
 atrium --help >/dev/null && echo "atrium --help 正常"
-run atrium map   # 非交互终端里打印一次性链接
+run atrium map   # 非交互终端里打印网址
 
 step "完成"
 cat <<EOF

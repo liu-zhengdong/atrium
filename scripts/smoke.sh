@@ -193,14 +193,10 @@ out=$(json schedule run s1 || true); has '(.ok and .result.task.id != null) or (
 out=$(json schedule ls); has '.result[0].last_task != null'
 out=$(json schedule rm s1); has '.ok'
 out=$(json schedule add o2 x --every 30m || true); has '.error.code == "usage"'
-step "map：一次性链接换只读会话；import：新库有数据时拒绝"
-out=$(json map); has '.ok and (.result.url|test("/login\\?code="))'
-url=$(jq -r .result.url <<<"$out")
-jar="$work/cookies"
-loc=$(curl -s -o /dev/null -w '%{redirect_url}' -c "$jar" "$url"); [ "$loc" = "http://127.0.0.1:$ATRIUM_PORT/" ] || fail "登录应转到首页，得到 $loc"
-loc=$(curl -s -o /dev/null -w '%{redirect_url}' "$url"); [ "$loc" = "http://127.0.0.1:$ATRIUM_PORT/#expired" ] || fail "链接第二次用应作废，得到 $loc"
-out=$(curl -s -b "$jar" "http://127.0.0.1:$ATRIUM_PORT/ui/api/dept/o2"); has '.ok and .result.dept.id == "o2" and (.result.inherited|length) == 7'
-code=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$ATRIUM_PORT/ui/api/today"); [ "$code" = 401 ] || fail "不带会话应 401，得到 $code"
+step "map：打印本机网址，不登录直接读；外来 Host 403；import：新库有数据时拒绝"
+out=$(json map); has '.ok and .result.url == "http://127.0.0.1:'"$ATRIUM_PORT"'/"'
+out=$(curl -s "http://127.0.0.1:$ATRIUM_PORT/ui/api/dept/o2"); has '.ok and .result.dept.id == "o2" and (.result.inherited|length) == 7'
+code=$(curl -s -o /dev/null -w '%{http_code}' -H "Host: evil.example:$ATRIUM_PORT" "http://127.0.0.1:$ATRIUM_PORT/ui/api/today"); [ "$code" = 403 ] || fail "外来 Host 应 403，得到 $code"
 touch "$work/old.sqlite"
 out=$(json import --from "$work/old.sqlite" || true); has '.ok == false and .error.code == "conflict"'
 

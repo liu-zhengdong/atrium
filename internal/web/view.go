@@ -195,9 +195,12 @@ func slots(h hosts.Host) int {
 	return 1
 }
 
-// account 把一行额度写成页面上的一条：剩多少、什么时候重置或为什么没读数。
+// account 把一行额度写成页面上的一条：剩多少、什么时候重置或为什么没读数；读数旧了由页面写上读的时刻。
 func account(l quota.Line) Account {
-	a := Account{Name: l.Account}
+	a := Account{Name: l.Account, Stale: l.Stale}
+	if t, err := time.Parse(time.RFC3339, l.RefreshedAt); err == nil {
+		a.At = t.UnixMilli()
+	}
 	if l.UsedPercent != nil {
 		left := int(math.Round(100 - *l.UsedPercent))
 		a.Left = &left
@@ -209,9 +212,6 @@ func account(l quota.Line) Account {
 		} else {
 			notes = append(notes, fmt.Sprintf("%.0f 天后重置", math.Round(*h/24)))
 		}
-	}
-	if l.Stale {
-		notes = append(notes, "读数旧了")
 	}
 	if a.Left == nil && l.Note != "" {
 		notes = append(notes, l.Note)

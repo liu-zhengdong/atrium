@@ -182,21 +182,31 @@ func Reserve(ctx context.Context, q store.Querier) (int, error) {
 // ---- 读一览 ----
 
 var oqCache struct {
-	sync.Mutex
+	read sync.Mutex // 同一时刻只有一轮在跑 openquota
+	mu   sync.Mutex // 护着下面的上次结果：Last 取它时不等正在跑的那一轮
 	at   time.Time
 	rows []Pace
 	err  error
 }
 
 func openquota(ctx context.Context) ([]Pace, error) {
-	oqCache.Lock()
-	defer oqCache.Unlock()
-	if time.Since(oqCache.at) < okTTL {
-		return oqCache.rows, oqCache.err
+	oqCache.read.Lock()
+	defer oqCache.read.Unlock()
+	if rows, at, err := openquotaLast(); time.Since(at) < okTTL {
+		return rows, err
 	}
-	oqCache.rows, oqCache.err = readOpenquota(ctx, platform.EnvMap(os.Environ()))
-	oqCache.at = time.Now()
-	return oqCache.rows, oqCache.err
+	rows, err := readOpenquota(ctx, platform.EnvMap(os.Environ()))
+	oqCache.mu.Lock()
+	oqCache.rows, oqCache.err, oqCache.at = rows, err, time.Now()
+	oqCache.mu.Unlock()
+	return rows, err
+}
+
+// openquotaLast 是上次 openquota 的结果与读的时刻（服务起来后还没读过为零值）。
+func openquotaLast() ([]Pace, time.Time, error) {
+	oqCache.mu.Lock()
+	defer oqCache.mu.Unlock()
+	return oqCache.rows, oqCache.at, oqCache.err
 }
 
 // 测试换成假的：不读开发者本机的登录与 OpenQuota。
@@ -212,13 +222,25 @@ type Overview struct {
 	Notes   []string `json:"notes"`
 }
 
-// Read 刷新本机到期的读数，合并各台与 OpenQuota，得出一览。
+// Read 刷新本机到期的读数，合并各台与 OpenQuota，得出一览。到期时要真去读，可能要几秒。
 func Read(ctx context.Context, db *store.DB) (Overview, error) {
 	if r := localFn().Due(ctx); len(r) > 0 {
 		if err := Record(ctx, db, LocalHost, r); err != nil {
 			return Overview{}, err
 		}
 	}
+	oq, err := openquotaFn(ctx)
+	return overview(ctx, db, oq, err)
+}
+
+// Last 是上次读数的一览：不去读，马上返回（网页先摆上次读数，现读交给 Read）。
+func Last(ctx context.Context, db *store.DB) (Overview, error) {
+	oq, _, err := openquotaLast()
+	return overview(ctx, db, oq, err)
+}
+
+// overview 把存下的各台读数与 OpenQuota 的一份合成一览。
+func overview(ctx context.Context, db *store.DB, oq []Pace, oqErr error) (Overview, error) {
 	all, err := stored(ctx, db)
 	if err != nil {
 		return Overview{}, err
@@ -228,15 +250,13 @@ func Read(ctx context.Context, db *store.DB) (Overview, error) {
 		return Overview{}, err
 	}
 	ov := Overview{Reserve: reserve, Notes: []string{}}
-	oq, err := openquotaFn(ctx)
-	if err != nil {
-		ov.Notes = append(ov.Notes, err.Error())
+	if oqErr != nil {
+		ov.Notes = append(ov.Notes, oqErr.Error())
 	}
 	if localFn() == nil {
 		ov.Notes = append(ov.Notes, "自带读取已关（ATRIUM_QUOTA_READERS=off）")
 	}
-	now := store.Now()
-	ov.Lines = Lines(mergeHosts(all, LocalHost, now), oq)
+	ov.Lines = Lines(mergeHosts(all, LocalHost, store.Now()), oq)
 	return ov, nil
 }
 

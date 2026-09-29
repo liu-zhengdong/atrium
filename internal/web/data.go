@@ -413,7 +413,6 @@ func getTasks(ctx context.Context, q store.Querier, ids []string) ([]ledger.Task
 // DeptPage 是部门页。
 type DeptPage struct {
 	Dept      org.Dept       `json:"dept"`
-	Path      []Pair         `json:"path"`
 	Leader    *Leader        `json:"leader"`
 	Subs      []DeptBrief    `json:"subs"`
 	Tasks     []Row          `json:"tasks"`
@@ -465,15 +464,8 @@ func loadDept(ctx context.Context, q store.Querier, data, id string) (DeptPage, 
 	if err != nil {
 		return DeptPage{}, err
 	}
-	page := DeptPage{Dept: d, Path: []Pair{}, Subs: []DeptBrief{}, Rules: []Rule{}, Inherited: []Rule{}, RuleMax: org.MaxPoints,
+	page := DeptPage{Dept: d, Subs: []DeptBrief{}, Rules: []Rule{}, Inherited: []Rule{}, RuleMax: org.MaxPoints,
 		MemoMax: org.MaxMemo, MatMax: org.MaxMaterial, Schedules: []Sched{}, SchedMax: org.MaxSchedules}
-	chain, err := org.Ancestors(ctx, q, id)
-	if err != nil {
-		return DeptPage{}, err
-	}
-	for _, a := range chain[:len(chain)-1] {
-		page.Path = append(page.Path, Pair{a, ix.name(a)})
-	}
 	lead, err := org.Recipient(ctx, q, id)
 	if err != nil {
 		return DeptPage{}, err
@@ -688,20 +680,27 @@ func deptTasks(ctx context.Context, q store.Querier, ix *orgIndex, id string) ([
 	return nest(tasks, out), nil
 }
 
-// Legion 是执行者页：额度、机器、组合表现。
+// Legion 是执行者页：额度（上次读数，现读另走 /ui/api/quota）、机器、组合表现。
 type Legion struct {
-	Accounts []Account `json:"accounts"`
-	Reserve  int       `json:"reserve"`
-	Hosts    []Host    `json:"hosts"`
-	Perf     []Perf    `json:"perf"`
-	Window   int       `json:"window"` // 表现统计近几次拉起
+	Quota
+	Hosts  []Host `json:"hosts"`
+	Perf   []Perf `json:"perf"`
+	Window int    `json:"window"` // 表现统计近几次拉起
 }
 
-// Account 是一个账号的额度。Left 是剩下的百分比（没读数为 nil）。
+// Quota 是执行者页的额度一块。
+type Quota struct {
+	Accounts []Account `json:"accounts"`
+	Reserve  int       `json:"reserve"`
+}
+
+// Account 是一个账号的额度。Left 是剩下的百分比（没读数为 nil）；At 是读数的时刻（毫秒，没读数为 0），Stale 读数旧了。
 type Account struct {
-	Name string `json:"name"`
-	Left *int   `json:"left"`
-	Note string `json:"note"`
+	Name  string `json:"name"`
+	Left  *int   `json:"left"`
+	Note  string `json:"note"`
+	At    int64  `json:"at"`
+	Stale bool   `json:"stale"`
 }
 
 // Host 是一台机器与它的空位。
@@ -725,15 +724,12 @@ type Perf struct {
 }
 
 func loadLegion(ctx context.Context, db *store.DB, now int64) (Legion, error) {
-	out := Legion{Accounts: []Account{}, Hosts: []Host{}, Perf: []Perf{}, Window: workers.StatWindow}
-	ov, err := quota.Read(ctx, db)
+	out := Legion{Quota: quotaOf(quota.Overview{}), Hosts: []Host{}, Perf: []Perf{}, Window: workers.StatWindow}
+	ov, err := quota.Last(ctx, db)
 	if err != nil {
 		return out, err
 	}
-	out.Reserve = ov.Reserve
-	for _, l := range ov.Lines {
-		out.Accounts = append(out.Accounts, account(l))
-	}
+	out.Quota = quotaOf(ov)
 	list, err := hosts.List(ctx, db)
 	if err != nil {
 		return out, err
@@ -761,6 +757,20 @@ func loadLegion(ctx context.Context, db *store.DB, now int64) (Legion, error) {
 	}
 	out.Perf = perfRows(stats, marks)
 	return out, nil
+}
+
+// loadQuota 现读额度（到期的账号真去读，可能要几秒）；执行者页先摆 Legion 里的上次读数，读到再换。
+func loadQuota(ctx context.Context, db *store.DB) (Quota, error) {
+	ov, err := quota.Read(ctx, db)
+	return quotaOf(ov), err
+}
+
+func quotaOf(ov quota.Overview) Quota {
+	out := Quota{Accounts: []Account{}, Reserve: ov.Reserve}
+	for _, l := range ov.Lines {
+		out.Accounts = append(out.Accounts, account(l))
+	}
+	return out
 }
 
 func runningByHost(ctx context.Context, q store.Querier) (map[string]int, error) {

@@ -174,6 +174,16 @@ func GetIdentity(ctx context.Context, q store.Querier, id string) (Identity, err
 	return i, nil
 }
 
+// NameOf 是一个身份给人看的名字（用户、秘书、负责人的名字）；不是身份的（gates 这类运行时）原样返回。
+func NameOf(ctx context.Context, q store.Querier, id string) (string, error) {
+	var name string
+	err := q.QueryRowContext(ctx, `SELECT name FROM identities WHERE id = ?`, id).Scan(&name)
+	if store.IsNotFound(err) {
+		return id, nil
+	}
+	return name, err
+}
+
 // Leaders 列全部负责人（按建立先后）。
 func Leaders(ctx context.Context, q store.Querier) ([]Identity, error) {
 	rows, err := q.QueryContext(ctx, `SELECT id, kind, name, workers, created_at FROM identities

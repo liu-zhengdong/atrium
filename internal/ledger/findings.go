@@ -24,6 +24,14 @@ func (s Source) Label() string {
 	return map[Source]string{SourceUser: "用户纠正", SourceOrg: "组织发现"}[s]
 }
 
+// By 是来源一行：「组织发现 · 记录人名字」；没记录人只写来源。
+func (s Source) By(name string) string {
+	if s.Label() == "" || name == "" {
+		return s.Label()
+	}
+	return s.Label() + " · " + name
+}
+
 const maxClass = 40
 
 // DraftHowTo 是记草稿的说明（k31 的做法）：负责人提示词与秘书会话开头都引用它，改只改这一处。

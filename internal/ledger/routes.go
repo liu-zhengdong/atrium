@@ -7,6 +7,7 @@ import (
 
 	"github.com/liu-zhengdong/atrium/internal/api"
 	"github.com/liu-zhengdong/atrium/internal/app"
+	"github.com/liu-zhengdong/atrium/internal/org"
 )
 
 // Module 是账本的接入点。
@@ -57,6 +58,7 @@ func BuildTree(tasks []Task) *TreeNode {
 type Detail struct {
 	Task      Task        `json:"task"`
 	Parties   Parties     `json:"parties"`
+	ByName    string      `json:"by_name,omitempty"` // 派活人的名字，只给带来源的（来源一行写「组织发现 · 名字」）
 	Deps      []DepState  `json:"deps"`
 	Ready     bool        `json:"ready"`
 	WaitingOn []string    `json:"waiting_on,omitempty"`
@@ -120,6 +122,11 @@ func Routes(r *api.Router, env *app.Env) {
 		d := Detail{Task: t}
 		if d.Parties, err = PartiesOf(q.Context(), db, id); err != nil {
 			return nil, err
+		}
+		if t.Source != "" && d.Parties.By != "" {
+			if d.ByName, err = org.NameOf(q.Context(), db, d.Parties.By); err != nil {
+				return nil, err
+			}
 		}
 		if d.Deps, err = Deps(q.Context(), db, id); err != nil {
 			return nil, err

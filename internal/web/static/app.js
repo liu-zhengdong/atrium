@@ -333,6 +333,9 @@ function relHTML(d) {
 
 /* 抽屉 */
 const sourceLabel = { user: "用户纠正", org: "组织发现" };
+/* 来源后的记录人：负责人的名字链到他负责的部门，并展开那里的负责人一行 */
+const byHTML = d => !d.by_name ? "" : " · " + (d.by_dept
+  ? `<a href="#${esc(d.by_dept)}" data-lead="lead:${esc(d.by_dept)}">${esc(d.by_name)}</a>` : esc(d.by_name));
 let drawerTask = null, liveTimer = null;
 async function openTask(id) {
   const d = await api("task/" + id);
@@ -356,7 +359,7 @@ function renderTask(d) {
       ${draft ? "" : `<div class="steps">${d.steps.map((s, i) => `<div class="step ${i < d.step ? "past" : i === d.step ? "now" + (stuck ? " stuck" : "") : ""}"><i></i>${s}</div>`).join("")}</div>`}
       <div class="holder"><b>${label}</b>　${esc(draft ? "还没想清楚，不派活、不计时" : d.holder)} · ${esc(ago(t.updated_at))}</div>
       ${draft ? `<p class="draft-detail">${t.detail ? esc(t.detail) : "没有详述"}</p>` : `<dl class="facts"><dt>执行者</dt><dd>${esc(t.worker || "还没派")}</dd><dt>机器</dt><dd>${t.host ? esc(t.host + (d.host_name ? " " + d.host_name : "")) : "还没派"}</dd><dt>PR</dt><dd>${pr}</dd>${t.skill ? `<dt>技能</dt><dd>${esc(t.skill)}</dd>` : ""}${d.schedule ? `<dt>来自</dt><dd><a href="${esc(hashWith(d.schedule))}">周期任务 ${esc(d.schedule)}</a></dd>` : ""}${d.choice ? `<dt>选项单</dt><dd><a href="${esc(hashWith(d.choice))}">${esc(d.choice)}</a></dd>` : ""}</dl>`}
-      ${t.source || t.class ? `<dl class="facts"><dt>来源</dt><dd>${esc(sourceLabel[t.source] || "没写")}</dd><dt>类</dt><dd>${esc(t.class || "没归类")}</dd></dl>` : ""}
+      ${t.source || t.class ? `<dl class="facts"><dt>来源</dt><dd>${esc(sourceLabel[t.source] || "没写")}${byHTML(d)}</dd><dt>类</dt><dd>${esc(t.class || "没归类")}</dd></dl>` : ""}
       ${relHTML(d)}
       ${traceHTML(d)}
     </div>`;
@@ -454,6 +457,7 @@ addEventListener("hashchange", () => route(false));
 $("#mnav").onchange = e => { location.hash = e.target.value; };
 document.addEventListener("click", e => {
   if (e.target.closest("[data-drafts]")) toDrafts = true;
+  const ld = e.target.closest("[data-lead]"); if (ld) openKids.add(ld.dataset.lead);
   const fold = e.target.closest("#drawer [data-g]");
   if (fold) {
     const k = fold.dataset.g;

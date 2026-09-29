@@ -146,7 +146,7 @@ func Commands(t *cli.Table) {
 					fmt.Fprintf(&b, "%s：%s\n", kv[0], kv[1])
 				}
 			}
-			for _, kv := range [][2]string{{"来源", t.Source.Label()}, {"类", t.Class}, {"技能", t.Skill}, {"仓库", t.Repo}, {"工作地点", t.Dir}, {"执行者", t.Worker}, {"机器", t.Host}, {"PR", t.PR}} {
+			for _, kv := range [][2]string{{"来源", t.Source.By(d.ByName)}, {"类", t.Class}, {"技能", t.Skill}, {"仓库", t.Repo}, {"工作地点", t.Dir}, {"执行者", t.Worker}, {"机器", t.Host}, {"PR", t.PR}} {
 				if kv[1] != "" {
 					fmt.Fprintf(&b, "%s：%s\n", kv[0], kv[1])
 				}

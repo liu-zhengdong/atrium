@@ -7,6 +7,7 @@
 package dispatch
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -313,6 +314,10 @@ func (d *dispatcher) view(ctx context.Context, t ledger.Task, risk string, exclu
 	if err != nil {
 		return PickView{}, err
 	}
+	loggedOut, err := localLoggedOut(ctx, db)
+	if err != nil {
+		return PickView{}, err
+	}
 	var facts []Fact
 	seen := map[string]bool{}
 	for i, id := range append(slices.Clone(preferred), catalog...) {
@@ -333,7 +338,7 @@ func (d *dispatcher) view(ctx context.Context, t ledger.Task, risk string, exclu
 		seen[r.ID] = true
 		f := Fact{ID: r.ID, Tool: r.Spec.Tool, Model: r.Spec.Model, Account: accountOf(r.Spec.Tool), Trust: r.Rules.EffectiveTrust(),
 			MaxRisk: r.Rules.EffectiveMaxRisk(), Refusal: r.Rules.Refusal(risk), Installed: workers.Installed(r.Adapter),
-			Exclusive: r.Adapter.Exclusive}
+			LoggedOut: loggedOut[r.Spec.Tool], Exclusive: r.Adapter.Exclusive}
 		if i < len(preferred) {
 			f.Preferred = i + 1
 		}
@@ -824,6 +829,14 @@ func (d *dispatcher) exited(ctx context.Context, p *proc, code int) error {
 	if sig.Evidence != "" {
 		note += "（" + sig.Evidence + "）"
 	}
+	if sig.Kind == workers.SignalLogin {
+		w, _ := workers.ParseWorker(p.run.Worker)
+		host := cmp.Or(p.run.Host, LocalHost)
+		if err := markLoggedOut(ctx, db, host, w.Tool); err != nil {
+			return err
+		}
+		note += "；已标记 " + host + " 上的 " + w.Tool + " 没登录，登录后重连代理（本机重启服务）即恢复"
+	}
 	apply := func(kind ledger.EventKind, why string) error {
 		_, err := ledger.Apply(ctx, db, p.task, ledger.Event{Kind: kind}, actor, why)
 		if err != nil && isAPI(err) {
@@ -836,6 +849,15 @@ func (d *dispatcher) exited(ctx context.Context, p *proc, code int) error {
 		return apply(ledger.ExitOK, note)
 	case "fail":
 		return apply(ledger.ExitFail, note)
+	case "requeue": // 重新挑执行者与机器，避开刚标的
+		if err := apply(ledger.ExitFail, note); err != nil {
+			return err
+		}
+		_, err := Enqueue(ctx, d.env, p.task, Options{Risk: p.run.Risk, Secrets: p.run.Secrets}, actor)
+		if err != nil && isAPI(err) {
+			return ledger.Note(ctx, db, p.task, actor, "重新排队失败："+err.Error())
+		}
+		return err
 	}
 	if paused, err := d.paused(ctx, t, p.run.Host); err != nil || paused {
 		if err != nil {

@@ -14,6 +14,7 @@ import (
 
 	"github.com/liu-zhengdong/atrium/internal/app"
 	"github.com/liu-zhengdong/atrium/internal/config"
+	"github.com/liu-zhengdong/atrium/internal/hosts"
 	"github.com/liu-zhengdong/atrium/internal/ledger"
 	"github.com/liu-zhengdong/atrium/internal/pause"
 	"github.com/liu-zhengdong/atrium/internal/store"
@@ -254,6 +255,52 @@ func TestFlowQuotaSwitch(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(TaskDir(env.Paths.Data, tk.ID), "work")); err != nil {
 		t.Error("没有仓库时用 work/")
+	}
+}
+
+// 执行者报没登录：标记本机的这个工具，任务重新排队，再挑执行者时避开它。
+func TestFlowLoginRequeue(t *testing.T) {
+	env, d := setup(t)
+	ctx := context.Background()
+	bin := t.TempDir()
+	if err := os.WriteFile(filepath.Join(bin, "grok"), []byte("#!/bin/sh\necho 'Not signed in'\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
+	if err := hosts.EnsureLocal(ctx, env.DB, hosts.Info{}); err != nil {
+		t.Fatal(err)
+	}
+	tk, _ := ledger.Add(ctx, env.DB, ledger.NewTask{Title: "审阅"}, "u1")
+	if _, err := Enqueue(ctx, env, tk.ID, Options{Worker: "grok"}, "u1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.pump(ctx); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, env, tk.ID, func(x ledger.Task) bool { return x.Status == ledger.Queued && x.Worker != "" })
+	h, err := hosts.Get(ctx, env.DB, LocalHost)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c := h.Info.CLIs["grok"]; c.LoggedIn == nil || *c.LoggedIn {
+		t.Fatalf("本机的 grok 应标没登录：%+v", h.Info.CLIs)
+	}
+	v, err := d.view(ctx, tk, "low", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range v.Candidates {
+		if strings.HasPrefix(c.ID, "grok") && (c.Eligible || !strings.Contains(strings.Join(c.Refusals, "、"), "没登录")) {
+			t.Errorf("挑执行者应避开没登录的 grok：%+v", c)
+		}
+	}
+	if err := d.pump(ctx); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, env, tk.ID, func(x ledger.Task) bool { return x.Stage == ledger.StageGate })
+	runs, _ := workers.Runs(ctx, env.DB, tk.ID, 10)
+	if len(runs) != 2 || runs[0].Worker != "grok+grok-4.6" || strings.HasPrefix(runs[1].Worker, "grok") {
+		t.Fatalf("没登录应换人重派：%+v", runs)
 	}
 }
 

@@ -40,7 +40,7 @@ Go 代码怎么分包、包之间怎么调用、并行开发时各自改哪里�
 | `merge` | 完成 | pr 交付方式的落地第一段：合入队列、快检查；`task merge`（登记亲手做的 PR、放行受阻的交付；放行的人判不了这个部门的验收时先等验收）；快检查进程经 `watch.Track` 登记 | — |
 | `release` | 完成 | pr 交付方式的落地第二段（Atrium 自己的仓库）：有新版本就自升级、平滑重启；等版本、上线冒烟；`update` | — |
 | `watch` | 完成 | 持球与期限表（`Rules`）、巡检循环、卡死判定、服务重启后接管；每轮顺带数上限用量（刚到或超了发 `limit.full`）；持球人判定 `HolderOf`；`top` 与 `/api/top` | — |
-| `hosts` | 完成 | 机器登记、挑机器（`Pick`）、派到远程（`Launch`/`Stop`/`WaitExit`）、问远程只读查询（`Ask`：只读 git 子命令、读工作目录根下的文件）、ssh 隧道、远程代理；`host add/ls [hN]/edit`（edit 含 `--key` 私钥、`--join` 重新接入、`--rm` 移除）；`agent`、`agent install` 在远程机器上照 `host add` 回执跑，不列在帮助里 | `hosts` `host_runs` |
+| `hosts` | 完成 | 机器登记、挑机器（`Pick`，避开工具没装或没登录的机器；执行者报没登录后 dispatch 经 `MarkLoggedOut` 标记）、派到远程（`Launch`/`Stop`/`WaitExit`）、问远程只读查询（`Ask`：只读 git 子命令、读工作目录根下的文件）、ssh 隧道、远程代理；`host add/ls [hN]/edit`（edit 含 `--key` 私钥、`--join` 重新接入、`--rm` 移除）；`agent`、`agent install` 在远程机器上照 `host add` 回执跑，不列在帮助里 | `hosts` `host_runs` |
 | `quota` | 完成 | 额度读取、多机合并、富余（`Spares`）、用尽标记（`SetHold`）；`quota` | `quota_cache` `quota_holds` `quota_settings` |
 | `web` | 完成 | 只读网页与只读接口；`map`；「等你」= 待拍板的选项单 + 等你验收的交付 + 递到你这层的卡住任务 + 上交到秘书还没确认的事；任务抽屉的「经过」是执行者真日志按段解析（`workers.ReadTrace`，与 `task log` 同一份解析）；代为注册一次性的 `import`（实现在 `importer`） | — |
 | `importer` | 完成 | 从旧 TS 库只读导入部门、要点、负责人、备忘、技能、资料、档案、机器 | — |
@@ -143,8 +143,8 @@ type Module struct {
 
 - 执行者标识 `工具[+模型][:强度]`；`workers.Resolve(ctx, q, id)` → 三层叠加后的规则（trust、max_risk、checks、limits、model、端点）与正文。关卡、审阅判执行者用它，不直接读 `worker_profiles`。
 - 拉起记录：任务经历 kind `launch`（`workers.Run`：第几次、缘由、执行者、机器、pid、工作目录、日志、风险）；`workers.LastRun` 读。另按 gates 的约定记 `risk`（入队）、`worktree`（拉起）、`result`（退出，最后回复），并 `watch.Track`。
-- 日志信号：`workers.Classify(退出码, 日志尾, 现在)` → 额度用尽／临时错误／思考耗尽；`Adapter.Ended` 判收尾；`workers.WatchSignal` 给 watch。
-- 退出后 dispatch 自己收尾：正常 → `ExitOK`（进关卡）；临时错误同一执行者重试 1 次、再换人；额度用尽、思考耗尽换人（至多 2 次）；有没送到的捎话按工具续上会话或重派；其余 `ExitFail`。任务已不在 running/""（watch 或人先收了尾）就不动。
+- 日志信号：`workers.Classify(退出码, 日志尾, 现在)` → 额度用尽／临时错误／思考耗尽／没登录；`Adapter.Ended` 判收尾；`workers.WatchSignal` 给 watch。
+- 退出后 dispatch 自己收尾：正常 → `ExitOK`（进关卡）；临时错误同一执行者重试 1 次、再换人；额度用尽、思考耗尽换人（至多 2 次）；没登录标记那台机器上的这个工具（`hosts.MarkLoggedOut`），转失败后重新排队——本机的挑执行者时避开，远程的挑机器时避开；有没送到的捎话按工具续上会话或重派；其余 `ExitFail`。任务已不在 running/""（watch 或人先收了尾）就不动。
 - 别的包要重新派：`dispatch.Enqueue(ctx, env, id, Options{…}, actor)`（即 task run，写队列行与 risk）；watch 经 `Hooks.Requeue`、周期任务经 `agenda.Enqueue`、审阅任务经 `gates.Enqueue`，都在 dispatch 的 Routes 里接上。交回（`gates.Bounce`）只转 queued、不写队列行：dispatch 对没有队列行的 queued 任务沿用上次拉起的执行者、风险与凭据。
 - 远程：`workers.Request` 是纯数据，代理拿到后填 `Dir`、`PromptFile`，用 `workers.Build(tool, req)` 算出同样的调用。
 

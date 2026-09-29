@@ -243,6 +243,7 @@ type Today struct {
 	Asks    []Ask    `json:"asks"`
 	Running []Row    `json:"running"`
 	Queued  int      `json:"queued"`
+	Drafts  int      `json:"drafts"` // 草稿只给数，点开到根部门的任务页
 	Shipped []Row    `json:"shipped"`
 	Groups  []Pair   `json:"groups"` // 分组的一级部门 id 与名字
 	Paused  []string `json:"paused"` // 暂停范围（all、oN、hN）；空表示没暂停
@@ -271,6 +272,10 @@ func loadToday(ctx context.Context, q store.Querier, now time.Time) (Today, erro
 	if err := q.QueryRowContext(ctx, `SELECT count(*) FROM tasks WHERE status = 'queued'`).Scan(&queued); err != nil {
 		return Today{}, err
 	}
+	var drafts int
+	if err := q.QueryRowContext(ctx, `SELECT count(*) FROM tasks WHERE status = 'draft'`).Scan(&drafts); err != nil {
+		return Today{}, err
+	}
 	done, err := finishedSince(ctx, q, startOfDay(now))
 	if err != nil {
 		return Today{}, err
@@ -279,7 +284,7 @@ func loadToday(ctx context.Context, q store.Querier, now time.Time) (Today, erro
 	if err != nil {
 		return Today{}, err
 	}
-	out := Today{Asks: nonNil(asks), Queued: queued, Running: []Row{}, Shipped: []Row{}, Groups: []Pair{}, Paused: paused}
+	out := Today{Asks: nonNil(asks), Queued: queued, Drafts: drafts, Running: []Row{}, Shipped: []Row{}, Groups: []Pair{}, Paused: paused}
 	seen := map[string]bool{}
 	for _, t := range running {
 		r := toRow(t, ix.parents)
@@ -430,7 +435,7 @@ func ownRules(ctx context.Context, q store.Querier, id, name string) ([]Rule, er
 	return out, nil
 }
 
-// deptTasks 是部门整棵子树里没结束的任务，加上 3 天内结束的（最多 100 件，最近的在前）。
+// deptTasks 是部门整棵子树里没结束的任务（含草稿），加上 3 天内结束的（最多 100 件；没结束的在前，各自最近的在前）。
 func deptTasks(ctx context.Context, q store.Querier, ix *orgIndex, id string) ([]Row, error) {
 	ids := ix.subtree(id)
 	marks := strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",")
@@ -440,7 +445,7 @@ func deptTasks(ctx context.Context, q store.Querier, ix *orgIndex, id string) ([
 	}
 	args = append(args, time.Now().Add(-72*time.Hour).UnixMilli())
 	rows, err := q.QueryContext(ctx, `SELECT id FROM tasks WHERE department IN (`+marks+`)
-		AND (finished_at IS NULL OR finished_at > ?) ORDER BY updated_at DESC LIMIT 100`, args...)
+		AND (finished_at IS NULL OR finished_at > ?) ORDER BY finished_at IS NOT NULL, updated_at DESC LIMIT 100`, args...)
 	if err != nil {
 		return nil, err
 	}

@@ -58,7 +58,7 @@ func Summarize(statuses []Status) Summary {
 }
 
 // Rollup 把一组子任务汇成一个总状态：全部结束（完成或取消）→ done；有在派或在跑 → running；
-// 有失败或受阻 → blocked；其余 → todo。没有子任务返回空串。
+// 有失败或受阻 → blocked；其余（含草稿）→ todo。没有子任务返回空串。
 func (s Summary) Rollup() Status {
 	c := s.Counts
 	switch {
@@ -88,6 +88,7 @@ func (s Summary) String() string {
 		{s.Counts[Blocked], "受阻"},
 		{s.Counts[Failed], "失败"},
 		{s.Counts[Cancelled], "取消"},
+		{s.Counts[Draft], "草稿"},
 	} {
 		if p.n > 0 {
 			out += fmt.Sprintf("，%d %s", p.n, p.label)

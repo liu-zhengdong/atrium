@@ -14,6 +14,7 @@ import (
 
 	"github.com/liu-zhengdong/atrium/internal/api"
 	"github.com/liu-zhengdong/atrium/internal/events"
+	"github.com/liu-zhengdong/atrium/internal/org"
 	"github.com/liu-zhengdong/atrium/internal/store"
 )
 
@@ -74,6 +75,8 @@ type NewTask struct {
 	After    []string `json:"after"`
 	// Owner 是处理人：结果事件要处理地投给他（u1、secretary 或 aN），缺省为派活人。
 	Owner string `json:"owner"`
+	// Draft：建成草稿（还没想清楚、条件还不够；不派活、不计时），缺省建成 todo。
+	Draft bool `json:"draft"`
 	// By 是派活人，缺省为建任务的身份；周期任务记建周期任务的人。不从请求体读。
 	By string `json:"-"`
 }
@@ -136,7 +139,7 @@ func mustSkill(ctx context.Context, q store.Querier, name string) error {
 	return nil
 }
 
-// Add 建一件 todo 任务。没给部门时沿用父任务的部门。
+// Add 建一件 todo 任务（Draft 时建成草稿，受草稿上限）。没给部门时沿用父任务的部门。
 func Add(ctx context.Context, db *store.DB, in NewTask, actor string) (Task, error) {
 	if in.Priority == "" {
 		in.Priority = Normal
@@ -189,6 +192,13 @@ func Add(ctx context.Context, db *store.DB, in NewTask, actor string) (Task, err
 				return api.NotFound("--owner: %s 不存在（应为 u1、secretary 或已登记的 aN）", in.Owner).WithNext("atrium leader ls")
 			}
 		}
+		status := Todo
+		if in.Draft {
+			status = Draft
+			if err := roomForDraft(ctx, tx); err != nil {
+				return err
+			}
+		}
 		var err error
 		if id, err = store.NextID(ctx, tx, "t"); err != nil {
 			return err
@@ -197,7 +207,7 @@ func Add(ctx context.Context, db *store.DB, in NewTask, actor string) (Task, err
 		if _, err := tx.ExecContext(ctx, `INSERT INTO tasks (id, parent, department, skill, title, detail, status,
 			priority, repo, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			id, store.Null(in.Parent), store.Null(in.Org), store.Null(in.Skill), strings.TrimSpace(in.Title),
-			in.Detail, Todo, in.Priority, in.Repo, now, now); err != nil {
+			in.Detail, status, in.Priority, in.Repo, now, now); err != nil {
 			return err
 		}
 		for _, d := range in.After {
@@ -440,6 +450,11 @@ func Apply(ctx context.Context, db *store.DB, id string, ev Event, actor, note s
 		if err != nil {
 			return api.Conflict("%s：%v", id, err)
 		}
+		if next.Status == Draft && t.Status != Draft {
+			if err := roomForDraft(ctx, tx); err != nil {
+				return err
+			}
+		}
 		now := store.Now()
 		var finished any
 		if next.Status.Finished() {
@@ -681,3 +696,15 @@ var changed = &notifier{ch: make(chan struct{})}
 
 // Changed 返回一个通道：本进程里任何任务写入后它会被关闭。先取通道再读库，避免漏掉唤醒。
 func Changed() <-chan struct{} { return changed.wait() }
+
+// roomForDraft：草稿满了（上限表 drafts）拒绝再加。
+func roomForDraft(ctx context.Context, q store.Querier) error {
+	var n int
+	if err := q.QueryRowContext(ctx, `SELECT count(*) FROM tasks WHERE status = 'draft'`).Scan(&n); err != nil {
+		return err
+	}
+	if n >= org.MaxDrafts {
+		return org.Full("drafts", "", n)
+	}
+	return nil
+}

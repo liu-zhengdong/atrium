@@ -24,6 +24,7 @@ func Commands(t *cli.Table) {
 			{Name: "priority", Value: "级别", Help: "urgent 紧急 / fix 修复 / normal 普通（缺省）/ idle 闲时"},
 			{Name: "repo", Value: "仓库", Help: "在哪个仓库干活，如 owner/name"},
 			{Name: "owner", Value: "身份", Help: "处理人：结果（合入、上线、失败、卡住）要处理地投给他——u1、secretary 或 aN（缺省派活的人）"},
+			{Name: "draft", Bool: true, Help: "建成草稿：还没想清楚、条件还不够，不派活、不计时；想清楚了 task set tN --status todo"},
 		},
 		Run: func(c *cli.Ctx) error {
 			title, err := c.Arg(0, "<标题>")
@@ -35,17 +36,20 @@ func Commands(t *cli.Table) {
 			}
 			in := NewTask{Title: title, Detail: c.Str("detail"), Org: c.Str("org"), Parent: c.Str("parent"),
 				After: c.List("after"), Skill: c.Str("skill"), Priority: Priority(c.Str("priority")), Repo: c.Str("repo"),
-				Owner: c.Str("owner")}
+				Owner: c.Str("owner"), Draft: c.Bool("draft")}
 			var task Task
 			if err := c.Call("POST", "/api/tasks", in, &task); err != nil {
 				return err
 			}
-			return c.Done(task, fmt.Sprintf("已建 %s「%s」（%s）", task.ID, task.Title, where(task)),
-				"atrium task run "+task.ID)
+			next := "atrium task run " + task.ID
+			if task.Status == Draft {
+				next = "atrium task set " + task.ID + " --status todo"
+			}
+			return c.Done(task, fmt.Sprintf("已建 %s「%s」（%s）", task.ID, task.Title, where(task)), next)
 		}})
-	t.Add(cli.Command{Path: "task ls", Summary: "列任务（缺省列没结束的）",
+	t.Add(cli.Command{Path: "task ls", Summary: "列任务（缺省列没结束的；草稿只给数）",
 		Flags: []cli.Flag{
-			{Name: "status", Value: "状态", Multi: true, Help: "只列这些状态：todo queued running done failed blocked cancelled"},
+			{Name: "status", Value: "状态", Multi: true, Help: "只列这些状态：draft todo queued running done failed blocked cancelled"},
 			{Name: "org", Value: "oN", Help: "只列这个部门的"},
 			{Name: "parent", Value: "tN", Help: "只列这个任务的直接子任务"},
 			{Name: "top", Bool: true, Help: "只列顶层任务"},
@@ -66,14 +70,32 @@ func Commands(t *cli.Table) {
 			if err := c.Call("GET", "/api/tasks?"+q.Encode(), nil, &tasks); err != nil {
 				return err
 			}
-			if len(tasks) == 0 {
-				return c.Done(tasks, "没有任务", "atrium task add <标题>")
+			// 没指定状态时草稿只给数：它们不等人处理，逐条列会挤掉要处理的。
+			shown, drafts := tasks, 0
+			if len(c.List("status")) == 0 {
+				shown = nil
+				for _, t := range tasks {
+					if t.Status == Draft {
+						drafts++
+					} else {
+						shown = append(shown, t)
+					}
+				}
 			}
 			var b strings.Builder
-			for _, t := range tasks {
+			for _, t := range shown {
 				fmt.Fprintf(&b, "%s  %s  %s  %s\n", t.ID, stateLabel(t), t.Priority, t.Title)
 			}
-			return c.Done(tasks, b.String(), "atrium task show "+tasks[0].ID)
+			if drafts > 0 {
+				fmt.Fprintf(&b, "另有草稿 %d 件：atrium task ls --status draft\n", drafts)
+			}
+			switch {
+			case len(tasks) == 0:
+				return c.Done(tasks, "没有任务", "atrium task add <标题>")
+			case len(shown) == 0:
+				return c.Done(tasks, b.String(), "atrium task ls --status draft")
+			}
+			return c.Done(tasks, b.String(), "atrium task show "+shown[0].ID)
 		}})
 	t.Add(cli.Command{Path: "task show", Args: "<tN>", Summary: "看一件任务：状态、依赖、子任务汇总、最近经历",
 		Run: func(c *cli.Ctx) error {
@@ -133,6 +155,8 @@ func Commands(t *cli.Table) {
 			}
 			next := "atrium task wait " + t.ID
 			switch {
+			case t.Status == Draft:
+				next = "atrium task set " + t.ID + " --status todo"
 			case t.Status == Todo && d.Ready:
 				next = "atrium task run " + t.ID
 			case t.Status == Todo && len(d.WaitingOn) > 0:
@@ -155,7 +179,7 @@ func Commands(t *cli.Table) {
 			{Name: "skill", Value: "名字", Help: "技能（给空串清掉）"},
 			{Name: "repo", Value: "仓库", Help: "仓库"},
 			{Name: "after", Value: "tN", Multi: true, Help: "整体替换依赖（给空串清空）"},
-			{Name: "status", Value: "状态", Help: "人工改状态：todo、done、failed、cancelled（停下用 task stop）"},
+			{Name: "status", Value: "状态", Help: "人工改状态：draft（退回草稿）、todo（转待派）、done、failed、cancelled（停下用 task stop）"},
 			{Name: "note", Value: "文字", Help: "改状态的原因，记进经历"},
 		},
 		Run: func(c *cli.Ctx) error {

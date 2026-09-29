@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/liu-zhengdong/atrium/internal/api"
+	"github.com/liu-zhengdong/atrium/internal/org"
 	"github.com/liu-zhengdong/atrium/internal/store"
 )
 
@@ -161,5 +162,31 @@ func TestResultGoesToOwner(t *testing.T) {
 	}
 	if !maps.Equal(got, want) {
 		t.Fatalf("事件 = %v，应为 %v", got, want)
+	}
+}
+
+func TestDraftCap(t *testing.T) {
+	db, ctx := openDB(t), context.Background()
+	for i := 0; i < org.MaxDrafts; i++ {
+		d, err := Add(ctx, db, NewTask{Title: "草稿", Draft: true}, "secretary")
+		if err != nil || d.Status != Draft {
+			t.Fatalf("第 %d 件草稿：%+v %v", i+1, d, err)
+		}
+	}
+	if _, err := Add(ctx, db, NewTask{Title: "满了", Draft: true}, "secretary"); code(err) != "limit" {
+		t.Fatalf("草稿满了应报 limit，got %v", err)
+	}
+	todo, err := Add(ctx, db, NewTask{Title: "待派"}, "secretary")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Apply(ctx, db, todo.ID, Event{Kind: Set, To: Draft}, "secretary", ""); code(err) != "limit" {
+		t.Fatalf("满了不能退回草稿，got %v", err)
+	}
+	if _, err := Apply(ctx, db, "t1", Event{Kind: Set, To: Todo}, "secretary", ""); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := Apply(ctx, db, todo.ID, Event{Kind: Set, To: Draft}, "secretary", ""); err != nil || got.Status != Draft {
+		t.Fatalf("腾出位置后可以退回草稿：%+v %v", got, err)
 	}
 }

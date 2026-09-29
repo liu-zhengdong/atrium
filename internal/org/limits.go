@@ -34,6 +34,7 @@ const (
 	MaxChoices       = 5     // 每部门待拍板的选项单
 	MaxSchedules     = 10    // 每部门周期任务
 	MaxSecrets       = 20    // 每部门凭据
+	MaxDrafts        = 20    // 全部草稿任务（秘书一次能过完的量）
 )
 
 // Limit 是上限表的一行。Next 里的 {dept} 换成部门短号。
@@ -70,6 +71,8 @@ var Limits = []Limit{
 	{"options", "每份选项单", MaxOptions, "项", "出选项单的人", "只留最值得的几项", "atrium choice ls"},
 	{"choices", "每部门待拍板的选项单", MaxChoices, "份", "用户", "先拍板或放弃已有的（atrium choice pick cN <第几项> 或 --none）", "atrium choice ls"},
 	{"schedules", "每部门周期任务", MaxSchedules, "条", "部门负责人", "合并相近的、删掉不值的（atrium schedule rm sN）", "atrium schedule ls --node {dept}"},
+	{"drafts", "全部草稿", MaxDrafts, "件", "秘书",
+		"想清楚的转待派（atrium task set tN --status todo），不做的取消（--status cancelled），相近的合并", "atrium task ls --status draft"},
 	{"secrets", "每部门凭据", MaxSecrets, "个", "用户", "删掉不用的（atrium secret set {dept} 名称 --rm），或挪到上级部门共用", "atrium secret ls --node {dept}"},
 }
 
@@ -161,6 +164,7 @@ func Counts(ctx context.Context, q store.Querier, dept string) ([]Count, error) 
 		add("depts", `SELECT count(*) FROM departments`)
 		add("skills", `SELECT count(DISTINCT name) FROM skills`)
 		add("leaders", `SELECT count(*) FROM identities WHERE kind = 'leader'`)
+		add("drafts", `SELECT count(*) FROM tasks WHERE status = 'draft'`)
 	} else {
 		if _, err := Get(ctx, q, dept); err != nil {
 			return nil, err

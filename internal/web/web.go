@@ -54,7 +54,6 @@ func (w *web) routes(r *api.Router, env *app.Env) {
 	w.data(r, "GET /ui/api/legion", func(req *http.Request) (any, error) {
 		return loadLegion(req.Context(), env, store.Now())
 	})
-	w.data(r, "GET /ui/api/quota", func(req *http.Request) (any, error) { return loadQuota(req.Context(), env) })
 	w.data(r, "GET /ui/api/dept/{id}", func(req *http.Request) (any, error) {
 		id, err := ref(req, "o")
 		if err != nil {

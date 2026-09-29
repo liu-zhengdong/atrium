@@ -136,6 +136,12 @@ func TestLeaderGuard(t *testing.T) {
 		{"拍板", "POST", "/api/choices/c1/decide", map[string]any{"picks": []int{1}}, "forbidden"},
 		{"本部门周期任务", "POST", "/api/schedules", map[string]any{"org": "o2", "title": "巡检", "every": "1d"}, "ok"},
 		{"别处周期任务", "POST", "/api/schedules", map[string]any{"org": "o3", "title": "巡检", "every": "1d"}, "forbidden"},
+		// 报告连图片一次加：请求体过 1MB，权限判定要读全再判，不能截断（t449）。
+		{"本部门加过 1MB 的资料", "POST", "/api/materials", org.MaterialInput{Org: "o2", Note: "报告", Files: []org.MaterialFile{
+			{Name: "report.md", Content: []byte("# 报告\n![](images/arch.png)\n")},
+			{Name: "images/arch.png", Content: append([]byte{0x89, 0}, make([]byte, 1<<20)...)}}}, "ok"},
+		{"别处加过 1MB 的资料", "POST", "/api/materials", org.MaterialInput{Org: "o3", Note: "报告", Files: []org.MaterialFile{
+			{Name: "images/arch.png", Content: append([]byte{0x89, 0}, make([]byte, 1<<20)...)}}}, "forbidden"},
 		{"没注册的写接口", "POST", "/api/nothing", nil, "not_found"},
 	}
 	for _, c := range cases {

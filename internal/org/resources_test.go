@@ -155,6 +155,28 @@ func openDB(t *testing.T) (*store.DB, string) {
 	return db, dir
 }
 
+// 报告连图片传目录：标题是相对目录的路径，隐藏项跳过（网页预览按这个路径找图）。
+func TestReadLocalMaterialsDir(t *testing.T) {
+	dir := t.TempDir()
+	for name, body := range map[string]string{"report.md": "![](images/arch.png)", "images/arch.png": "PNG", ".git/HEAD": "x", "images/.tmp": "x"} {
+		p := filepath.Join(dir, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	files, err := readLocalMaterials(dir)
+	var names []string
+	for _, f := range files {
+		names = append(names, f.Name)
+	}
+	if err != nil || !reflect.DeepEqual(names, []string{"images/arch.png", "report.md"}) {
+		t.Fatalf("%v %v", names, err)
+	}
+}
+
 func TestResourcesStore(t *testing.T) {
 	db, data := openDB(t)
 	ctx := context.Background()

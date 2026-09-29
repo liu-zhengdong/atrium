@@ -75,6 +75,13 @@ func (w *web) routes(r *api.Router, env *app.Env) {
 		}
 		return loadChoice(req.Context(), env.DB, id)
 	})
+	w.data(r, "GET /ui/api/schedule/{id}", func(req *http.Request) (any, error) {
+		id, err := ref(req, "s")
+		if err != nil {
+			return nil, err
+		}
+		return loadSchedule(req.Context(), env.DB, id)
+	})
 	r.Raw("GET /ui/stream", w.local(w.hub.serve))
 }
 

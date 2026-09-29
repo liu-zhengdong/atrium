@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -14,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/liu-zhengdong/atrium/internal/api"
 	"github.com/liu-zhengdong/atrium/internal/app"
@@ -21,6 +23,8 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/hosts"
 	"github.com/liu-zhengdong/atrium/internal/ledger"
 	"github.com/liu-zhengdong/atrium/internal/org"
+	"github.com/liu-zhengdong/atrium/internal/org/agenda"
+	"github.com/liu-zhengdong/atrium/internal/pause"
 	"github.com/liu-zhengdong/atrium/internal/quota"
 	"github.com/liu-zhengdong/atrium/internal/store"
 	"github.com/liu-zhengdong/atrium/internal/workers"
@@ -454,5 +458,83 @@ func TestTaskTree(t *testing.T) {
 	}
 	if d.Parent != nil || len(d.Kids) != 0 || len(d.Waits) != 0 || !reflect.DeepEqual(ids(d.Waiters), []string{b.ID}) {
 		t.Errorf("接口的抽屉：%+v", d)
+	}
+}
+
+// 周期任务：部门页只列本部门的并挂上一轮；今天页列 7 天内到点的、更远的只给条数；暂停沿树继承；派活失败标出来。
+func TestSchedules(t *testing.T) {
+	ctx := context.Background()
+	db, err := store.Open(filepath.Join(t.TempDir(), "atrium.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	env := &app.Env{DB: db, Pause: &pause.Store{DB: db}, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	root, _ := org.Add(ctx, db, org.NewDept{Name: "组织"})
+	sub, _ := org.Add(ctx, db, org.NewDept{Name: "运行时", Parent: root.ID})
+	leaf, _ := org.Add(ctx, db, org.NewDept{Name: "网页", Parent: sub.ID})
+	other, _ := org.Add(ctx, db, org.NewDept{Name: "文章", Parent: root.ID})
+	now := store.Now()
+	add := func(dept, every, at, kind string) agenda.Schedule {
+		x, err := agenda.AddSchedule(ctx, db, "", agenda.NewSchedule{Org: dept, Title: "巡一遍", Kind: kind, Every: every, At: at}, "secretary", now, time.Local)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return x
+	}
+	daily := add(leaf.ID, "1d", "09:00", "patrol")
+	half := add(other.ID, "12h", "", "")
+	add(other.ID, "30d", "", "research")
+	// 上一轮派活失败、还没结束；上级部门暂停。
+	agenda.Enqueue = func(context.Context, *app.Env, string, string) error { return errors.New("没有能接的执行者") }
+	t.Cleanup(func() { agenda.Enqueue = nil })
+	round, err := agenda.RunNow(ctx, env, daily.ID, time.Local)
+	if err == nil || round.ID == "" {
+		t.Fatalf("派活失败也该生成任务：%+v %v", round, err)
+	}
+	if err := env.Pause.Set(ctx, sub.ID, "u1"); err != nil {
+		t.Fatal(err)
+	}
+
+	page, err := loadDept(ctx, db, t.TempDir(), leaf.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Schedules) != 1 || page.SchedMax != org.MaxSchedules {
+		t.Fatalf("部门页只列本部门的：%+v", page.Schedules)
+	}
+	s := page.Schedules[0]
+	if s.ID != daily.ID || !s.Paused || !s.Trouble || s.Kind != "体验巡检" || s.Cadence != "每天 09:00" || s.Group != sub.ID ||
+		s.Last == nil || s.Last.ID != round.ID || s.Last.Who != "没派" {
+		t.Errorf("暂停中、上一轮派活失败没结束：%+v %+v", s, s.Last)
+	}
+	if page, _ = loadDept(ctx, db, t.TempDir(), sub.ID); len(page.Schedules) != 0 {
+		t.Errorf("下属部门的周期任务不算在上级页：%+v", page.Schedules)
+	}
+
+	today, err := loadToday(ctx, db, time.UnixMilli(now))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := map[string]Sched{}
+	for i, r := range today.Soon.Rows {
+		ids[r.ID] = r
+		if i > 0 && r.NextAt < today.Soon.Rows[i-1].NextAt {
+			t.Errorf("按下一轮先后排：%+v", today.Soon.Rows)
+		}
+	}
+	if len(today.Soon.Rows) != 2 || today.Soon.Later != 1 || !ids[daily.ID].Paused {
+		t.Fatalf("7 天内两条、更远一条：%+v", today.Soon)
+	}
+	if h := ids[half.ID]; h.Paused || h.Trouble || h.Last != nil || h.Kind != "" || h.Cadence != "每 12 小时" || h.DeptName != "文章" {
+		t.Errorf("没暂停、没跑过的：%+v", h)
+	}
+
+	d, err := loadSchedule(ctx, db, daily.ID)
+	if err != nil || len(d.Rounds) != 1 || d.Rounds[0].ID != round.ID || d.By != "secretary" || !strings.Contains(d.Note, agenda.DispatchFailed) {
+		t.Fatalf("抽屉：%+v %v", d, err)
+	}
+	if _, err := loadSchedule(ctx, db, "s999"); err == nil {
+		t.Error("没有的周期任务应报错")
 	}
 }

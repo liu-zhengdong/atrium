@@ -253,6 +253,8 @@ table.perf{width:100%;border-collapse:collapse;font-size:13px}
   .page{padding:20px 16px 32px}
   .row{grid-template-columns:16px minmax(0,1fr) auto;--indent:14px}
   .row .time{display:none} /* 窄屏留行尾标签（等 tN、卡住）不留时间：状态比多久前更要紧 */
+  .row.sched:not(.trouble) .who{display:none} /* 周期任务：下一轮比多久一轮要紧，用下一轮顶替标签；出了问题留问题 */
+  .row.sched:not(.trouble) .time{display:block}
   .accts{grid-template-columns:70px 1fr;row-gap:4px}
   .acct .r{grid-column:2;text-align:left}
 }
@@ -278,3 +280,16 @@ table.perf{width:100%;border-collapse:collapse;font-size:13px}
 .opt summary::-webkit-details-marker{display:none}
 .opt summary:hover{color:var(--accent)}
 .opt .whyt{margin-top:6px;font-size:13px;color:var(--ink2)}
+
+/* 周期任务：行、部门页一节、今天页「接下来 7 天」、抽屉 */
+.rep{width:14px;height:14px;color:var(--ink3);justify-self:center}
+.row.sched .time{width:auto;min-width:52px;white-space:nowrap}
+.warn{color:var(--bad)}
+.section h2 .cap{margin-left:auto;font:12px var(--mono);color:var(--ink3)}
+.quiet-line{color:var(--ink3);font-size:13px;padding:4px 0}
+.status-line.warn{color:var(--bad)}
+details.full{margin-top:22px}
+details.full summary{color:var(--ink3);font-size:13px;cursor:pointer;list-style:none}
+details.full summary::-webkit-details-marker{display:none}
+details.full summary:hover{color:var(--ink2)}
+details.full .result{margin-top:8px;font-size:13px;color:var(--ink2)}

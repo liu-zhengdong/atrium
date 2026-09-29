@@ -350,6 +350,27 @@ out=$(json task accept "$loc"); has '.result.status == "done"'
 [ -z "$(git -C "$site" branch --list "task-$loc")" ] || fail "任务分支应已删除"
 out=$(json org edit "$acc_org" --accept -); has '.ok'
 
+step "工作地点：普通文件夹（不是 git 仓库）→ 假执行者原地写文件 → 关卡 → 完成；不建工作树"
+mkdir -p "$work/notes"; place=$(cd "$work/notes" && pwd)   # 规范路径：TMPDIR 可能带尾部斜杠
+cat >"$work/fakewrite.md" <<'MD'
+---
+protocol: cli
+command: sh
+args: ["-c", "echo 正文 >post.md && echo DONE", "{prompt}"]
+done_match: "^DONE$"
+---
+只回 DONE。
+MD
+out=$(json workers harness/fakewrite --file "$work/fakewrite.md"); has '.ok'
+out=$(json task add 原地写 --repo o/r --dir "$place" || true); has '.ok == false and .error.code == "usage"'   # 仓库与工作地点只给一个
+out=$(json task add 原地写 --dir "$place"); dirt=$(jq -r .result.id <<<"$out"); has '.result.dir == "'"$place"'"'
+json task run "$dirt" --worker fakewrite >/dev/null
+out=$(json task wait "$dirt" --timeout 30); has '.result.task.status == "done"'
+[ "$(cat "$place/post.md")" = 正文 ] || fail "文件应落在原文件夹"
+grep -q "原地干" "$ATRIUM_DATA/tasks/$dirt/prompt-1.md" || fail "提示词应让执行者原地干"
+[ ! -e "$ATRIUM_DATA/tasks/$dirt/repo" ] && [ ! -e "$ATRIUM_DATA/tasks/$dirt/work" ] || fail "不该建工作树或 work/"
+[ ! -e "$place/.git" ] || fail "不该在工作地点建 git 仓库"
+
 step "stop"
 out=$(json stop); has '.result.stopped'
 out=$(json status); has '.result.running == false'

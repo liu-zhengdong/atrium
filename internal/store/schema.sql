@@ -115,6 +115,13 @@ CREATE INDEX IF NOT EXISTS tasks_parent ON tasks (parent);
 CREATE INDEX IF NOT EXISTS tasks_status ON tasks (status);
 CREATE INDEX IF NOT EXISTS tasks_department ON tasks (department);
 
+-- 任务的工作地点：本机文件夹的绝对路径，执行者直接在里面干（不建工作树、不复制）。没有这一行就是没有工作地点。
+-- 单独一张表而不是 tasks 的一列：建表语句对旧库也生效，加列不会。
+CREATE TABLE IF NOT EXISTS task_dirs (
+  task TEXT PRIMARY KEY REFERENCES tasks (id),
+  dir  TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS task_deps (
   task       TEXT NOT NULL REFERENCES tasks (id),
   depends_on TEXT NOT NULL REFERENCES tasks (id),

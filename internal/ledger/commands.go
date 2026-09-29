@@ -23,7 +23,8 @@ func Commands(t *cli.Table) {
 			{Name: "after", Value: "tN", Multi: true, Help: "依赖：这些任务完成后才能派"},
 			{Name: "skill", Value: "名字", Help: "用哪个技能"},
 			{Name: "priority", Value: "级别", Help: "urgent 紧急 / fix 修复 / normal 普通（缺省）/ idle 闲时"},
-			{Name: "repo", Value: "仓库", Help: "在哪个仓库干活，如 owner/name"},
+			{Name: "repo", Value: "仓库", Help: "在哪个仓库干活，如 owner/name（建工作树，交 PR 或本机合入）"},
+			{Name: "dir", Value: "路径", Help: "工作地点：本机文件夹的绝对路径，不必是 git 仓库；执行者在原地干，交付说明写在最后的回复里（与 --repo 只给一个）"},
 			{Name: "owner", Value: "身份", Help: "处理人：结果（合入、上线、失败、卡住）要处理地投给他——u1、secretary 或 aN（缺省派活的人）"},
 			{Name: "draft", Bool: true, Help: "建成草稿：还没想清楚、条件还不够，不派活、不计时；想清楚了 task set tN --status todo"},
 		},
@@ -37,7 +38,7 @@ func Commands(t *cli.Table) {
 			}
 			in := NewTask{Title: title, Detail: c.Str("detail"), Org: c.Str("org"), Parent: c.Str("parent"),
 				After: c.List("after"), Skill: c.Str("skill"), Priority: Priority(c.Str("priority")), Repo: c.Str("repo"),
-				Owner: c.Str("owner"), Draft: c.Bool("draft")}
+				Dir: c.Str("dir"), Owner: c.Str("owner"), Draft: c.Bool("draft")}
 			var task Task
 			if err := c.Call("POST", "/api/tasks", in, &task); err != nil {
 				return err
@@ -130,7 +131,7 @@ func Commands(t *cli.Table) {
 					fmt.Fprintf(&b, "%s：%s\n", kv[0], kv[1])
 				}
 			}
-			for _, kv := range [][2]string{{"技能", t.Skill}, {"仓库", t.Repo}, {"执行者", t.Worker}, {"机器", t.Host}, {"PR", t.PR}} {
+			for _, kv := range [][2]string{{"技能", t.Skill}, {"仓库", t.Repo}, {"工作地点", t.Dir}, {"执行者", t.Worker}, {"机器", t.Host}, {"PR", t.PR}} {
 				if kv[1] != "" {
 					fmt.Fprintf(&b, "%s：%s\n", kv[0], kv[1])
 				}
@@ -188,6 +189,7 @@ func Commands(t *cli.Table) {
 			{Name: "org", Value: "oN", Help: "改所属部门（给空串清掉）"},
 			{Name: "skill", Value: "名字", Help: "技能（给空串清掉）"},
 			{Name: "repo", Value: "仓库", Help: "仓库"},
+			{Name: "dir", Value: "路径", Help: "工作地点（本机文件夹的绝对路径；给空串清掉）"},
 			{Name: "after", Value: "tN", Multi: true, Help: "整体替换依赖（给空串清空）"},
 			{Name: "status", Value: "状态", Help: "人工改状态：draft（退回草稿）、todo（转待派）、done、failed、cancelled（停下用 task stop）"},
 			{Name: "note", Value: "文字", Help: "改状态的原因，记进经历"},
@@ -198,7 +200,7 @@ func Commands(t *cli.Table) {
 				return err
 			}
 			body := SetBody{Patch: Patch{Title: c.Opt("title"), Detail: c.Opt("detail"), Org: c.Opt("org"),
-				Skill: c.Opt("skill"), Repo: c.Opt("repo")}, Note: c.Str("note")}
+				Skill: c.Opt("skill"), Repo: c.Opt("repo"), Dir: c.Opt("dir")}, Note: c.Str("note")}
 			if p := c.Opt("priority"); p != nil {
 				pr := Priority(*p)
 				body.Priority = &pr

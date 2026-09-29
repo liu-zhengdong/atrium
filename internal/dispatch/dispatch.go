@@ -475,7 +475,7 @@ func (d *dispatcher) launch(ctx context.Context, t ledger.Task, o launchOpts) er
 	var dir, branch string
 	var err error
 	if !remote {
-		if dir, branch, err = Workdir(ctx, data, t.ID, t.Repo); err != nil {
+		if dir, branch, err = Workdir(ctx, data, t.ID, t.Repo, t.Dir); err != nil {
 			if isAPI(err) {
 				return err
 			}
@@ -497,7 +497,7 @@ func (d *dispatcher) launch(ctx context.Context, t ledger.Task, o launchOpts) er
 		return err
 	}
 	secrets := o.Secrets
-	in := PromptInput{Task: t.ID, Title: t.Title, Detail: t.Detail, Profile: o.W.Body, Repo: t.Repo, Branch: branch}
+	in := PromptInput{Task: t.ID, Title: t.Title, Detail: t.Detail, Profile: o.W.Body, Repo: t.Repo, Dir: t.Dir, Branch: branch}
 	if in.Origin, err = gates.Origin(ctx, gates.NewExec(), t.Repo); err != nil {
 		return err
 	}

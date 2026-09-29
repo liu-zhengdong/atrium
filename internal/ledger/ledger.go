@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"sync"
 	"unicode/utf8"
@@ -29,6 +30,7 @@ type Task struct {
 	Stage      Stage    `json:"stage,omitempty"`
 	Priority   Priority `json:"priority"`
 	Repo       string   `json:"repo,omitempty"`
+	Dir        string   `json:"dir,omitempty"` // 工作地点：本机文件夹，执行者在原地干（与 Repo 只有一个）
 	Worker     string   `json:"worker,omitempty"`
 	Host       string   `json:"host,omitempty"`
 	PR         string   `json:"pr,omitempty"`
@@ -40,6 +42,11 @@ type Task struct {
 const taskCols = `id, parent, department, skill, title, detail, status, stage, priority, repo, worker, host, pr,
 	created_at, updated_at, finished_at`
 
+// dirCol 是工作地点那一列（存在 task_dirs，见 schema.sql），接在 taskCols 后面；t 是 tasks 在查询里的名字。
+func dirCol(t string) string {
+	return `, COALESCE((SELECT dir FROM task_dirs WHERE task = ` + t + `.id), '')`
+}
+
 type scanner interface{ Scan(dest ...any) error }
 
 func scanTask(s scanner) (Task, error) {
@@ -47,7 +54,7 @@ func scanTask(s scanner) (Task, error) {
 	var parent, org, skill sql.NullString
 	var finished sql.NullInt64
 	err := s.Scan(&t.ID, &parent, &org, &skill, &t.Title, &t.Detail, &t.Status, &t.Stage, &t.Priority,
-		&t.Repo, &t.Worker, &t.Host, &t.PR, &t.CreatedAt, &t.UpdatedAt, &finished)
+		&t.Repo, &t.Worker, &t.Host, &t.PR, &t.CreatedAt, &t.UpdatedAt, &finished, &t.Dir)
 	t.Parent, t.Org, t.Skill = parent.String, org.String, skill.String
 	if finished.Valid {
 		t.FinishedAt = &finished.Int64
@@ -72,6 +79,7 @@ type NewTask struct {
 	Skill    string   `json:"skill"`
 	Priority Priority `json:"priority"`
 	Repo     string   `json:"repo"`
+	Dir      string   `json:"dir"`
 	After    []string `json:"after"`
 	// Owner 是处理人：结果事件要处理地投给他（u1、secretary 或 aN），缺省为派活人。
 	Owner string `json:"owner"`
@@ -95,6 +103,31 @@ func checkText(field, v string, limit int, required bool) error {
 		return api.Usage("--%s: 最多 %d 字，收到 %d 字", field, limit, n)
 	}
 	return nil
+}
+
+// checkPlace 核对仓库与工作地点（纯函数）：工作地点是本机文件夹的绝对路径，两者只给一个。文件夹在不在派活时才查
+// （可能由前面的任务建出来）。
+func checkPlace(repo, dir string) error {
+	switch {
+	case dir == "":
+		return nil
+	case !filepath.IsAbs(dir) || strings.ContainsAny(dir, "\r\n"):
+		return api.Usage("--dir: 应为本机文件夹的绝对路径，收到 %q", dir)
+	case repo != "":
+		return api.Usage("--dir: 和仓库（%s）只能有一个：git 仓库用 --repo（建工作树），别的文件夹用 --dir（原地干）", repo)
+	}
+	return nil
+}
+
+// setDir 写工作地点：空为没有。
+func setDir(ctx context.Context, tx *sql.Tx, id, dir string) error {
+	if dir == "" {
+		_, err := tx.ExecContext(ctx, `DELETE FROM task_dirs WHERE task = ?`, id)
+		return err
+	}
+	_, err := tx.ExecContext(ctx, `INSERT INTO task_dirs (task, dir) VALUES (?, ?)
+		ON CONFLICT (task) DO UPDATE SET dir = excluded.dir`, id, filepath.Clean(dir))
+	return err
 }
 
 func checkPriority(p Priority) error {
@@ -156,6 +189,9 @@ func Add(ctx context.Context, db *store.DB, in NewTask, actor string) (Task, err
 	if len(in.After) > maxDeps {
 		return Task{}, api.Usage("--after: 最多 %d 个依赖", maxDeps)
 	}
+	if err := checkPlace(in.Repo, in.Dir); err != nil {
+		return Task{}, err
+	}
 	var id string
 	err := db.Tx(ctx, func(tx *sql.Tx) error {
 		if in.Parent != "" {
@@ -210,6 +246,9 @@ func Add(ctx context.Context, db *store.DB, in NewTask, actor string) (Task, err
 			in.Detail, status, in.Priority, in.Repo, now, now); err != nil {
 			return err
 		}
+		if err := setDir(ctx, tx, id, in.Dir); err != nil {
+			return err
+		}
 		for _, d := range in.After {
 			if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO task_deps (task, depends_on) VALUES (?, ?)`, id, d); err != nil {
 				return err
@@ -231,7 +270,7 @@ func Add(ctx context.Context, db *store.DB, in NewTask, actor string) (Task, err
 
 // Get 读一件任务；不存在返回 404 错误。
 func Get(ctx context.Context, q store.Querier, id string) (Task, error) {
-	t, err := scanTask(q.QueryRowContext(ctx, `SELECT `+taskCols+` FROM tasks WHERE id = ?`, id))
+	t, err := scanTask(q.QueryRowContext(ctx, `SELECT `+taskCols+dirCol("tasks")+` FROM tasks WHERE id = ?`, id))
 	if store.IsNotFound(err) {
 		return Task{}, api.NotFound("任务 %s 不存在", id).WithNext("atrium task ls")
 	}
@@ -273,7 +312,7 @@ func List(ctx context.Context, q store.Querier, f Filter) ([]Task, error) {
 		f.Limit = 50
 	}
 	args = append(args, f.Limit)
-	rows, err := q.QueryContext(ctx, `SELECT `+taskCols+` FROM tasks WHERE `+strings.Join(where, " AND ")+
+	rows, err := q.QueryContext(ctx, `SELECT `+taskCols+dirCol("tasks")+` FROM tasks WHERE `+strings.Join(where, " AND ")+
 		` ORDER BY created_at DESC, id DESC LIMIT ?`, args...)
 	if err != nil {
 		return nil, err
@@ -302,12 +341,13 @@ type Patch struct {
 	Org      *string   `json:"org,omitempty"`
 	Skill    *string   `json:"skill,omitempty"`
 	Repo     *string   `json:"repo,omitempty"`
+	Dir      *string   `json:"dir,omitempty"`
 	After    *[]string `json:"after,omitempty"`
 }
 
 func (p Patch) empty() bool {
 	return p.Title == nil && p.Detail == nil && p.Priority == nil && p.Org == nil && p.Skill == nil &&
-		p.Repo == nil && p.After == nil
+		p.Repo == nil && p.Dir == nil && p.After == nil
 }
 
 // Edit 改描述字段与依赖（状态用 Apply）。
@@ -331,8 +371,24 @@ func Edit(ctx context.Context, db *store.DB, id string, p Patch, actor string) (
 		}
 	}
 	err := db.Tx(ctx, func(tx *sql.Tx) error {
-		if _, err := Get(ctx, tx, id); err != nil {
+		cur, err := Get(ctx, tx, id)
+		if err != nil {
 			return err
+		}
+		repo, dir := cur.Repo, cur.Dir
+		if p.Repo != nil {
+			repo = *p.Repo
+		}
+		if p.Dir != nil {
+			dir = *p.Dir
+		}
+		if err := checkPlace(repo, dir); err != nil {
+			return err
+		}
+		if p.Dir != nil {
+			if err := setDir(ctx, tx, id, dir); err != nil {
+				return err
+			}
 		}
 		sets, args := []string{}, []any{}
 		add := func(col string, v any) { sets, args = append(sets, col+" = ?"), append(args, v) }
@@ -635,7 +691,7 @@ const maxSubtree = 2000
 func Subtree(ctx context.Context, q store.Querier, root string) ([]Task, error) {
 	rows, err := q.QueryContext(ctx, `WITH RECURSIVE r(id, depth) AS (SELECT ?, 0 UNION ALL
 		SELECT t.id, r.depth + 1 FROM tasks t JOIN r ON t.parent = r.id)
-		SELECT `+prefixed("t.", taskCols)+` FROM r JOIN tasks t ON t.id = r.id ORDER BY r.depth, t.created_at LIMIT ?`,
+		SELECT `+prefixed("t.", taskCols)+dirCol("t")+` FROM r JOIN tasks t ON t.id = r.id ORDER BY r.depth, t.created_at LIMIT ?`,
 		root, maxSubtree)
 	if err != nil {
 		return nil, err

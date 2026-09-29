@@ -190,3 +190,39 @@ func TestDraftCap(t *testing.T) {
 		t.Fatalf("腾出位置后可以退回草稿：%+v %v", got, err)
 	}
 }
+
+func TestTaskDir(t *testing.T) {
+	db, ctx := openDB(t), context.Background()
+	for _, c := range []struct {
+		in   NewTask
+		want string // 错误码；空为能建
+	}{
+		{NewTask{Title: "x", Dir: "notes"}, "usage"},                // 不是绝对路径
+		{NewTask{Title: "x", Dir: "/a\nb"}, "usage"},                // 换行
+		{NewTask{Title: "x", Dir: "/w/site", Repo: "o/r"}, "usage"}, // 与仓库只给一个
+		{NewTask{Title: "x", Repo: "o/r"}, ""},                      // 只有仓库
+		{NewTask{Title: "x", Dir: "/w/site/"}, ""},                  // 只有工作地点
+	} {
+		if _, err := Add(ctx, db, c.in, "u1"); code(err) != c.want {
+			t.Errorf("Add(%+v) = %v，应为 %q", c.in, err, c.want)
+		}
+	}
+	a, _ := Add(ctx, db, NewTask{Title: "写文章", Dir: "/w/blog/"}, "u1")
+	if a.Dir != "/w/blog" {
+		t.Fatalf("工作地点应存成干净的路径：%q", a.Dir)
+	}
+	if l, _ := List(ctx, db, Filter{}); l[0].Dir != "/w/blog" {
+		t.Fatalf("List 应带工作地点：%+v", l[0])
+	}
+	if s, _ := Subtree(ctx, db, a.ID); s[0].Dir != "/w/blog" {
+		t.Fatalf("Subtree 应带工作地点：%+v", s[0])
+	}
+	repo := "o/r"
+	if _, err := Edit(ctx, db, a.ID, Patch{Repo: &repo}, "u1"); code(err) != "usage" {
+		t.Fatalf("有工作地点时再给仓库应拒绝，got %v", err)
+	}
+	empty := ""
+	if got, err := Edit(ctx, db, a.ID, Patch{Dir: &empty, Repo: &repo}, "u1"); err != nil || got.Dir != "" || got.Repo != repo {
+		t.Fatalf("清掉工作地点换成仓库：%+v %v", got, err)
+	}
+}

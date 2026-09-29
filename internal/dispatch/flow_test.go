@@ -25,7 +25,7 @@ var fakes = map[string]string{
 	"claude": `#!/bin/sh
 read first
 echo '{"type":"system","subtype":"init","session_id":"0123abcd-0123-0123-0123-0123456789ab"}'
-echo "worker=$ATRIUM_WORKER task=$ATRIUM_TASK secret=${DEMO_TOKEN:-none} home=${ANTHROPIC_API_KEY:-clean}"
+echo "worker=$ATRIUM_WORKER task=$ATRIUM_TASK secret=${DEMO_TOKEN:-none} home=${ANTHROPIC_API_KEY:-clean} cwd=$(pwd -P)"
 case "$first" in *'"type":"user"'*) echo got-prompt ;; esac
 echo '{"type":"result","is_error":false,"stop_reason":"end_turn","result":"ok"}'
 cat >/dev/null
@@ -184,6 +184,48 @@ func TestFlowClaudeToGate(t *testing.T) {
 	}
 	if runs, _ := workers.Runs(ctx, env.DB, tk.ID, 10); len(runs) != 2 || runs[1].Why != workers.WhyBounce || runs[1].Cause != "关卡没过" {
 		t.Errorf("交回后的拉起缘由应记交回：%+v", runs)
+	}
+}
+
+// 有工作地点：执行者在原文件夹里拉起，不建工作树、不建 work/；文件夹不在就派不出去。
+func TestFlowInPlace(t *testing.T) {
+	env, d := setup(t)
+	ctx := context.Background()
+	place, _ := filepath.EvalSymlinks(t.TempDir())
+	tk, _ := ledger.Add(ctx, env.DB, ledger.NewTask{Title: "写文章", Dir: place}, "u1")
+	if _, err := Enqueue(ctx, env, tk.ID, Options{Worker: "claude"}, "u1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.pump(ctx); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, env, tk.ID, func(x ledger.Task) bool { return x.Stage == ledger.StageGate })
+	run, _ := workers.LastRun(ctx, env.DB, tk.ID)
+	if run == nil || run.Dir != place || run.Branch != "" {
+		t.Fatalf("应在工作地点原地拉起：%+v", run)
+	}
+	if log, _ := os.ReadFile(run.Log); !strings.Contains(string(log), "cwd="+place+"\n") {
+		t.Errorf("执行者的当前目录不是工作地点：%s", log)
+	}
+	for _, sub := range []string{"repo", "work"} {
+		if _, err := os.Stat(filepath.Join(TaskDir(env.Paths.Data, tk.ID), sub)); !os.IsNotExist(err) {
+			t.Errorf("不该建 %s：%v", sub, err)
+		}
+	}
+	prompt, _ := os.ReadFile(filepath.Join(TaskDir(env.Paths.Data, tk.ID), "prompt-1.md"))
+	if !strings.Contains(string(prompt), "原地干") || strings.Contains(string(prompt), "开 PR") {
+		t.Errorf("提示词应让执行者原地干、不开 PR：%s", prompt)
+	}
+
+	gone, _ := ledger.Add(ctx, env.DB, ledger.NewTask{Title: "写文章", Dir: filepath.Join(place, "nosuch")}, "u1")
+	if _, err := Enqueue(ctx, env, gone.ID, Options{Worker: "claude"}, "u1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.pump(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := ledger.Get(ctx, env.DB, gone.ID); got.Status != ledger.Blocked {
+		t.Fatalf("工作地点不在应转受阻：%+v", got)
 	}
 }
 
@@ -431,8 +473,11 @@ func flowRemote(t *testing.T, repo string) {
 	}
 }
 
-// 本机克隆读不出 GitHub 上的 origin：只派本机。
+// 本机克隆读不出 GitHub 上的 origin、有工作地点（本机文件夹）：只派本机。
 func TestHostNeedLocalOnly(t *testing.T) {
+	if n := hostNeed(context.Background(), "claude", ledger.Task{Dir: t.TempDir()}); n.LocalOnly == "" {
+		t.Errorf("有工作地点应只派本机：%+v", n)
+	}
 	plain := t.TempDir()
 	if out, err := exec.Command("git", "init", "--quiet", plain).CombinedOutput(); err != nil {
 		t.Fatalf("%v %s", err, out)

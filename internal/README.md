@@ -38,7 +38,7 @@ Go 代码怎么分包、包之间怎么调用、并行开发时各自改哪里�
 | `workers` | 完成 | 适配器（7 个内置 + 通用命令行）、档案三层叠加、日志信号判定、拉起记录 `Run`、经过解析 `Trace`（claude、codex 按执行者的话分段，其余逐行原文）；`workers`（列、看、改档案） | `worker_profiles` |
 | `gates` | 完成 | 查事实、判关卡、审阅（建审阅任务经 `gates.Enqueue` 派出）；档案经 `workers.Resolve`；按工作树登记的机器查 git（远程经 `hosts.Ask`），PR 由服务查；没有仓库的任务不要求工作树，判过时 `agenda.Settle` 登记 choice.json；与 dispatch 的经历约定见 `gates/records.go` | — |
 | `merge` | 完成 | 合入队列、快检查；`task merge`（登记亲手做的 PR、放行受阻的交付）；快检查进程经 `watch.Track` 登记 | — |
-| `release` | 完成 | 等版本、自升级、平滑重启、上线冒烟；`update` | — |
+| `release` | 完成 | 有新版本就自升级、平滑重启；等版本、上线冒烟；`update` | — |
 | `watch` | 完成 | 持球与期限表（`Rules`）、巡检循环、卡死判定、服务重启后接管；持球人判定 `HolderOf`；`top` 与 `/api/top` | — |
 | `hosts` | 完成 | 机器登记、挑机器（`Pick`）、派到远程（`Launch`/`Stop`/`WaitExit`）、问远程只读查询（`Ask`：只读 git 子命令、读工作目录根下的文件）、ssh 隧道、远程代理；`host add/ls [hN]/edit`（edit 含 `--key` 私钥、`--join` 重新接入、`--rm` 移除）；`agent`、`agent install` 在远程机器上照 `host add` 回执跑，不列在帮助里 | `hosts` `host_runs` |
 | `quota` | 完成 | 额度读取、多机合并、富余（`Spares`）、用尽标记（`SetHold`）；`quota` | `quota_cache` `quota_holds` `quota_settings` |
@@ -114,7 +114,7 @@ type Module struct {
 
 ### 事件（`internal/events`）
 
-- `events.Emit(ctx, q, events.Event{Kind, Task, Dept, Target, Body, By})`：在引起它的写事务里调用。`By` 是引起它的身份：投递对象就是它时不投（自己做的事不再告诉自己；ledger 的任务事件填操作人）。种类常量写在 `events.go`（已有 `TaskStatus`、`Overdue`）。
+- `events.Emit(ctx, q, events.Event{Kind, Task, Dept, Target, Body, By})`：在引起它的写事务里调用。`By` 是引起它的身份：投递对象就是它时不投（自己做的事不再告诉自己；ledger 的任务事件填操作人）。种类常量写在 `events.go`。
 - 级别与去重键缺省按种类取（`events/model.go`）：任务转 failed、blocked 与 `overdue` 要处理，其余知会；同一任务的 `task.status` 合并成最新一条。`Target` 留空时 events 包调 `org.Recipient(ctx, q, dept)` 取投递对象（部门往上最近负责人，没有投 `secretary`）。
 - 任务事件：ledger 在状态变化与转入已合入时经 `events.EmitTask(ctx, q, owner, e)` 发 `task.status`，按处理人分发（纯函数 `events.Route`）。派活人是 `task add` 时的身份（周期任务记建周期任务的人），处理人是 `task add --owner`、缺省派活人，两者记在 `created` 经历里（`ledger.PartiesOf`，`task show` 显示）。结果（完成、已合入、上线、失败、受阻）要处理地投处理人：u1 与秘书投 `secretary`，aN 投自己；运行时建的（审阅任务）投部门负责人、没有投秘书，只有失败、受阻要处理。负责人不是收结果的那位时另收知会；过程（入队、拉起、交回一次、取消）只知会负责人。
 
@@ -165,7 +165,7 @@ cmd/atrium ─→ service（serve 装载全部 Module）
 dispatch ─→ ledger.Apply/SetFacts、org.Chain/GetSkill/SecretEnv、workers、gates（经历约定）、watch.Track、hosts、quota、pause、platform.Start
 gates    ─→ ledger.Apply/Record（查 PR 用 gh，经 platform）
 merge    ─→ ledger.Apply、platform（git、gh、快检查）
-release  ─→ service 的 restart 接口、ledger.Apply(Released)
+release  ─→ service 的 restart 接口、ledger.Apply(Released)、events.Emit(OnlineFailed)
 watch    ─→ ledger.Get/Apply、events.Emit(Overdue)、org、platform.KillTree
 dispatch、merge ─→ watch.Track（拉起执行者或检查后登记 pid、日志、工作树）
 dispatch ─→ watch.Use(Hooks{Requeue})：卡住或临时错误时重新入队（可换人、标额度）

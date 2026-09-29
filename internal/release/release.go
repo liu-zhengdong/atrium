@@ -1,5 +1,7 @@
-// Package release 是上线：Atrium 自己的仓库合入后等含它的版本，版本比当前新就下载本平台二进制替换自身、
-// 平滑重启；新服务起来后跑只读冒烟（status、task ls、--help），通过记「已上线」（task.status 事件带版本），没过转受阻。
+// Package release 是上线：每分钟看一次最新发布，比运行中的新就下载本平台二进制替换自身、平滑重启
+// （全局暂停时不升；同一版本升失败只发一次 online.failed 给秘书，本进程不再重试）。
+// Atrium 自己的仓库合入后的任务等含它的版本：新服务起来后跑只读冒烟（status、task ls、--help），
+// 通过记「已上线」（task.status 事件带版本），没过转受阻。
 //
 // 命令：update [--to 版本]。自升级只在默认数据目录、发版版本上开；隔离实例与开发版不动。
 // 开发期不做失败自动装回旧版：旧二进制留在 <exe>.old，要退回手动换。
@@ -21,6 +23,7 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/app"
 	"github.com/liu-zhengdong/atrium/internal/cli"
 	"github.com/liu-zhengdong/atrium/internal/config"
+	"github.com/liu-zhengdong/atrium/internal/events"
 	"github.com/liu-zhengdong/atrium/internal/gates"
 	"github.com/liu-zhengdong/atrium/internal/ledger"
 	"github.com/liu-zhengdong/atrium/internal/pause"
@@ -82,7 +85,7 @@ func Module() app.Module {
 		}}
 }
 
-// Releaser 推进 stage=merged 的任务：升级、重启、冒烟、记已上线。
+// Releaser 有新版本就升级重启；推进 stage=merged 的任务：冒烟、记已上线。
 type Releaser struct {
 	DB      *store.DB
 	Pause   *pause.Store
@@ -93,9 +96,10 @@ type Releaser struct {
 	Current string
 	Token   func() (string, error)
 	smoked  *string // 本进程跑过的冒烟结论：空串通过，否则是失败原因
+	failed  string  // 本进程升失败过的版本：不再重试
 }
 
-// Loop 每分钟看一遍等发版的任务（每轮要问 GitHub，不跟着账本变化跑）。
+// Loop 每分钟看一遍最新发布与等发版的任务（每轮要问 GitHub，不跟着账本变化跑）。
 func (r *Releaser) Loop(ctx context.Context) error {
 	for {
 		if err := r.Sweep(ctx); err != nil {
@@ -112,16 +116,26 @@ func (r *Releaser) Loop(ctx context.Context) error {
 	}
 }
 
-// Sweep 一轮：有含合入的新版本就升级重启（本进程随即退出）；当前版本已含的跑冒烟、记已上线。
+// Sweep 一轮：有比运行中新的版本就升级重启（本进程随即退出）；否则当前版本已含合入的任务跑冒烟、记已上线。
 func (r *Releaser) Sweep(ctx context.Context) error {
-	tasks, err := gates.InStage(ctx, r.DB, ledger.StageMerged)
-	if err != nil || len(tasks) == 0 {
-		return err
-	}
 	latest, err := LatestTag(ctx, r.R, r.Cfg.Repo)
 	if err != nil {
 		r.Log.Warn("查不到最新版本", "err", err)
 		return nil
+	}
+	paused, err := r.Pause.Paused(ctx, pause.Scope{})
+	if err != nil {
+		return err
+	}
+	if Upgrade(r.Current, latest, r.Cfg.Enabled, paused, r.failed) {
+		if err := r.upgrade(ctx, latest); err != nil && ctx.Err() == nil {
+			return r.upgradeFailed(ctx, latest, err)
+		}
+		return nil
+	}
+	tasks, err := gates.InStage(ctx, r.DB, ledger.StageMerged)
+	if err != nil {
+		return err
 	}
 	for _, t := range tasks {
 		if paused, err := gates.Paused(ctx, r.DB, r.Pause, t, ""); err != nil || paused {
@@ -130,7 +144,7 @@ func (r *Releaser) Sweep(ctx context.Context) error {
 			}
 			continue
 		}
-		if err := r.step(ctx, t, latest); err != nil {
+		if err := r.step(ctx, t); err != nil {
 			if ctx.Err() != nil {
 				return nil
 			}
@@ -142,7 +156,8 @@ func (r *Releaser) Sweep(ctx context.Context) error {
 	return nil
 }
 
-func (r *Releaser) step(ctx context.Context, t ledger.Task, latest string) error {
+// step：当前版本含这件任务的合入提交就冒烟、记已上线；还没有就等（30 分钟没版本由 watch 告诉负责人）。
+func (r *Releaser) step(ctx context.Context, t ledger.Task) error {
 	body, ok, err := gates.Last(ctx, r.DB, t.ID, gates.KindMergeCommit)
 	if err != nil || !ok {
 		return firstErr(err, fmt.Errorf("%s 没有合入提交登记", t.ID))
@@ -153,26 +168,14 @@ func (r *Releaser) step(ctx context.Context, t ledger.Task, latest string) error
 	if err := json.Unmarshal([]byte(body), &m); err != nil || m.Commit == "" {
 		return fmt.Errorf("%s 的合入提交登记坏了：%s", t.ID, body)
 	}
-	if Compare(latest, r.Current) > 0 {
-		in, err := Contains(ctx, r.R, r.Cfg.Repo, latest, m.Commit)
-		if err != nil {
-			return err
-		}
-		if in {
-			return r.upgrade(ctx, t, latest)
-		}
-	}
 	in, err := Contains(ctx, r.R, r.Cfg.Repo, r.Current, m.Commit)
 	if err != nil || !in {
-		return err // 还没有含它的版本：等（30 分钟没版本由 watch 告诉负责人）
+		return err
 	}
 	return r.online(ctx, t)
 }
 
-func (r *Releaser) upgrade(ctx context.Context, t ledger.Task, tag string) error {
-	if err := ledger.Record(ctx, r.DB, t.ID, "upgrade", Actor, r.Current+" → "+tag); err != nil {
-		return err
-	}
+func (r *Releaser) upgrade(ctx context.Context, tag string) error {
 	if err := Install(ctx, r.R, r.Cfg.Repo, tag, r.Exe); err != nil {
 		return err
 	}
@@ -181,8 +184,16 @@ func (r *Releaser) upgrade(ctx context.Context, t ledger.Task, tag string) error
 		return err
 	}
 	c := &api.Client{Base: fmt.Sprintf("http://127.0.0.1:%d", r.Cfg.Port), Token: token}
-	r.Log.Info("已装新版本，平滑重启", "from", r.Current, "to", tag, "task", t.ID)
+	r.Log.Info("已装新版本，平滑重启", "from", r.Current, "to", tag)
 	return c.Do(ctx, "POST", "/api/service/restart", nil, nil)
+}
+
+// upgradeFailed 记下升失败的版本（本进程不再重试），发一条 online.failed 给秘书。
+func (r *Releaser) upgradeFailed(ctx context.Context, tag string, cause error) error {
+	r.failed = tag
+	r.Log.Error("自升级失败", "from", r.Current, "to", tag, "err", cause)
+	return events.Emit(ctx, r.DB, events.Event{Kind: events.OnlineFailed, Target: events.Secretary, By: Actor,
+		Body: map[string]string{"from": r.Current, "to": tag, "error": gates.Clip(cause.Error(), 500)}})
 }
 
 // online 跑只读冒烟（本进程只跑一次），通过记已上线（task.status 事件带版本）；没过转受阻。

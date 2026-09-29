@@ -64,3 +64,26 @@ func TestSelfUpgrade(t *testing.T) {
 		t.Error("Tracks 判定不对")
 	}
 }
+
+func TestUpgrade(t *testing.T) {
+	cases := []struct {
+		name, current, latest string
+		enabled, paused       bool
+		failed                string
+		want                  bool
+	}{
+		{"有新版本", "v2.0.6", "v2.0.7", true, false, "", true},
+		{"已是最新", "v2.0.7", "v2.0.7", true, false, "", false},
+		{"发布比运行中旧", "v2.0.8", "v2.0.7", true, false, "", false},
+		{"还没有发布", "v2.0.6", "", true, false, "", false},
+		{"没开自升级（隔离实例或开发版）", "v2.0.6", "v2.0.7", false, false, "", false},
+		{"全局暂停", "v2.0.6", "v2.0.7", true, true, "", false},
+		{"这个版本升失败过", "v2.0.6", "v2.0.7", true, false, "v2.0.7", false},
+		{"升失败后又出更新的版本", "v2.0.6", "v2.0.8", true, false, "v2.0.7", true},
+	}
+	for _, c := range cases {
+		if got := Upgrade(c.current, c.latest, c.enabled, c.paused, c.failed); got != c.want {
+			t.Errorf("%s：得到 %v", c.name, got)
+		}
+	}
+}

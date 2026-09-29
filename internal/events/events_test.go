@@ -52,6 +52,7 @@ func TestLevelAndKey(t *testing.T) {
 		{TaskStatus, map[string]any{"to": "running"}, Info},
 		{TaskStatus, nil, Info},
 		{Overdue, nil, Act},
+		{OnlineFailed, nil, Act},
 		{LeaderEscalate, map[string]any{"kind": "stuck"}, Act},
 		{LeaderEscalate, map[string]any{"kind": "cross"}, Act},
 		{LeaderEscalate, map[string]any{"kind": "shipped"}, Info},

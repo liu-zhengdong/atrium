@@ -8,11 +8,11 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/api"
 )
 
-// LevelOf 是事件的缺省级别：任务失败、受阻、到期与负责人上交（已上线除外）要处理；其余只知会。
+// LevelOf 是事件的缺省级别：任务失败、受阻、到期、自升级失败与负责人上交（已上线除外）要处理；其余只知会。
 // 上交必须是「要处理」：上一层负责人按要处理的事件被唤醒，秘书的 events wait 也只取要处理的。
 func LevelOf(kind string, body any) string {
 	switch kind {
-	case Overdue:
+	case Overdue, OnlineFailed:
 		return Act
 	case LeaderEscalate:
 		if field(body, "kind") == "shipped" {

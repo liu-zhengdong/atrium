@@ -10,6 +10,7 @@ import (
 
 	"github.com/liu-zhengdong/atrium/internal/api"
 	"github.com/liu-zhengdong/atrium/internal/cli"
+	"github.com/liu-zhengdong/atrium/internal/events"
 )
 
 func Commands(t *cli.Table) {
@@ -164,11 +165,18 @@ func Commands(t *cli.Table) {
 			case t.Status.Finished():
 				next = "atrium task ls"
 			}
+			text := b.String()
+			if strings.HasPrefix(next, "atrium task wait") {
+				var err error
+				if text, next, err = events.AsyncNext(c, strings.TrimRight(text, "\n"), next); err != nil {
+					return err
+				}
+			}
 			out := struct {
 				Detail
 				Holder string `json:"holder,omitempty"` // 现在谁拿着球（没结束的任务）
 			}{d, h.Holder.Text}
-			return c.Done(out, b.String(), next)
+			return c.Done(out, text, next)
 		}})
 	t.Add(cli.Command{Path: "task set", Args: "<tN>", Summary: "改任务的描述、依赖或状态",
 		Flags: []cli.Flag{

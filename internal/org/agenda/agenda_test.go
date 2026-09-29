@@ -128,12 +128,15 @@ func TestCheckChoice(t *testing.T) {
 	dupRec.Recommend = []int{1, 1}
 	outRec := sample(3)
 	outRec.Recommend = []int{4}
+	badOrg := sample(3)
+	badOrg.Options[0].Org = "wrong"
 	for name, c := range map[string]struct {
 		in   ChoiceInput
 		code string
 	}{
 		"3 项": {sample(3), ""}, "5 项": {sample(5), ""}, "2 项": {sample(2), "usage"}, "6 项": {sample(6), "limit"},
 		"缺一栏": {bad, "usage"}, "没推荐": {noRec, "usage"}, "推荐重复": {dupRec, "usage"}, "推荐越界": {outRec, "usage"},
+		"部门不是 oN": {badOrg, "usage"},
 	} {
 		if got := code(CheckChoice(c.in)); got != c.code {
 			t.Errorf("%s：%s，想要 %s", name, got, c.code)
@@ -209,6 +212,37 @@ func TestChoiceFlow(t *testing.T) {
 	c2, err = Decide(ctx, env.DB, c2.ID, nil, "不急", "u1")
 	if err != nil || c2.Status != "passed" {
 		t.Fatalf("%+v %v", c2, err)
+	}
+
+	// 选项指定部门：建任务落在该部门，处理人是该部门负责人，并唤醒（发 task.assigned）。
+	ldr, _ := org.AddLeader(ctx, env.DB, org.NewLeader{Name: "分部主管", Workers: []string{"fake"}})
+	dept2, _ := org.Add(ctx, env.DB, org.NewDept{Name: "分部", Leader: ldr.ID})
+	inWithDept := sample(3)
+	inWithDept.Org = dept
+	inWithDept.Options[0].Org = dept2.ID
+	c3, err := AddChoice(ctx, env.DB, inWithDept, "", "u1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c3.Options[0].Org != dept2.ID {
+		t.Fatalf("选项应记下归属部门：%+v", c3.Options[0])
+	}
+	c3, err = Decide(ctx, env.DB, c3.ID, []int{1}, "交给分部", "u1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tWithDept, _ := ledger.Get(ctx, env.DB, c3.Options[0].Task)
+	if tWithDept.Org != dept2.ID {
+		t.Fatalf("任务应落在分部 %s，得到 %s", dept2.ID, tWithDept.Org)
+	}
+	parties, _ := ledger.PartiesOf(ctx, env.DB, tWithDept.ID)
+	if parties.Owner != ldr.ID {
+		t.Fatalf("处理人应是分部负责人 %s，得到 %s", ldr.ID, parties.Owner)
+	}
+	var assignedCount int
+	env.DB.QueryRow(`SELECT count(*) FROM events WHERE kind = 'task.assigned' AND target = ?`, ldr.ID).Scan(&assignedCount)
+	if assignedCount != 1 {
+		t.Fatalf("应给分部负责人发一条 task.assigned 事件，得到 %d 条", assignedCount)
 	}
 	for i := 0; i < org.MaxChoices; i++ {
 		if _, err := AddChoice(ctx, env.DB, in, "", "u1"); err != nil {

@@ -145,7 +145,8 @@ func (d *dispatcher) reap(ctx context.Context) error {
 	return nil
 }
 
-// pump 按队列顺序派一轮。单件任务派不出去的原因（没人能接、仓库不对……）转受阻交负责人，其余错误让服务停下。
+// pump 按队列顺序派一轮。依赖还没完成的跳过，依赖失败或取消的转受阻；单件任务派不出去的原因（没人能接、仓库不对……）
+// 转受阻交处理人，其余错误让服务停下。
 func (d *dispatcher) pump(ctx context.Context) error {
 	items, err := queued(ctx, d.env.DB)
 	if err != nil {
@@ -155,9 +156,20 @@ func (d *dispatcher) pump(ctx context.Context) error {
 		if ctx.Err() != nil {
 			return nil
 		}
-		err := d.try(ctx, it)
-		if err != nil && isAPI(err) {
-			err = d.block(ctx, it.Task.ID, "派不出去："+err.Error())
+		deps, err := ledger.Deps(ctx, d.env.DB, it.Task.ID)
+		if err != nil {
+			return err
+		}
+		waiting, broken := depGate(deps)
+		switch {
+		case broken != nil:
+			err = d.block(ctx, it.Task.ID, fmt.Sprintf("依赖的 %s %s，不再自动派", broken.ID, brokenLabel[broken.Status]))
+		case len(waiting) > 0:
+			continue
+		default:
+			if err = d.try(ctx, it); err != nil && isAPI(err) {
+				err = d.block(ctx, it.Task.ID, "派不出去："+err.Error())
+			}
 		}
 		if err != nil {
 			return err

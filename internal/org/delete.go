@@ -83,6 +83,7 @@ func deptRefs(id string) []refQuery {
 		{"周期任务", "schedules", "id", "department = ?", "删掉或在别的部门重建（atrium schedule rm <sN>）"},
 		{"待拍板的选项单", "choices", "id", "department = ? AND status = 'open'", "先拍板或放弃（atrium choice pick <cN> --none）"},
 		{"选项单", "choices", "id", "department = ? AND status != 'open'", "已拍板的选项单是记录，没法挪：部门留着"},
+		{"选项单里归它的选项", "choice_option_orgs", "choice", "department = ?", "选项单是记录，没法挪：部门留着"},
 		{"资料", "materials", "id", "department = ?", "资料（含归档的）没法挪：部门留着，或用 atrium material ls --node " + id + " 看"},
 		{"凭据", "secrets", "name", "department = ?", "删掉（atrium secret set " + id + " <名称> --rm）或在别的部门重设"},
 		{"没确认的事件", "events", "id", "department = ? AND acked_at IS NULL", "处理完确认（atrium events ack <编号>）"},

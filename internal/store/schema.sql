@@ -200,6 +200,15 @@ CREATE TABLE IF NOT EXISTS choice_options (
   PRIMARY KEY (choice, pos)
 );
 
+-- 选项归哪个部门：选中后建的任务落到这里、交给这里往上最近的负责人；没有这一行落到出选项单的部门。
+-- 单独一张表而不是 choice_options 的一列：建表语句对旧库也生效，加列不会。
+CREATE TABLE IF NOT EXISTS choice_option_orgs (
+  choice     TEXT NOT NULL REFERENCES choices (id),
+  pos        INTEGER NOT NULL,
+  department TEXT NOT NULL REFERENCES departments (id),
+  PRIMARY KEY (choice, pos)
+);
+
 -- 资料：内容存数据目录 materials/<mN>/r<rev>/<文件名>，这里记元数据；每改一次追加一版，读取取最大 rev。
 -- units 是折算字数（文本按字、二进制按 3 字节一字），部门总量按它算；归档只标 archived_at（整条资料，记在最新版上）。
 CREATE TABLE IF NOT EXISTS materials (

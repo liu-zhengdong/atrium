@@ -66,7 +66,7 @@ func (p Proc) Local() bool { return p.Host == "" || p.Host == "h1" }
 
 // Holder 是「球现在在谁手里」。Role 为空表示不算期限（排队、等依赖、运行时自己推进）。
 type Holder struct {
-	Kind  string `json:"kind"` // worker check runtime release leader secretary user deps draft
+	Kind  string `json:"kind"` // worker check runtime release leader secretary user deps children draft
 	Who   string `json:"who,omitempty"`
 	Text  string `json:"text"`
 	Role  Role   `json:"role,omitempty"`
@@ -76,12 +76,14 @@ type Holder struct {
 
 // Facts 是判定持球人需要的事实，由调用方从账本、组织、内存里取来。
 type Facts struct {
-	Task       ledger.Task
-	Owner      string   // 所属部门往上最近的负责人，没有是 secretary
-	Acceptor   string   // 等验收时部门的验收人（org.AcceptLeader、org.AcceptUser）；别的阶段不取
-	WaitingOn  []string // 没完成的依赖
-	Proc       *Proc    // 与当前阶段对应的在跑进程；没有为 nil
-	ProgressAt int64    // 进程最近一次有进展；0 表示拉起后还没有
+	Task         ledger.Task
+	Owner        string   // 所属部门往上最近的负责人，没有是 secretary
+	Acceptor     string   // 等验收时部门的验收人（org.AcceptLeader、org.AcceptUser）；别的阶段不取
+	WaitingOn    []string // 没完成的依赖
+	OpenChildren int      // 没结束的子任务（待派的任务才取）
+	Children     int      // 全部子任务（待派的任务才取）
+	Proc         *Proc    // 与当前阶段对应的在跑进程；没有为 nil
+	ProgressAt   int64    // 进程最近一次有进展；0 表示拉起后还没有
 }
 
 // HolderOf 判定一件没结束的任务现在在谁手里。top、statusline、task show 共用。
@@ -98,9 +100,19 @@ func HolderOf(f Facts) Holder {
 		if len(f.WaitingOn) > 0 {
 			return Holder{Kind: "deps", Text: "等 " + strings.Join(f.WaitingOn, "、") + " 完成"}
 		}
+		if f.OpenChildren > 0 {
+			// 拆开在做的父任务：子任务各自计时，全部结束后负责人收到结果再来收尾。
+			return Holder{Kind: "children", Text: fmt.Sprintf("子任务在做（%d/%d 结束）", f.Children-f.OpenChildren, f.Children)}
+		}
 		owner.Text, owner.Next = "待派活", "atrium task run "+t.ID
+		if f.Children > 0 {
+			owner.Text, owner.Next = "子任务都结束了，等收尾", "atrium task set "+t.ID+" --status done"
+		}
 		return owner
 	case ledger.Queued:
+		if len(f.WaitingOn) > 0 {
+			return Holder{Kind: "deps", Text: "排队，等 " + strings.Join(f.WaitingOn, "、") + " 完成后自动派"}
+		}
 		return Holder{Kind: "runtime", Who: "运行时", Text: "排队等执行者"}
 	case ledger.Blocked:
 		owner.Text, owner.Next = "卡住，等处理", "atrium task show "+t.ID

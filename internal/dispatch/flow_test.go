@@ -15,6 +15,7 @@ import (
 
 	"github.com/liu-zhengdong/atrium/internal/app"
 	"github.com/liu-zhengdong/atrium/internal/config"
+	"github.com/liu-zhengdong/atrium/internal/events"
 	"github.com/liu-zhengdong/atrium/internal/hosts"
 	"github.com/liu-zhengdong/atrium/internal/ledger"
 	"github.com/liu-zhengdong/atrium/internal/pause"
@@ -399,10 +400,16 @@ func TestFlowStopAndTell(t *testing.T) {
 	if got, _ := ledger.Get(ctx, env.DB, tk.ID); got.Status != ledger.Blocked {
 		t.Fatalf("应保持受阻：%s", got.Status)
 	}
-	// 依赖没完成不能派；写死的执行者接不了高风险。
+	// 依赖还没完成（受阻还能解开）照样进队列等；依赖失败了当场拒绝；写死的执行者接不了高风险。
 	t2, _ := ledger.Add(ctx, env.DB, ledger.NewTask{Title: "后续", After: []string{tk.ID}}, "u1")
-	if _, err := Enqueue(ctx, env, t2.ID, Options{}, "u1"); err == nil || !strings.Contains(err.Error(), "依赖") {
-		t.Errorf("依赖：%v", err)
+	if got, err := Enqueue(ctx, env, t2.ID, Options{}, "u1"); err != nil || got.Status != ledger.Queued {
+		t.Errorf("依赖没完成应进队列等：%+v %v", got, err)
+	}
+	tf, _ := ledger.Add(ctx, env.DB, ledger.NewTask{Title: "失败件"}, "u1")
+	ledger.Apply(ctx, env.DB, tf.ID, ledger.Event{Kind: ledger.Set, To: ledger.Failed}, "u1", "")
+	tBad, _ := ledger.Add(ctx, env.DB, ledger.NewTask{Title: "后续坏件", After: []string{tf.ID}}, "u1")
+	if _, err := Enqueue(ctx, env, tBad.ID, Options{}, "u1"); err == nil || !strings.Contains(err.Error(), "等不到") {
+		t.Errorf("依赖失败应报错：%v", err)
 	}
 	t3, _ := ledger.Add(ctx, env.DB, ledger.NewTask{Title: "高风险"}, "u1")
 	if _, err := Enqueue(ctx, env, t3.ID, Options{Worker: "claude", Risk: "high"}, "u1"); err == nil || !strings.Contains(err.Error(), "接不了") {
@@ -632,4 +639,71 @@ func gatesLast(ctx context.Context, env *app.Env, task, kind string) (string, bo
 	var body string
 	err := env.DB.QueryRowContext(ctx, `SELECT body FROM task_events WHERE task = ? AND kind = ? ORDER BY id DESC LIMIT 1`, task, kind).Scan(&body)
 	return body, err == nil, err
+}
+
+// 依赖没完成的任务先进队列等；依赖完成（done）后派活循环照常拉起它。
+func TestFlowDepsAutoDispatch(t *testing.T) {
+	env, d := setup(t)
+	ctx := context.Background()
+	repo := gitRepo(t)
+	t1, _ := ledger.Add(ctx, env.DB, ledger.NewTask{Title: "前序活", Repo: repo}, "u1")
+	t2, _ := ledger.Add(ctx, env.DB, ledger.NewTask{Title: "后续活", Repo: repo, After: []string{t1.ID}}, "u1")
+	if _, err := Enqueue(ctx, env, t2.ID, Options{Worker: "claude"}, "u1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Enqueue(ctx, env, t1.ID, Options{Worker: "claude"}, "u1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.pump(ctx); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, env, t1.ID, func(x ledger.Task) bool { return x.Status == ledger.Running })
+	if got, _ := ledger.Get(ctx, env.DB, t2.ID); got.Status != ledger.Queued {
+		t.Fatalf("t1 还没完成，t2 应留在队列里：%s", got.Status)
+	}
+	if _, err := ledger.Apply(ctx, env.DB, t1.ID, ledger.Event{Kind: ledger.Set, To: ledger.Done}, "u1", "前序完成"); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.pump(ctx); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, env, t2.ID, func(x ledger.Task) bool { return x.Status == ledger.Running })
+}
+
+// 依赖失败或取消：等着的任务不再派，转受阻（去掉队列行），要处理地投给处理人。
+func TestFlowDepsBroken(t *testing.T) {
+	env, d := setup(t)
+	ctx := context.Background()
+	for _, q := range []string{
+		`INSERT INTO identities (id, kind, name, created_at) VALUES ('a1', 'leader', '甲', 0)`,
+		`INSERT INTO departments (id, parent, name, leader, created_at, updated_at) VALUES ('o1', NULL, '部门', 'a1', 0, 0)`,
+	} {
+		if _, err := env.DB.ExecContext(ctx, q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, to := range []ledger.Status{ledger.Failed, ledger.Cancelled} {
+		first, _ := ledger.Add(ctx, env.DB, ledger.NewTask{Title: "前序", Org: "o1"}, "a1")
+		next, _ := ledger.Add(ctx, env.DB, ledger.NewTask{Title: "后续", Org: "o1", After: []string{first.ID}}, "a1")
+		if _, err := Enqueue(ctx, env, next.ID, Options{Worker: "claude"}, "a1"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := ledger.Apply(ctx, env.DB, first.ID, ledger.Event{Kind: ledger.Set, To: to}, "u1", ""); err != nil {
+			t.Fatal(err)
+		}
+		if err := d.pump(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if got, _ := ledger.Get(ctx, env.DB, next.ID); got.Status != ledger.Blocked {
+			t.Fatalf("依赖%s后应转受阻：%s", to, got.Status)
+		}
+		var rows int
+		env.DB.QueryRowContext(ctx, `SELECT count(*) FROM queue WHERE task = ?`, next.ID).Scan(&rows)
+		var target, level string
+		err := env.DB.QueryRowContext(ctx, `SELECT target, level FROM events WHERE task = ? AND kind = ? ORDER BY id DESC LIMIT 1`,
+			next.ID, events.TaskStatus).Scan(&target, &level)
+		if rows != 0 || err != nil || target != "a1" || level != events.Act {
+			t.Fatalf("依赖%s：队列行 %d，事件 %s %s %v", to, rows, target, level, err)
+		}
+	}
 }

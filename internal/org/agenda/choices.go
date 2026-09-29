@@ -2,6 +2,7 @@ package agenda
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -32,11 +33,12 @@ const (
 
 type OptionInput struct {
 	Title    string `json:"title"`
-	Gain     string `json:"gain"`     // 能多做到什么
-	WhyNow   string `json:"why_now"`  // 为什么现在
-	Cost     string `json:"cost"`     // 代价
-	IfNot    string `json:"if_not"`   // 不做会怎样
-	Evidence string `json:"evidence"` // 依据
+	Gain     string `json:"gain"`          // 能多做到什么
+	WhyNow   string `json:"why_now"`       // 为什么现在
+	Cost     string `json:"cost"`          // 代价
+	IfNot    string `json:"if_not"`        // 不做会怎样
+	Evidence string `json:"evidence"`      // 依据
+	Org      string `json:"org,omitempty"` // 归属部门（oN，不写落到出选项单的部门）
 }
 
 // ChoiceInput 是 choice add 的输入，也是 choice.json 的格式（Org 在 choice.json 里不写，取任务的部门）。
@@ -101,6 +103,9 @@ func CheckChoice(in ChoiceInput) error {
 			if err := need(p+f.name, f.v, f.limit); err != nil {
 				return err
 			}
+		}
+		if o.Org != "" && !api.IsRef(o.Org, "o") {
+			return api.Usage("%sorg: 应为 oN 形式的部门短号，收到 %q", p, o.Org)
 		}
 	}
 	if err := CheckPicks("recommend", in.Recommend, n); err != nil {
@@ -196,6 +201,13 @@ func AddChoice(ctx context.Context, db *store.DB, in ChoiceInput, task, actor st
 		if _, err := org.Get(ctx, tx, in.Org); err != nil {
 			return err
 		}
+		for _, o := range in.Options {
+			if o.Org != "" {
+				if _, err := org.Get(ctx, tx, o.Org); err != nil {
+					return err
+				}
+			}
+		}
 		var open int
 		if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM choices WHERE department = ? AND status = 'open'`, in.Org).Scan(&open); err != nil {
 			return err
@@ -215,6 +227,12 @@ func AddChoice(ctx context.Context, db *store.DB, in ChoiceInput, task, actor st
 		for i, o := range in.Options {
 			if _, err := tx.ExecContext(ctx, `INSERT INTO choice_options (choice, pos, title, gain, why_now, cost, if_not, evidence)
 				VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, id, i+1, strings.TrimSpace(o.Title), o.Gain, o.WhyNow, o.Cost, o.IfNot, o.Evidence); err != nil {
+				return err
+			}
+			if o.Org == "" {
+				continue
+			}
+			if _, err := tx.ExecContext(ctx, `INSERT INTO choice_option_orgs (choice, pos, department) VALUES (?, ?, ?)`, id, i+1, o.Org); err != nil {
 				return err
 			}
 		}
@@ -245,15 +263,17 @@ func GetChoice(ctx context.Context, q store.Querier, id string) (Choice, error) 
 	if decided.Valid {
 		c.DecidedAt = &decided.Int64
 	}
-	rows, err := q.QueryContext(ctx, `SELECT pos, title, gain, why_now, cost, if_not, evidence, COALESCE(task, '')
-		FROM choice_options WHERE choice = ? ORDER BY pos LIMIT ?`, id, org.MaxOptions)
+	rows, err := q.QueryContext(ctx, `SELECT o.pos, o.title, o.gain, o.why_now, o.cost, o.if_not, o.evidence,
+		COALESCE(d.department, ''), COALESCE(o.task, '')
+		FROM choice_options o LEFT JOIN choice_option_orgs d ON d.choice = o.choice AND d.pos = o.pos
+		WHERE o.choice = ? ORDER BY o.pos LIMIT ?`, id, org.MaxOptions)
 	if err != nil {
 		return Choice{}, err
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var o Option
-		if err := rows.Scan(&o.Pos, &o.Title, &o.Gain, &o.WhyNow, &o.Cost, &o.IfNot, &o.Evidence, &o.Task); err != nil {
+		if err := rows.Scan(&o.Pos, &o.Title, &o.Gain, &o.WhyNow, &o.Cost, &o.IfNot, &o.Evidence, &o.Org, &o.Task); err != nil {
 			return Choice{}, err
 		}
 		c.Options = append(c.Options, o)
@@ -319,7 +339,13 @@ func Decide(ctx context.Context, db *store.DB, id string, picks []int, note, act
 		if !slices.Contains(picks, o.Pos) {
 			continue
 		}
-		t, err := ledger.Add(ctx, db, ledger.NewTask{Title: o.Title, Detail: OptionDetail(c, o, note), Org: c.Org}, actor)
+		// 选中的项交给它所属部门（没写是出选项单的部门）往上最近的负责人去设计、拆活（ledger 发 task.assigned 唤醒）。
+		dept := cmp.Or(o.Org, c.Org)
+		owner, err := org.Recipient(ctx, db, dept)
+		if err != nil {
+			return Choice{}, err
+		}
+		t, err := ledger.Add(ctx, db, ledger.NewTask{Title: o.Title, Detail: OptionDetail(c, o, note), Org: dept, Owner: owner}, actor)
 		if err != nil {
 			return Choice{}, err
 		}

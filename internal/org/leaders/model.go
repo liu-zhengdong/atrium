@@ -13,6 +13,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/liu-zhengdong/atrium/internal/api"
+	"github.com/liu-zhengdong/atrium/internal/events"
 	"github.com/liu-zhengdong/atrium/internal/org"
 )
 
@@ -220,6 +221,15 @@ func Prompt(in PromptInput) string {
 		w("%s", line)
 	}
 	w("")
+	if slices.ContainsFunc(in.Events, func(e Event) bool { return e.Kind == events.TaskAssigned }) {
+		w("## 交给你去拆的任务（task.assigned）")
+		w("交来的是一件父任务，方案、拆活、派活、审核都归你：")
+		w("1. 看它：task show tN；说明里没写清服务三个目标里的哪一个，先用 task note tN 补上。想清怎么做，取舍写进 task note。要用户拍板的整理成选项单（choice add），不要替用户定。")
+		w("2. 拆成做得完的子任务：task add 标题 --parent tN --repo 仓库（或 --dir 本机文件夹）[--after tM]，先后用 --after 写清。长期方向写进部门介绍（上交），不建成做不完的任务。")
+		w("3. 逐件 task run；依赖还没完成的也可以先 run，依赖完成后自动派，依赖失败或取消会转受阻并通知你。")
+		w("4. 子任务的结果投给你，父任务进度由子任务汇总（task tree tN）；都完成后 task set tN --status done 收尾（子任务没结束时父任务不计时）。")
+		w("")
+	}
 	w("## 可用命令（都是 atrium，已按你的身份连到服务；加 --json 得结构化结果）")
 	w("- 看：task show tN；task log tN；task ls --org %s；org show oN", home)
 	w("- 派与管：task add 标题 --org %s；task run tN；task tell tN 补充；task stop tN；task set tN --status …；task note tN 取舍与原因", home)

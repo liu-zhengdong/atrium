@@ -755,7 +755,11 @@ func holderText(ctx context.Context, q store.Querier, t ledger.Task) (string, er
 		return "", err
 	}
 	_, waiting := ledger.Ready(t.Status, deps)
-	h := watch.HolderOf(watch.Facts{Task: t, Owner: owner, WaitingOn: waiting})
+	open, children, err := ledger.Children(ctx, q, t.ID)
+	if err != nil {
+		return "", err
+	}
+	h := watch.HolderOf(watch.Facts{Task: t, Owner: owner, WaitingOn: waiting, OpenChildren: open, Children: children})
 	if h.Who == "" {
 		return h.Text, nil
 	}

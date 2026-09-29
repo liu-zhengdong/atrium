@@ -49,6 +49,11 @@ type Summary struct {
 	Counts map[Status]int `json:"counts"`
 }
 
+// Open 是还没结束的件数（完成、失败、取消之外）。
+func (s Summary) Open() int {
+	return s.Total - s.Counts[Done] - s.Counts[Failed] - s.Counts[Cancelled]
+}
+
 func Summarize(statuses []Status) Summary {
 	s := Summary{Total: len(statuses), Counts: map[Status]int{}}
 	for _, st := range statuses {

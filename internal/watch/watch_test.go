@@ -68,6 +68,9 @@ func TestHolderOf(t *testing.T) {
 	}{
 		{"待派活归负责人", Facts{Task: task(ledger.Todo, ""), Owner: "a1"}, "leader", "a1", RoleLeader, 500},
 		{"等依赖不算期限", Facts{Task: task(ledger.Todo, ""), Owner: "a1", WaitingOn: []string{"t2"}}, "deps", "", "", 0},
+		{"子任务在做不算期限", Facts{Task: task(ledger.Todo, ""), Owner: "a1", OpenChildren: 2, Children: 3}, "children", "", "", 0},
+		{"子任务都结束了等负责人收尾", Facts{Task: task(ledger.Todo, ""), Owner: "a1", Children: 3}, "leader", "a1", RoleLeader, 500},
+		{"排队等依赖不算期限", Facts{Task: task(ledger.Queued, ""), WaitingOn: []string{"t2"}}, "deps", "", "", 0},
 		{"没负责人归秘书", Facts{Task: task(ledger.Blocked, ""), Owner: "secretary"}, "secretary", "secretary", RoleLeader, 500},
 		{"排队", Facts{Task: task(ledger.Queued, "")}, "runtime", "运行时", "", 0},
 		{"执行者刚起", Facts{Task: task(ledger.Running, ""), Proc: proc}, "worker", "codex", RoleWorkerStart, 1000},

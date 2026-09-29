@@ -163,6 +163,13 @@ func TestPrompt(t *testing.T) {
 			t.Errorf("提示词缺 %q", want)
 		}
 	}
+	if strings.Contains(p, "交给你去拆的任务") {
+		t.Error("没有 task.assigned 不附拆活做法")
+	}
+	in.Events = append(in.Events, Event{ID: 13, Kind: "task.assigned", Task: "t6", Dept: "o3"})
+	if p := Prompt(in); !strings.Contains(p, "交给你去拆的任务") || !strings.Contains(p, "--parent tN") {
+		t.Error("有 task.assigned 要附拆活做法")
+	}
 	if !strings.Contains(Prompt(PromptInput{Leader: org.Identity{ID: "a3"}, Upstream: "secretary"}), "（空）") {
 		t.Error("空备忘要写（空）")
 	}

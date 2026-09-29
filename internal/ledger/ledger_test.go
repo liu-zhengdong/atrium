@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/liu-zhengdong/atrium/internal/api"
+	"github.com/liu-zhengdong/atrium/internal/events"
 	"github.com/liu-zhengdong/atrium/internal/org"
 	"github.com/liu-zhengdong/atrium/internal/store"
 )
@@ -226,5 +227,61 @@ func TestTaskDir(t *testing.T) {
 	empty := ""
 	if got, err := Edit(ctx, db, a.ID, Patch{Dir: &empty, Repo: &repo}, "u1"); err != nil || got.Dir != "" || got.Repo != repo {
 		t.Fatalf("清掉工作地点换成仓库：%+v %v", got, err)
+	}
+}
+
+func TestAssignee(t *testing.T) {
+	for name, c := range map[string]struct {
+		in    NewTask
+		actor string
+		want  string
+	}{
+		"秘书交给负责人去拆":  {NewTask{Owner: "a1"}, "secretary", "a1"},
+		"负责人给自己建":    {NewTask{Owner: "a1"}, "a1", ""},
+		"交给上一层负责人":   {NewTask{Owner: "a1"}, "a2", "a1"},
+		"有仓库是具体的活":   {NewTask{Owner: "a1", Repo: "/r"}, "secretary", ""},
+		"有工作地点是具体的活": {NewTask{Owner: "a1", Dir: "/d"}, "secretary", ""},
+		"草稿不唤醒":      {NewTask{Owner: "a1", Draft: true}, "secretary", ""},
+		"处理人是秘书":     {NewTask{Owner: "secretary"}, "u1", ""},
+		"没写处理人":      {NewTask{}, "secretary", ""},
+	} {
+		if got := Assignee(c.in, c.actor); got != c.want {
+			t.Errorf("%s：得到 %q，应为 %q", name, got, c.want)
+		}
+	}
+}
+
+// 交给负责人去拆的任务：没写部门落到它负责的那个部门，并给它发一条要处理的 task.assigned。
+func TestAddAssigned(t *testing.T) {
+	db, ctx := openDB(t), context.Background()
+	for _, q := range []string{
+		`INSERT INTO identities (id, kind, name, created_at) VALUES ('a1', 'leader', '甲', 0), ('a2', 'leader', '乙', 0)`,
+		`INSERT INTO departments (id, parent, name, leader, created_at, updated_at) VALUES
+			('o1', NULL, '一', 'a1', 0, 0), ('o2', NULL, '二', 'a2', 0, 0), ('o3', NULL, '三', 'a2', 0, 0)`,
+	} {
+		if _, err := db.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	goal, err := Add(ctx, db, NewTask{Title: "接活", Owner: "a1"}, "secretary")
+	if err != nil || goal.Org != "o1" {
+		t.Fatalf("应落到 o1：%+v %v", goal, err)
+	}
+	var target, level string
+	if err := db.QueryRow(`SELECT target, level FROM events WHERE task = ? AND kind = ?`, goal.ID, events.TaskAssigned).
+		Scan(&target, &level); err != nil || target != "a1" || level != events.Act {
+		t.Fatalf("应给 a1 发要处理的 task.assigned：%s %s %v", target, level, err)
+	}
+	if _, err := Add(ctx, db, NewTask{Title: "两个部门", Owner: "a2"}, "secretary"); err == nil || !strings.Contains(err.Error(), "--org") {
+		t.Fatalf("负责多个部门要写 --org：%v", err)
+	}
+	sub, err := Add(ctx, db, NewTask{Title: "子任务", Parent: goal.ID}, "a1")
+	if err != nil || sub.Org != "o1" {
+		t.Fatalf("%+v %v", sub, err)
+	}
+	var n int
+	db.QueryRow(`SELECT count(*) FROM events WHERE kind = ?`, events.TaskAssigned).Scan(&n)
+	if n != 1 {
+		t.Fatalf("负责人自己建的子任务不再唤醒自己：%d 条", n)
 	}
 }

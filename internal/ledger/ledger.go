@@ -119,6 +119,15 @@ func checkPlace(repo, dir string) error {
 	return nil
 }
 
+// Assignee 纯判定：建好就要唤醒谁去拆活。处理人是负责人（aN）、不是建的人自己，任务没有仓库也没有工作地点、
+// 不是草稿——意思是「交给这位负责人去拆」；返回这位负责人，否则返回空。
+func Assignee(in NewTask, actor string) string {
+	if in.Draft || in.Repo != "" || in.Dir != "" || in.Owner == actor || !api.IsRef(in.Owner, "a") {
+		return ""
+	}
+	return in.Owner
+}
+
 // setDir 写工作地点：空为没有。
 func setDir(ctx context.Context, tx *sql.Tx, id, dir string) error {
 	if dir == "" {
@@ -228,6 +237,19 @@ func Add(ctx context.Context, db *store.DB, in NewTask, actor string) (Task, err
 				return api.NotFound("--owner: %s 不存在（应为 u1、secretary 或已登记的 aN）", in.Owner).WithNext("atrium leader ls")
 			}
 		}
+		assignee := Assignee(in, actor)
+		if assignee != "" && in.Org == "" {
+			// 交给负责人的任务落到它负责的部门，它才动得了；负责多个部门时要写明哪个。
+			lm, err := org.LeaderMap(ctx, tx)
+			if err != nil {
+				return err
+			}
+			led := org.Led(lm, assignee)
+			if len(led) != 1 {
+				return api.Usage("--org: 交给 %s 去拆的任务要写归属部门（它负责 %d 个部门：%s）", assignee, len(led), strings.Join(led, "、"))
+			}
+			in.Org = led[0]
+		}
 		status := Todo
 		if in.Draft {
 			status = Draft
@@ -259,7 +281,14 @@ func Add(ctx context.Context, db *store.DB, in NewTask, actor string) (Task, err
 			raw, _ := json.Marshal(Parties{By: in.By, Owner: in.Owner})
 			parties = string(raw)
 		}
-		return Record(ctx, tx, id, "created", actor, parties)
+		if err := Record(ctx, tx, id, "created", actor, parties); err != nil {
+			return err
+		}
+		if assignee == "" {
+			return nil
+		}
+		return events.Emit(ctx, tx, events.Event{Kind: events.TaskAssigned, Task: id, Dept: in.Org, Target: assignee,
+			Body: map[string]any{"title": strings.TrimSpace(in.Title)}, By: actor})
 	})
 	if err != nil {
 		return Task{}, err
@@ -682,6 +711,13 @@ func Deps(ctx context.Context, q store.Querier, id string) ([]DepState, error) {
 		out = append(out, d)
 	}
 	return out, rows.Err()
+}
+
+// Children 数一件任务的直接子任务：还没结束的与全部（拆开在做的父任务靠它判断在做还是等收尾）。
+func Children(ctx context.Context, q store.Querier, id string) (open, total int, err error) {
+	err = q.QueryRowContext(ctx, `SELECT COALESCE(sum(status NOT IN ('done', 'failed', 'cancelled')), 0), count(*)
+		FROM tasks WHERE parent = ?`, id).Scan(&open, &total)
+	return open, total, err
 }
 
 // maxSubtree 是一棵任务树一次读出的上限。

@@ -77,13 +77,8 @@ function taskRow(r, timeFn = ago, depth = 0, who = r.who) {
 
 /* 周期任务一行：多久一轮写在行尾标签，下一轮写在时间列；暂停范围内写「暂停中」。窄屏时间列隐藏，改用下一轮顶替标签（见 app.css）。
    dept：部门页，下面挂上一轮（点开是那件任务）；today：今天页，不挂上一轮，只在出了问题时把问题写在行尾。 */
-// 周期里已写了钟点（每天 09:00）的，下一轮只写哪天；按小时的写钟点。
-function schedWhen(s) {
-  if (s.paused) return "暂停中";
-  const w = ahead(s.next_at);
-  if (!/\d:\d/.test(s.cadence) || /分后$/.test(w)) return w;
-  return /^\d\d:/.test(w) ? "今天" : w.replace(/ \d\d:\d\d$/, "");
-}
+// 下一轮总写到钟点：窄屏只剩这一列，省了钟点就看不出几点跑。
+const schedWhen = s => s.paused ? "暂停中" : ahead(s.next_at);
 function schedRow(s, where, deptLabel = "") {
   const tag = [deptLabel, s.cadence, s.kind].filter(Boolean).join(" · ");
   const warn = where === "today" && s.trouble;

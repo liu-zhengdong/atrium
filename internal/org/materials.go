@@ -473,7 +473,7 @@ func materialCommands(t *cli.Table) {
 			}
 			return c.Done(list, b.String(), "atrium material ls --node "+dept)
 		}})
-	t.Add(cli.Command{Path: "material get", Args: "<mN>", Summary: "取一份资料的内容（执行者也能用）", WorkerOK: true,
+	t.Add(cli.Command{Path: "material get", Read: true, Args: "<mN>", Summary: "取一份资料的内容",
 		Flags: []cli.Flag{
 			{Name: "rev", Value: "N", Help: "取第几版（缺省最新）"},
 			{Name: "out", Value: "文件", Help: "写到文件（二进制资料必须给）"},
@@ -506,7 +506,7 @@ func materialCommands(t *cli.Table) {
 			}
 			return c.Done(m, string(m.Content), "")
 		}})
-	t.Add(cli.Command{Path: "material ls", Summary: "列资料与部门用量",
+	t.Add(cli.Command{Path: "material ls", Read: true, Summary: "列资料与部门用量",
 		Flags: []cli.Flag{
 			{Name: "node", Value: "oN", Help: "只看这个部门的"},
 			{Name: "archived", Bool: true, Help: "只看已归档的"},

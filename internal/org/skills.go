@@ -459,7 +459,7 @@ func skillCommands(t *cli.Table) {
 			return c.Done(k, fmt.Sprintf("技能 %s 第 %d 版：%s\n路径：%s", k.Name, k.Rev, k.Summary, k.Path),
 				"atrium task add <标题> --skill "+k.Name)
 		}})
-	t.Add(cli.Command{Path: "skill ls", Args: "[名字]", Summary: "列技能；给名字看这一个的做法与附属文件",
+	t.Add(cli.Command{Path: "skill ls", Read: true, Args: "[名字]", Summary: "列技能；给名字看这一个的做法与附属文件",
 		Run: func(c *cli.Ctx) error {
 			if err := c.MaxArgs(1); err != nil {
 				return err

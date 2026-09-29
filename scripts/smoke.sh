@@ -8,7 +8,7 @@ work=$(mktemp -d "${TMPDIR:-/tmp}/atrium-smoke.XXXXXX")
 bin="$work/atrium"
 export ATRIUM_DATA="$work/data"
 export ATRIUM_PORT=$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1])')
-unset ATRIUM_WORKER ATRIUM_AS
+unset ATRIUM_AS
 
 pid=""
 cleanup() {
@@ -172,7 +172,7 @@ out=$(json material add o2 "$work/overview.md" --overview --note 总览); has '.
 out=$(json material add o2 "$work/detail.md" --note 细节); has '.result[0].id == "m2"'
 out=$(json material add o2 "$work/detail.md" --note 改了); has '.result[0].id == "m2" and .result[0].rev == 2'
 out=$(json material get m1); has '(.result.content|@base64d) == "部门是什么"'
-[ "$(ATRIUM_WORKER=1 "$bin" material get m2)" = abc ] || fail "执行者应能 material get"
+[ "$("$bin" material get m2)" = abc ] || fail "material get 应输出原文"
 out=$(json material archive m2); has '.result.archived_at != null'
 out=$(json material ls --node o2); has '(.result|length) == 1'
 out=$(json org show o2); has '(.result.limits|map(select(.key == "overview"))[0].used) == 5'

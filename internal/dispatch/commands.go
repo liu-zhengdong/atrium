@@ -184,7 +184,7 @@ func Commands(t *cli.Table) {
 			}
 			return c.Done(r, text, next)
 		}})
-	t.Add(cli.Command{Path: "task log", Args: "<tN>", Summary: "看执行者的经过：按它说的话分段，每条命令原文一行（✓ 成功 ✗ 出错 · 没搜到 … 在跑）；--raw 原始日志；--follow 跟到退出",
+	t.Add(cli.Command{Path: "task log", Read: true, Args: "<tN>", Summary: "看执行者的经过：按它说的话分段，每条命令原文一行（✓ 成功 ✗ 出错 · 没搜到 … 在跑）；--raw 原始日志；--follow 跟到退出",
 		Flags: []cli.Flag{{Name: "follow", Bool: true, Help: "跟着看，直到执行者退出"},
 			{Name: "raw", Bool: true, Help: "原始日志（从末尾一段起）；日志不是 JSON 事件的工具本来就给原文"}},
 		Run: func(c *cli.Ctx) error {

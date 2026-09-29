@@ -7,6 +7,8 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -24,7 +26,7 @@ func testTable() (*Table, *Ctx) {
 			got = *c
 			return c.Done(map[string]string{"id": "t1"}, "已建 t1", "atrium task run t1")
 		}})
-	t.Add(Command{Path: "status", Summary: "看服务", WorkerOK: true, Run: func(c *Ctx) error { return c.Done(nil, "", "") }})
+	t.Add(Command{Path: "status", Summary: "看服务", Read: true, Run: func(c *Ctx) error { return c.Done(nil, "", "") }})
 	return t, &got
 }
 
@@ -92,7 +94,19 @@ func TestWorkerGuard(t *testing.T) {
 		t.Fatalf("执行者应被拒：%d %q", code, stderr)
 	}
 	if code, _, _ := run(tbl, worker, "status"); code != 0 {
-		t.Fatal("WorkerOK 的命令应放行")
+		t.Fatal("只读命令应放行")
+	}
+	isolated := map[string]string{"ATRIUM_WORKER": "1", "ATRIUM_DATA": t.TempDir()}
+	if code, _, stderr := run(tbl, isolated, "task", "add", "x"); code != 0 {
+		t.Fatalf("隔离实例上的写命令应放行：%d %q", code, stderr)
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	explicit := map[string]string{"ATRIUM_WORKER": "1", "ATRIUM_DATA": filepath.Join(home, ".atrium-v2")}
+	if code, _, _ := run(tbl, explicit, "task", "add", "x"); code != 1 {
+		t.Fatal("ATRIUM_DATA 写成缺省目录仍是用户的服务，应拒")
 	}
 }
 

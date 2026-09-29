@@ -67,7 +67,7 @@ func Commands(t *cli.Table) {
 			}
 			return c.Done(task, text, next)
 		}})
-	t.Add(cli.Command{Path: "task ls", Summary: "列任务（缺省列没结束的；草稿只给数）",
+	t.Add(cli.Command{Path: "task ls", Read: true, Summary: "列任务（缺省列没结束的；草稿只给数）",
 		Flags: []cli.Flag{
 			{Name: "status", Value: "状态", Multi: true, Help: "只列这些状态：draft todo queued running done failed blocked cancelled"},
 			{Name: "org", Value: "oN", Help: "只列这个部门的"},
@@ -117,7 +117,7 @@ func Commands(t *cli.Table) {
 			}
 			return c.Done(tasks, b.String(), "atrium task show "+shown[0].ID)
 		}})
-	t.Add(cli.Command{Path: "task show", Args: "<tN>", Summary: "看一件任务：状态、依赖、子任务汇总、最近经历",
+	t.Add(cli.Command{Path: "task show", Read: true, Args: "<tN>", Summary: "看一件任务：状态、依赖、子任务汇总、最近经历",
 		Run: func(c *cli.Ctx) error {
 			id, err := c.Arg(0, "<tN>")
 			if err != nil {
@@ -274,7 +274,7 @@ func Commands(t *cli.Table) {
 			}
 			return c.Done(t, fmt.Sprintf("已停下 %s「%s」：%s；在跑的执行者由派活循环结束", t.ID, t.Title, stateLabel(t)), "atrium task run "+t.ID)
 		}})
-	t.Add(cli.Command{Path: "task tree", Args: "[tN]", Summary: "看任务树与各层汇总（不给 tN 看全部顶层没结束的）",
+	t.Add(cli.Command{Path: "task tree", Read: true, Args: "[tN]", Summary: "看任务树与各层汇总（不给 tN 看全部顶层没结束的）",
 		Run: func(c *cli.Ctx) error {
 			path := "/api/tree"
 			if len(c.Args) > 0 {
@@ -304,7 +304,7 @@ func Commands(t *cli.Table) {
 			}
 			return c.Done(roots, b.String(), "atrium task plan "+roots[0].ID)
 		}})
-	t.Add(cli.Command{Path: "task plan", Args: "<tN>", Summary: "排子任务的先后：哪些现在能派、哪些在等谁",
+	t.Add(cli.Command{Path: "task plan", Read: true, Args: "<tN>", Summary: "排子任务的先后：哪些现在能派、哪些在等谁",
 		Run: func(c *cli.Ctx) error {
 			id, err := c.Arg(0, "<tN>")
 			if err != nil {
@@ -353,7 +353,7 @@ func Commands(t *cli.Table) {
 			}
 			return c.Done(map[string]string{"task": id}, "已记到 "+id, "atrium task show "+id)
 		}})
-	t.Add(cli.Command{Path: "task wait", Args: "<tN>", Summary: "等任务到某些状态（服务端长轮询，不用自己轮询）",
+	t.Add(cli.Command{Path: "task wait", Read: true, Args: "<tN>", Summary: "等任务到某些状态（服务端长轮询，不用自己轮询）",
 		Flags: []cli.Flag{
 			{Name: "until", Value: "状态", Multi: true, Help: "等到这些状态之一（缺省 done、failed、blocked、cancelled，或停在等验收）"},
 			{Name: "timeout", Value: "秒", Help: "最多等多久（缺省 600，上限 3600）"},

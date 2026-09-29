@@ -50,9 +50,9 @@ func Commands(t *cli.Table) {
 			{Name: "status", Bool: true, Help: "看 bridge 在不在跑、秘书在不在听"},
 			{Name: "batch", Value: "秒", Help: "首条事件到了之后攒多久再送（缺省 30）"},
 		},
-		WorkerOK: true, Run: bridgeCommand}) // 执行者里只放行 --detach 静默退出，见 bridgeCommand
+		Read: true, Run: bridgeCommand}) // 读写由 bridgeCommand 自己判：执行者里只放行 --detach 静默退出
 	// statusline 由 Claude Code 状态栏调用（settings.json 的 statusLine），不是人敲的：不列在帮助里。
-	t.Add(cli.Command{Path: "statusline", Summary: "一行状态给 Claude Code 状态栏：等你拍板、未结束任务各在谁手里、秘书在不在听", Hidden: true,
+	t.Add(cli.Command{Path: "statusline", Read: true, Summary: "一行状态给 Claude Code 状态栏：等你拍板、未结束任务各在谁手里、秘书在不在听", Hidden: true,
 		Run: func(c *cli.Ctx) error {
 			var v watch.View
 			err := c.Call("GET", "/api/top", nil, &v)
@@ -72,7 +72,7 @@ func Commands(t *cli.Table) {
 }
 
 func bridgeCommand(c *cli.Ctx) error {
-	if cli.IsWorker(c.Env.Getenv) {
+	if cli.Guarded(c.Env.Getenv) {
 		if c.Bool("detach") {
 			return nil // 执行者会话里跑到了秘书目录的 SessionStart hook：不是秘书会话，安静退出
 		}

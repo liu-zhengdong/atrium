@@ -67,7 +67,7 @@ func (t *Table) Main(ctx context.Context, args []string, env Env) int {
 	if err := c.parse(rest); err != nil {
 		return fail(env, jsonMode, err)
 	}
-	if !cmd.WorkerOK && IsWorker(env.Getenv) {
+	if !cmd.Read && Guarded(env.Getenv) {
 		return fail(env, jsonMode, WorkerDenied())
 	}
 	if err := cmd.Run(c); err != nil {
@@ -76,12 +76,21 @@ func (t *Table) Main(ctx context.Context, args []string, env Env) int {
 	return 0
 }
 
-// IsWorker：在执行者环境里（ATRIUM_WORKER=1）。
-func IsWorker(getenv func(string) string) bool { return getenv("ATRIUM_WORKER") == "1" }
+// Guarded：执行者（ATRIUM_WORKER=1）连着用户的服务（数据目录是缺省的那个），只能跑只读命令。
+// 执行者用 ATRIUM_DATA 指向别的目录起的隔离实例不拦（执行者环境不带 ATRIUM_*，设了就是它自己设的）。
+func Guarded(getenv func(string) string) bool {
+	if getenv("ATRIUM_WORKER") != "1" {
+		return false
+	}
+	p, err := config.Resolve(getenv)
+	def, derr := config.Resolve(func(string) string { return "" })
+	return err != nil || derr != nil || p == def
+}
 
-// WorkerDenied 是执行者被拒的错误（WorkerOK 的命令自己判时也用它）。
+// WorkerDenied 是执行者被拒的错误（自己判读写的命令也用它）。
 func WorkerDenied() error {
-	return &api.Error{Code: "forbidden", Message: "执行者（ATRIUM_WORKER=1）不能操作用户的 Atrium 服务"}
+	return &api.Error{Code: "forbidden",
+		Message: "执行者（ATRIUM_WORKER=1）连着用户的服务时只能跑只读命令（看、列、取）；要试写命令，用 ATRIUM_DATA 指向临时目录起隔离实例"}
 }
 
 func isCommandWord(s string) bool { return !strings.HasPrefix(s, "-") }

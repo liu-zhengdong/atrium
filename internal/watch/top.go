@@ -167,7 +167,7 @@ func Routes(r *api.Router, env *app.Env) {
 }
 
 func Commands(t *cli.Table) {
-	t.Add(cli.Command{Path: "top", Summary: "全景：谁在干活、等你拍板的、各部门在跑与卡住、排队、三个目标的数；缺省每 3 秒刷新",
+	t.Add(cli.Command{Path: "top", Read: true, Summary: "全景：谁在干活、等你拍板的、各部门在跑与卡住、排队、三个目标的数；缺省每 3 秒刷新",
 		Flags: []cli.Flag{{Name: "once", Bool: true, Help: "只看一次（--json 时总是一次）"}},
 		Run: func(c *cli.Ctx) error {
 			if err := c.MaxArgs(0); err != nil {

@@ -26,10 +26,10 @@ type Command struct {
 	Flags   []Flag
 	// Local：不经服务就能完成（start、status、stop）。其余命令都经服务 HTTP 完成。
 	Local bool
-	// WorkerOK：执行者（ATRIUM_WORKER=1）也能用；缺省拒绝，免得执行者操作用户的服务。
-	WorkerOK bool
-	Hidden   bool // 不在帮助里列出（如服务进程入口 serve）
-	Run      func(c *Ctx) error
+	// Read：只读，不改服务、本机与数据；执行者连着用户的服务时只能跑这些（见 Guarded）。缺省算写。
+	Read   bool
+	Hidden bool // 不在帮助里列出（如服务进程入口 serve）
+	Run    func(c *Ctx) error
 }
 
 type group struct{ name, summary string }

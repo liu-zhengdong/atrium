@@ -73,7 +73,7 @@ func identityCommands(t *cli.Table) {
 			}
 			return c.Done(i, "已改负责人 "+leaderLine(i), "atrium leader ls "+i.ID)
 		}})
-	t.Add(cli.Command{Path: "leader ls", Args: "[aN]", Summary: "看全部负责人，或一位的详情与备忘",
+	t.Add(cli.Command{Path: "leader ls", Read: true, Args: "[aN]", Summary: "看全部负责人，或一位的详情与备忘",
 		Run: func(c *cli.Ctx) error {
 			if err := c.MaxArgs(1); err != nil {
 				return err
@@ -106,7 +106,7 @@ func identityCommands(t *cli.Table) {
 		}})
 
 	t.Group("memo", "备忘")
-	t.Add(cli.Command{Path: "memo show", Summary: "看备忘（秘书或负责人各一份）", Flags: []cli.Flag{asFlag},
+	t.Add(cli.Command{Path: "memo show", Read: true, Summary: "看备忘（秘书或负责人各一份）", Flags: []cli.Flag{asFlag},
 		Run: func(c *cli.Ctx) error {
 			if err := c.MaxArgs(0); err != nil {
 				return err

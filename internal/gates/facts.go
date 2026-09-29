@@ -104,14 +104,8 @@ func ViewPR(ctx context.Context, r Runner, repo, ref string) (PRInfo, error) {
 
 // Collect 在执行者的工作树里查事实：分支、提交、推送、改动规模、PR 与正文「端到端验证」一节。
 func Collect(ctx context.Context, r Runner, dir, repo string) (Facts, error) {
-	f, git, err := branchFacts(ctx, r, dir)
+	f, git, err := collectBase(ctx, r, dir, repo)
 	if err != nil {
-		return f, err
-	}
-	if f.Base, err = DefaultBranch(ctx, r, repo); err != nil {
-		return f, err
-	}
-	if _, err = git("fetch", "--quiet", "origin", f.Base); err != nil {
 		return f, err
 	}
 	remote, err := git("ls-remote", "origin", "refs/heads/"+f.Branch)
@@ -119,9 +113,6 @@ func Collect(ctx context.Context, r Runner, dir, repo string) (Facts, error) {
 		return f, err
 	}
 	f.Pushed = remote != "" && strings.Fields(remote)[0] == f.Head
-	if err := f.compare(git, "origin/"+f.Base); err != nil {
-		return f, err
-	}
 	out, err := r.Run(ctx, "", "gh", "pr", "list", "-R", repo, "--head", f.Branch, "--state", "all",
 		"--json", PRFields, "--limit", "5")
 	if err != nil {
@@ -141,6 +132,21 @@ func Collect(ctx context.Context, r Runner, dir, repo string) (Facts, error) {
 		f.E2E = Section(f.PR.Body, "端到端验证")
 	}
 	return f, nil
+}
+
+// collectBase 查工作树相对 GitHub 默认分支（先 fetch）的事实：分支、未提交的改动、新提交、改动规模；不看推送与 PR。
+func collectBase(ctx context.Context, r Runner, dir, repo string) (Facts, gitFunc, error) {
+	f, git, err := branchFacts(ctx, r, dir)
+	if err != nil {
+		return f, git, err
+	}
+	if f.Base, err = DefaultBranch(ctx, r, repo); err != nil {
+		return f, git, err
+	}
+	if _, err = git("fetch", "--quiet", "origin", f.Base); err != nil {
+		return f, git, err
+	}
+	return f, git, f.compare(git, "origin/"+f.Base)
 }
 
 // CollectLocal 查本机交付的事实：分支、未提交的改动、比本机主分支（LocalBase）多几个提交、改动规模；不碰远端。

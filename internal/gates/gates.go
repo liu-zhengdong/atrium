@@ -253,7 +253,7 @@ type gateRecord struct {
 
 // gate 按交付方式查事实、判关卡：不过交回执行者；过了按风险先审阅，或按部门的验收人等验收，或直接落地。
 func (g *Gate) gate(ctx context.Context, t ledger.Task) error {
-	d, err := g.deliveryOf(ctx, t)
+	d, err := g.deliveryOf(ctx, t, true)
 	if err != nil {
 		return err
 	}
@@ -406,7 +406,7 @@ func (g *Gate) review(ctx context.Context, t ledger.Task) error {
 		return err
 	}
 	if pass {
-		d, err := g.deliveryOf(ctx, t)
+		d, err := g.deliveryOf(ctx, t, false)
 		if err != nil {
 			return err
 		}

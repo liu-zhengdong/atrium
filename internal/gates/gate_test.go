@@ -182,6 +182,45 @@ func TestGateBounces(t *testing.T) {
 	}
 }
 
+// 有仓库但工作树相对基线没有改动（装工具、调研这类不改代码的活）：不要 PR，按没有仓库交，过关卡即完成；
+// 只有未提交的文件算改动，照样按 PR 交回。
+func TestGateNoChanges(t *testing.T) {
+	cases := []struct {
+		name  string
+		local bool
+		dirty bool
+		want  ledger.Status
+		note  string
+	}{
+		{"GitHub 仓库没有改动", false, false, ledger.Done, "没有改动"},
+		{"GitHub 仓库只有未提交文件", false, true, ledger.Queued, "未提交"},
+		{"本机仓库没有改动", true, false, ledger.Done, "没有改动"},
+		{"本机仓库只有未提交文件", true, true, ledger.Queued, "未提交"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			e := setup(t)
+			var task ledger.Task
+			var dir string
+			if c.local {
+				task, dir = e.localTask("", e.localRepo(), nil, false)
+			} else {
+				dir = filepath.Join(t.TempDir(), "wt")
+				e.gh.Must(filepath.Dir(dir), "clone", "--quiet", e.gh.Bare, dir)
+				e.gh.Must(dir, "checkout", "--quiet", "-b", "t1-work")
+				task = e.delivered("在 h3 装工具", "claude+opus", dir)
+			}
+			if c.dirty {
+				e.gh.Write(dir, "c.go", "package a\n")
+			}
+			e.sweep()
+			if got := e.get(task.ID); got.Status != c.want || !strings.Contains(e.lastNote(task.ID), c.note) {
+				t.Fatalf("状态 %s，期望 %s 且经历含 %q：%s", got.Status, c.want, c.note, e.lastNote(task.ID))
+			}
+		})
+	}
+}
+
 func TestGateNoWorktreeBlocks(t *testing.T) {
 	e := setup(t)
 	task := e.delivered("做事", "claude+opus", "")

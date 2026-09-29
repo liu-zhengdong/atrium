@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -143,6 +144,45 @@ func TestAccountAndSlots(t *testing.T) {
 	}
 }
 
+func TestPerfRows(t *testing.T) {
+	at := func(worker, out string) workers.Attempt { return workers.Attempt{Worker: worker, Outcome: out} }
+	stats := map[string][]workers.Attempt{
+		"claude+opus":    {at("claude+opus:high", workers.OutOK), at("claude+opus", workers.OutBounce)},
+		"grok+grok-4.6":  {at("grok+grok-4.6", workers.OutLogin), at("grok+grok-4.6", workers.OutOK)},
+		"cursor+auto":    {at("cursor+auto", workers.OutQuota)},
+		"agy+gemini-3.8": {at("agy+gemini-3.8", workers.OutOK)},
+	}
+	marks := []workers.Mark{
+		{Tool: "grok", Host: "h3", Reason: "没登录"},                            // 没写模型：挡住 grok 的全部模型
+		{Tool: "agy", Model: "gemini-3.8-flash", Host: "h1", Reason: "额度用尽"}, // 别的模型：不挂到 agy+gemini-3.8
+		{Tool: "agy", Model: "gemini-3.8-flash", Host: "h3", Reason: "额度用尽"}, // 同一组合两台：单列成一行
+		{Tool: "codex", Host: "h1", Reason: "没登录"},
+	}
+	got := perfRows(stats, marks)
+	var shape []string
+	for _, p := range got {
+		var hs []string
+		for _, m := range p.Marks {
+			hs = append(hs, m.Host)
+		}
+		shape = append(shape, fmt.Sprintf("%s %d/%d %v %v", p.Combo, p.OK, p.Launches, p.Recent, hs))
+	}
+	want := []string{
+		"claude+opus 1/2 [ok bounce] []",
+		"grok+grok-4.6 1/2 [login ok] [h3]",
+		"agy+gemini-3.8 1/1 [ok] []",
+		"cursor+auto 0/1 [quota] []",
+		"agy+gemini-3.8-flash 0/0 [] [h1 h3]",
+		"codex 0/0 [] [h1]",
+	}
+	if !reflect.DeepEqual(shape, want) {
+		t.Errorf("得到\n%s\n应为\n%s", strings.Join(shape, "\n"), strings.Join(want, "\n"))
+	}
+	if got := perfRows(nil, nil); got == nil || len(got) != 0 {
+		t.Errorf("没有记录应是空数组：%v", got)
+	}
+}
+
 func TestTopGroup(t *testing.T) {
 	parents := map[string]string{"o1": "", "o2": "o1", "o5": "o2", "o8": "o5", "o9": ""}
 	for id, want := range map[string]string{"o1": "o1", "o2": "o2", "o5": "o2", "o8": "o2", "o9": "o9"} {
@@ -262,8 +302,20 @@ func TestRoutes(t *testing.T) {
 	}
 	var legion Legion
 	read("legion", &legion)
-	if legion.Accounts == nil || legion.Hosts == nil {
-		t.Error("空的额度与机器应是空数组，不是 null")
+	if legion.Accounts == nil || legion.Hosts == nil || len(legion.Perf) != 0 {
+		t.Errorf("空的额度与机器应是空数组，不是 null；还没结果的拉起不计：%+v", legion)
+	}
+	// 表现与 atrium workers 同一份统计（workers.Stats）：拉起有了结果才计；不可用标记挂在它挡住的组合下。
+	exit, _ := json.Marshal(workers.Exit{N: 1, Outcome: workers.OutOK})
+	ledger.Record(ctx, db, task.ID, workers.ExitKind, "dispatch", string(exit))
+	workers.SetMark(ctx, db, workers.Mark{Tool: "claude", Host: "h1", Kind: workers.SignalLogin, Reason: "没登录", Since: store.Now()})
+	read("legion", &legion)
+	if len(legion.Perf) != 1 || legion.Window != workers.StatWindow {
+		t.Fatalf("表现：%+v", legion)
+	}
+	if p := legion.Perf[0]; p.Combo != "claude" || !reflect.DeepEqual(p.Recent, []string{workers.OutOK}) || p.OK != 1 || p.Launches != 1 ||
+		len(p.Marks) != 1 || p.Marks[0].Host != "h1" {
+		t.Errorf("表现一行：%+v", p)
 	}
 	// 部门有了负责人，卡住的活先归负责人，不再递到「等你」；详情里持球人是负责人。
 	a, err := org.AddLeader(ctx, db, org.NewLeader{Name: "运行时负责人", Workers: []string{"claude"}})

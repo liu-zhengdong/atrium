@@ -118,7 +118,7 @@ func List(ctx context.Context, q store.Querier) ([]Row, error) {
 func marksOf(marks []Mark, s Spec) []Mark {
 	var out []Mark
 	for _, m := range marks {
-		if m.Tool == s.Tool && (m.Model == "" || m.Model == s.Model) {
+		if m.Covers(s) {
 			out = append(out, m)
 		}
 	}

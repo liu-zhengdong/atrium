@@ -32,6 +32,9 @@ func (m Mark) Target() string {
 	return Spec{Tool: m.Tool, Model: m.Model}.String() + "@" + m.Host
 }
 
+// Covers：这条标记挡住这个执行者（不论机器）——同一工具，标记没写模型或模型相同。
+func (m Mark) Covers(s Spec) bool { return m.Tool == s.Tool && (m.Model == "" || m.Model == s.Model) }
+
 // Text 是给人看的一句：原因与什么时候恢复。
 func (m Mark) Text() string {
 	if m.Until > 0 {
@@ -60,10 +63,10 @@ func MarkOf(sig Signal, s Spec, host string, now time.Time) (Mark, bool) {
 	return m, true
 }
 
-// Blocked 找挡住「工具+模型@机器」的标记（纯函数，marks 已去掉到期的）：同一台、同一工具，标记没写模型或模型相同。
+// Blocked 找挡住「工具+模型@机器」的标记（纯函数，marks 已去掉到期的）：同一台、且 Covers。
 func Blocked(marks []Mark, tool, model, host string) (Mark, bool) {
 	for _, m := range marks {
-		if m.Host == host && m.Tool == tool && (m.Model == "" || m.Model == model) {
+		if m.Host == host && m.Covers(Spec{Tool: tool, Model: model}) {
 			return m, true
 		}
 	}

@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-// socket 文件不在才算 ErrEndpointGone；文件还在但没人接（拒绝连接）是暂时的。
+// socket 文件不在才算 ErrEndpointGone；文件还在但没人接（拒绝连接）、不是 socket 都是暂时的。
 func TestDialEndpointGone(t *testing.T) {
 	dir, err := os.MkdirTemp("", "ep") // t.TempDir 路径太长，超过 Unix socket 路径上限
 	if err != nil {
@@ -30,6 +30,13 @@ func TestDialEndpointGone(t *testing.T) {
 	ln.Close()
 	if err := ProbeEndpoint(sock, time.Second); err == nil || errors.Is(err, ErrEndpointGone) {
 		t.Fatalf("文件还在、拒绝连接应是暂时错误：%v", err)
+	}
+	os.Remove(sock)
+	if err := os.WriteFile(sock, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := ProbeEndpoint(sock, time.Second); err == nil || errors.Is(err, ErrEndpointGone) {
+		t.Fatalf("文件还在（不是 socket）应是暂时错误：%v", err)
 	}
 	os.Remove(sock)
 	if err := ProbeEndpoint(sock, time.Second); !errors.Is(err, ErrEndpointGone) {

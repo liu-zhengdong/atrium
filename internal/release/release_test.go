@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -29,8 +30,11 @@ type fakeGH struct {
 	tags     []string
 	contains map[string][]string
 	calls    []string
-	badSum   bool // SHA256SUMS 写错：Install 应拒绝
+	badSum   bool     // SHA256SUMS 写错：Install 应拒绝
+	missing  []string // 还没传完的文件：release view 不列、release download 下不到
 }
+
+func (f *fakeGH) has(name string) bool { return !slices.Contains(f.missing, name) }
 
 func (f *fakeGH) Run(ctx context.Context, dir, name string, args ...string) (string, error) {
 	f.calls = append(f.calls, strings.Join(args, " "))
@@ -51,6 +55,14 @@ func (f *fakeGH) Run(ctx context.Context, dir, name string, args ...string) (str
 			}
 		}
 		return "ahead\n", nil
+	case args[0] == "release" && args[1] == "view":
+		var parts []string
+		for _, n := range []string{Asset(runtime.GOOS, runtime.GOARCH), SumsFile} {
+			if f.has(n) {
+				parts = append(parts, `{"name":"`+n+`","state":"uploaded"}`)
+			}
+		}
+		return `{"assets":[` + strings.Join(parts, ",") + `]}`, nil
 	case args[0] == "release" && args[1] == "download":
 		dir := args[len(args)-1]
 		asset, bin := Asset(runtime.GOOS, runtime.GOARCH), []byte("new binary "+args[2])
@@ -58,10 +70,15 @@ func (f *fakeGH) Run(ctx context.Context, dir, name string, args ...string) (str
 		if f.badSum {
 			sum[0]++
 		}
-		if err := os.WriteFile(filepath.Join(dir, SumsFile), []byte(hex.EncodeToString(sum[:])+"  "+asset+"\n"), 0o644); err != nil {
-			return "", err
+		if f.has(SumsFile) {
+			if err := os.WriteFile(filepath.Join(dir, SumsFile), []byte(hex.EncodeToString(sum[:])+"  "+asset+"\n"), 0o644); err != nil {
+				return "", err
+			}
 		}
-		return "", os.WriteFile(filepath.Join(dir, asset), bin, 0o644)
+		if f.has(asset) {
+			return "", os.WriteFile(filepath.Join(dir, asset), bin, 0o644)
+		}
+		return "", nil
 	}
 	return "", fmt.Errorf("fakeGH 不支持 %v", args)
 }
@@ -88,6 +105,31 @@ func TestInstall(t *testing.T) {
 	}
 	if now, _ := os.ReadFile(exe); string(now) != "new binary v2.0.1" {
 		t.Fatalf("校验失败不该替换：%q", now)
+	}
+	// 二进制还没传完：gh 只下到 SHA256SUMS 不报错，Install 要说清缺哪个文件。
+	asset := Asset(runtime.GOOS, runtime.GOARCH)
+	if err := Install(context.Background(), &fakeGH{missing: []string{asset}}, "o/r", "v2.0.3", exe); err == nil ||
+		!strings.Contains(err.Error(), "v2.0.3 的 Release 下载不到 "+asset) {
+		t.Fatalf("缺二进制应说清：%v", err)
+	}
+}
+
+func TestMissing(t *testing.T) {
+	bin, sums := ReleaseAsset{"atrium-linux-amd64", "uploaded"}, ReleaseAsset{SumsFile, "uploaded"}
+	for _, c := range []struct {
+		name   string
+		assets []ReleaseAsset
+		want   []string
+	}{
+		{"就绪", []ReleaseAsset{{"atrium-darwin-arm64", "uploaded"}, bin, sums}, nil},
+		{"缺二进制", []ReleaseAsset{{"atrium-darwin-arm64", "uploaded"}, sums}, []string{"atrium-linux-amd64"}},
+		{"二进制还在传", []ReleaseAsset{{"atrium-linux-amd64", "open"}, sums}, []string{"atrium-linux-amd64"}},
+		{"缺 SUMS", []ReleaseAsset{bin}, []string{SumsFile}},
+		{"都没有", nil, []string{"atrium-linux-amd64", SumsFile}},
+	} {
+		if got := Missing(c.assets, "atrium-linux-amd64"); !slices.Equal(got, c.want) {
+			t.Errorf("%s：%v，应为 %v", c.name, got, c.want)
+		}
 	}
 }
 
@@ -287,5 +329,38 @@ func TestUpgradeFailsOnce(t *testing.T) {
 	e.r.Sweep(e.ctx)
 	if got := e.get(id); got.Stage != ledger.StageReleased {
 		t.Fatalf("升失败不挡当前版本的上线：%+v", got)
+	}
+}
+
+// 新版本的文件还没传完：这一轮不下载、不算升失败，传完后下一轮照常升级。
+func TestUpgradeWaitsForAssets(t *testing.T) {
+	e := setup(t, true)
+	e.gh.tags = append(e.gh.tags, "v2.0.2")
+	e.gh.missing = []string{Asset(runtime.GOOS, runtime.GOARCH)}
+	if err := e.r.Sweep(e.ctx); err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	e.db.QueryRow(`SELECT COUNT(*) FROM events WHERE kind = ?`, events.OnlineFailed).Scan(&n)
+	if e.downloads() != 0 || e.r.failed != "" || n != 0 {
+		t.Fatalf("没传完不该下载、不算失败：下载 %d 次，failed=%q，online.failed %d 条", e.downloads(), e.r.failed, n)
+	}
+	restarted := make(chan string, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		restarted <- r.URL.Path
+		fmt.Fprint(w, `{"ok":true,"result":{}}`)
+	}))
+	defer srv.Close()
+	u, _ := url.Parse(srv.URL)
+	e.r.Cfg.Port, _ = strconv.Atoi(u.Port())
+	e.gh.missing = nil
+	if err := e.r.Sweep(e.ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := <-restarted; got != "/api/service/restart" {
+		t.Fatal(got)
+	}
+	if raw, _ := os.ReadFile(e.r.Exe); string(raw) != "new binary v2.0.2" {
+		t.Fatalf("传完后应升级：%q", raw)
 	}
 }

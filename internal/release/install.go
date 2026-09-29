@@ -69,6 +69,42 @@ func CheckSum(sums, asset, got string) error {
 	return fmt.Errorf("%s 里没有 %s 这一行，没装", SumsFile, asset)
 }
 
+// ReleaseAsset 是 Release 里的一个文件；State 为 uploaded 才算传完（还在传是 open）。
+type ReleaseAsset struct {
+	Name  string `json:"name"`
+	State string `json:"state"`
+}
+
+// Missing 列出升级要用、但 assets 里还没传完的文件：本平台二进制 asset 与 SHA256SUMS（纯函数）。空表示就绪。
+func Missing(assets []ReleaseAsset, asset string) []string {
+	var miss []string
+	for _, want := range []string{asset, SumsFile} {
+		ok := false
+		for _, a := range assets {
+			ok = ok || (a.Name == want && a.State == "uploaded")
+		}
+		if !ok {
+			miss = append(miss, want)
+		}
+	}
+	return miss
+}
+
+// Pending 查 tag 的 Release 资产，返回本平台升级还缺的文件（发版工作流刚建 Release 时资产还在传）。
+func Pending(ctx context.Context, r gates.Runner, repo, tag string) ([]string, error) {
+	out, err := r.Run(ctx, "", "gh", "release", "view", tag, "-R", repo, "--json", "assets")
+	if err != nil {
+		return nil, err
+	}
+	var v struct {
+		Assets []ReleaseAsset `json:"assets"`
+	}
+	if err := json.Unmarshal([]byte(out), &v); err != nil {
+		return nil, fmt.Errorf("gh release view 输出不是 JSON：%w", err)
+	}
+	return Missing(v.Assets, Asset(runtime.GOOS, runtime.GOARCH)), nil
+}
+
 // Install 从 GitHub Release 下载本平台二进制与 SHA256SUMS，校验和对上才替换 exe：旧文件留作 exe.old（手动退回用）。
 // 下载放在 exe 同目录，改名不跨文件系统。
 func Install(ctx context.Context, r gates.Runner, repo, tag, exe string) error {
@@ -81,10 +117,16 @@ func Install(ctx context.Context, r gates.Runner, repo, tag, exe string) error {
 	if _, err := r.Run(ctx, "", "gh", "release", "download", tag, "-R", repo, "-p", asset, "-p", SumsFile, "-D", dir); err != nil {
 		return err
 	}
+	// 多个 -p 只要有一个匹配 gh 就不报错：缺的文件在这里说清楚。
+	for _, f := range []string{asset, SumsFile} {
+		if _, err := os.Stat(filepath.Join(dir, f)); err != nil {
+			return fmt.Errorf("%s 的 Release 下载不到 %s（还没传完，或没发这个平台），没装", tag, f)
+		}
+	}
 	fresh := filepath.Join(dir, asset)
 	sums, err := os.ReadFile(filepath.Join(dir, SumsFile))
 	if err != nil {
-		return fmt.Errorf("%s 的 Release 没有 %s，不装没法校验的二进制：%w", tag, SumsFile, err)
+		return err
 	}
 	bin, err := os.ReadFile(fresh)
 	if err != nil {

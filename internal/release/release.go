@@ -1,4 +1,4 @@
-// Package release 是上线：每分钟看一次最新发布，比运行中的新就下载本平台二进制替换自身、平滑重启
+// Package release 是上线：每分钟看一次最新发布，比运行中的新、且本平台二进制与 SHA256SUMS 都已传完，就下载替换自身、平滑重启
 // （全局暂停时不升；同一版本升失败只发一次 online.failed 给秘书，本进程不再重试）。
 // Atrium 自己的仓库合入后的任务等含它的版本：新服务起来后跑只读冒烟（status、task ls、--help），
 // 通过记「已上线」（task.status 事件带版本），没过转受阻。
@@ -128,10 +128,18 @@ func (r *Releaser) Sweep(ctx context.Context) error {
 		return err
 	}
 	if Upgrade(r.Current, latest, r.Cfg.Enabled, paused, r.failed) {
-		if err := r.upgrade(ctx, latest); err != nil && ctx.Err() == nil {
-			return r.upgradeFailed(ctx, latest, err)
+		// 资产没传完不算升失败：这一轮跳过，下一轮再看。
+		switch missing, err := Pending(ctx, r.R, r.Cfg.Repo, latest); {
+		case err != nil:
+			r.Log.Warn("查不到新版本的发布文件", "to", latest, "err", err)
+		case len(missing) > 0:
+			r.Log.Info("新版本的发布文件还没传完，下一轮再看", "to", latest, "missing", missing)
+		default:
+			if err := r.upgrade(ctx, latest); err != nil && ctx.Err() == nil {
+				return r.upgradeFailed(ctx, latest, err)
+			}
+			return nil
 		}
-		return nil
 	}
 	tasks, err := gates.InStage(ctx, r.DB, ledger.StageMerged)
 	if err != nil {

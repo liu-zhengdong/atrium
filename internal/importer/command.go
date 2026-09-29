@@ -16,7 +16,7 @@ import (
 func Command() cli.Command {
 	return cli.Command{
 		Path:    "import",
-		Summary: "一次性从旧版（TS）库只读导入部门、要点、决定、负责人、备忘、技能、资料、执行者档案、机器；导入后全局暂停",
+		Summary: "一次性从旧版（TS）库只读导入部门、要点、负责人、备忘、技能、资料、执行者档案、机器；导入后全局暂停",
 		Flags:   []cli.Flag{{Name: "from", Value: "旧库路径", Help: "缺省 ~/.atrium/atrium.sqlite；旧库只读打开，不改动"}},
 		Local:   true,
 		// 切换时跑一次，之后再没用：不列在帮助里（atrium import --help 照常可看）。

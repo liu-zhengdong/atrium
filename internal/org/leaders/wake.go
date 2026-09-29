@@ -341,9 +341,6 @@ func buildPrompt(ctx context.Context, q store.Querier, who org.Identity, ids []i
 		if b.Chain, err = org.Chain(ctx, q, d); err != nil {
 			return "", err
 		}
-		if b.Decisions, err = org.Decisions(ctx, q, org.DecisionFilter{Org: d}); err != nil {
-			return "", err
-		}
 		if b.Materials, err = MaterialsOverview(ctx, q, d); err != nil {
 			return "", err
 		}

@@ -31,6 +31,7 @@ const (
 	maxScheduleTitle  = 150
 	maxScheduleDetail = 8000
 	dueBatch          = 100
+	recentChoices     = 5 // 调研轮附最近几份拍过板的选项单
 )
 
 // kindNote 是按种类附在生成任务详述末尾的做法。
@@ -207,8 +208,8 @@ func openRound(ctx context.Context, q store.Querier, x Schedule) (string, error)
 	return "", nil
 }
 
-// RoundTask 纯函数：一轮生成的任务的标题与详述。
-func RoundTask(x Schedule, now int64, loc *time.Location) (title, detail string) {
+// RoundTask 纯函数：一轮生成的任务的标题与详述。unpicked 是本部门最近几份选项单没选的（调研轮才有）。
+func RoundTask(x Schedule, unpicked []string, now int64, loc *time.Location) (title, detail string) {
 	title = fmt.Sprintf("%s（%s）", x.Title, time.UnixMilli(now).In(loc).Format("01-02"))
 	parts := []string{}
 	if x.Detail != "" {
@@ -217,13 +218,56 @@ func RoundTask(x Schedule, now int64, loc *time.Location) (title, detail string)
 	if n := kindNote[x.Kind]; n != "" {
 		parts = append(parts, n)
 	}
+	if len(unpicked) > 0 {
+		parts = append(parts, "最近几份选项单里用户没选的（别原样再提；要再提，写清什么变了）：\n- "+strings.Join(unpicked, "\n- "))
+	}
 	parts = append(parts, fmt.Sprintf("（周期任务 %s 每 %s 生成的一轮）", x.ID, x.Every))
 	return title, strings.Join(parts, "\n\n")
 }
 
+// recentUnpicked 是部门最近几份拍过板的选项单里没选的，每份一行。
+func recentUnpicked(ctx context.Context, q store.Querier, dept string) ([]string, error) {
+	rows, err := q.QueryContext(ctx, `SELECT id FROM choices WHERE department = ? AND status != 'open'
+		ORDER BY decided_at DESC, id DESC LIMIT ?`, dept, recentChoices)
+	if err != nil {
+		return nil, err
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, id := range ids {
+		c, err := GetChoice(ctx, q, id)
+		if err != nil {
+			return nil, err
+		}
+		if s := Unpicked(c); s != "" {
+			out = append(out, s)
+		}
+	}
+	return out, nil
+}
+
 // runRound 生成一轮：建任务、送进派活队列、记在周期任务上。next 为 0 表示不改下一轮（手动 run）。
 func runRound(ctx context.Context, env *app.Env, x Schedule, next int64, note string, now int64, loc *time.Location) (ledger.Task, error) {
-	title, detail := RoundTask(x, now, loc)
+	var unpicked []string
+	if x.Kind == "research" {
+		var err error
+		if unpicked, err = recentUnpicked(ctx, env.DB, x.Org); err != nil {
+			return ledger.Task{}, err
+		}
+	}
+	title, detail := RoundTask(x, unpicked, now, loc)
 	t, err := ledger.Add(ctx, env.DB, ledger.NewTask{Title: title, Detail: detail, Org: x.Org, Skill: x.Skill, By: x.CreatedBy}, x.ID)
 	if err != nil {
 		return ledger.Task{}, err

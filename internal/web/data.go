@@ -21,7 +21,7 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/workers"
 )
 
-// 本文件是网页的只读数据：任务与部门走 ledger、org 的读函数；决定、选项单、资料、身份、机器这些
+// 本文件是网页的只读数据：任务与部门走 ledger、org 的读函数；选项单、资料、身份、机器这些
 // 表所属的包还没有读函数，先在这里直接查（只读、参数化、有界）。那些包补了读函数后换成调用。
 // 额度（quota）与持球表（watch）还是桩：接口返回空，界面显示空态。
 
@@ -455,32 +455,6 @@ func deptTasks(ctx context.Context, q store.Querier, ix *orgIndex, id string) ([
 	out := make([]Row, 0, len(tasks))
 	for _, t := range tasks {
 		out = append(out, toRow(t, ix.parents))
-	}
-	return out, nil
-}
-
-// DecisionRow 是一条有效决定（没被后来的推翻）。
-type DecisionRow struct {
-	ID       string `json:"id"`
-	Text     string `json:"text"`
-	Why      string `json:"why"`
-	Dept     string `json:"dept"`
-	DeptName string `json:"dept_name"`
-	At       int64  `json:"at"`
-}
-
-func loadDecisions(ctx context.Context, q store.Querier) ([]DecisionRow, error) {
-	list, err := org.Decisions(ctx, q, org.DecisionFilter{})
-	if err != nil {
-		return nil, err
-	}
-	ix, err := loadOrg(ctx, q)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]DecisionRow, 0, len(list))
-	for _, d := range list {
-		out = append(out, DecisionRow{ID: d.ID, Text: d.Text, Why: d.Why, Dept: d.Org, DeptName: ix.name(d.Org), At: d.CreatedAt})
 	}
 	return out, nil
 }

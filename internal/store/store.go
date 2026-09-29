@@ -67,10 +67,10 @@ func (db *DB) Tx(ctx context.Context, fn func(tx *sql.Tx) error) error {
 // Now 是库里统一的时间单位：Unix 毫秒。
 func Now() int64 { return time.Now().UnixMilli() }
 
-// Prefixes 是全部短号前缀：任务、部门、要点、负责人、选项单、决定、资料、机器、周期任务。
+// Prefixes 是全部短号前缀：任务、部门、要点、负责人、选项单、资料、机器、周期任务。
 var Prefixes = map[string]string{
 	"t": "任务", "o": "部门", "k": "要点", "a": "负责人", "c": "选项单",
-	"d": "决定", "m": "资料", "h": "机器", "s": "周期任务",
+	"m": "资料", "h": "机器", "s": "周期任务",
 }
 
 // NextID 发下一个短号（如 t12）。必须在写事务里调用，与插入同一事务，失败回滚则号也不占。

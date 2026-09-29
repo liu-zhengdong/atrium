@@ -13,7 +13,7 @@
 1. 确认 4310 上的旧服务已停（在跑就 `atrium stop`）。
 2. 把旧库连同 `-wal`、`-shm` 拷到 `~/.atrium-v1-backup-<时间>/`，在副本上合并 WAL；资料目录用链接指回原处。
 3. `go build` 出 v2，卸掉 npm 全局的旧 `atrium`（`npm uninstall -g atrium`），`mise reshim`，把二进制放到 `~/.local/bin/atrium`，并核对 PATH 上的 `atrium` 就是它。PATH 里 mise 的 node bin 与 shims 排在 `~/.local/bin` 前面，所以一定要先卸旧版。
-4. `atrium import --from <副本>`：搬部门、要点、决定、负责人、备忘、技能、资料、执行者档案、机器；**导入后自动全局暂停**。
+4. `atrium import --from <副本>`：搬部门、要点、负责人、备忘、技能、资料、执行者档案、机器；**导入后自动全局暂停**。
 5. `atrium start`，并确认是全局暂停状态。
 6. 冒烟：`status`、`org tree`、`task ls`、`leader ls`、`workers`、`host ls`、`--help`、`map`（打印网址）。
 
@@ -22,7 +22,7 @@
 ## 导入后要手动做的
 
 - **负责人挂回部门**：旧库里负责人都没挂部门（09-28 审视时临时撤下，见秘书备忘）。恢复用 `atrium org edit oN --leader aN`。
-- **超限的旧数据**：导入回执会列出来（例如 o2 要点 8/7、o1 有效决定 68/30、visual-design 技能超过 6KB、o4 资料总量超限）。照样可用，派活与网页会标「超限」，有空再整理。
+- **超限的旧数据**：导入回执会列出来（例如 o2 要点 8/7、visual-design 技能超过 6KB、o4 资料总量超限）。照样可用，派活与网页会标「超限」，有空再整理。
 - **执行者档案**：旧键 `invoke`、`cost`、`progress`、`single_instance` 与关卡 `local_check` 在导入时去掉了（v2 内置适配器负责调用；合入队列总跑 `.agents/check`）。回执逐份列出。
 
 ## 远程机器 ggb（Windows）

@@ -51,7 +51,6 @@ func (w *web) routes(r *api.Router, env *app.Env) {
 	r.Raw("GET /ui/assets/", w.local(http.StripPrefix("/ui/assets/", files).ServeHTTP))
 	w.data(r, "GET /ui/api/nav", func(req *http.Request) (any, error) { return loadNav(req.Context(), env.DB) })
 	w.data(r, "GET /ui/api/today", func(req *http.Request) (any, error) { return loadToday(req.Context(), env.DB, time.Now()) })
-	w.data(r, "GET /ui/api/decisions", func(req *http.Request) (any, error) { return loadDecisions(req.Context(), env.DB) })
 	w.data(r, "GET /ui/api/legion", func(req *http.Request) (any, error) {
 		return loadLegion(req.Context(), env.DB, store.Now())
 	})

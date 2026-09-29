@@ -62,7 +62,7 @@ func (e *env) delivered(title, worker, dir string) ledger.Task {
 	}
 	e.start(t.ID, worker)
 	if dir != "" {
-		if err := ledger.Record(e.ctx, e.db, t.ID, gates.KindWorktree, "dispatch", `{"dir":"`+filepath.ToSlash(dir)+`"}`); err != nil {
+		if err := ledger.Record(e.ctx, e.db, t.ID, gates.KindWorktree, "dispatch", `{"host":"h1","dir":"`+filepath.ToSlash(dir)+`"}`); err != nil {
 			e.t.Fatal(err)
 		}
 	}
@@ -210,7 +210,7 @@ func TestGateNoRepo(t *testing.T) {
 			if c.choice != "" {
 				os.WriteFile(filepath.Join(dir, "choice.json"), []byte(c.choice), 0o600)
 			}
-			ledger.Record(e.ctx, e.db, task.ID, gates.KindWorktree, "dispatch", `{"dir":"`+filepath.ToSlash(dir)+`"}`)
+			ledger.Record(e.ctx, e.db, task.ID, gates.KindWorktree, "dispatch", `{"host":"h1","dir":"`+filepath.ToSlash(dir)+`"}`)
 			e.exit(task.ID)
 			e.sweep()
 			if got := e.get(task.ID); got.Status != c.want {
@@ -268,7 +268,7 @@ func TestReview(t *testing.T) {
 			w := c.reviewer
 			ledger.SetFacts(e.ctx, e.db, rt.ID, ledger.Facts{Worker: &w}, "dispatch")
 			ledger.Record(e.ctx, e.db, rt.ID, gates.KindResult, "dispatch", c.result)
-			ledger.Record(e.ctx, e.db, rt.ID, gates.KindWorktree, "dispatch", `{"dir":"`+filepath.ToSlash(t.TempDir())+`"}`)
+			ledger.Record(e.ctx, e.db, rt.ID, gates.KindWorktree, "dispatch", `{"host":"h1","dir":"`+filepath.ToSlash(t.TempDir())+`"}`)
 			e.exit(rt.ID)
 			e.sweep()
 			if got := e.get(rt.ID); got.Status != ledger.Done {
@@ -288,7 +288,7 @@ func TestHighRiskReviewed(t *testing.T) {
 	e.gh.Open("t1-work", goodBody)
 	task, _ := ledger.Add(e.ctx, e.db, ledger.NewTask{Title: "做事", Repo: "o/r"}, "u1")
 	e.start(task.ID, "codex+gpt")
-	ledger.Record(e.ctx, e.db, task.ID, gates.KindWorktree, "dispatch", `{"dir":"`+filepath.ToSlash(dir)+`"}`)
+	ledger.Record(e.ctx, e.db, task.ID, gates.KindWorktree, "dispatch", `{"host":"h1","dir":"`+filepath.ToSlash(dir)+`"}`)
 	ledger.Record(e.ctx, e.db, task.ID, gates.KindRisk, "u1", "high")
 	e.exit(task.ID)
 	e.sweep()

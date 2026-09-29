@@ -32,20 +32,32 @@ type Assignment struct {
 	Log string `json:"-"`
 }
 
-// Command 是服务下发给代理的指令：launch 拉起、stop 结束。
+// Query 是服务问代理的只读查询（关卡查远程工作树的事实）：在 Dir 里跑一条只读 git，或读 Dir 根下的一个文件。
+// 代理按 QueryRefusal 核对。
+type Query struct {
+	Dir  string   `json:"dir"`
+	Git  []string `json:"git,omitempty"`
+	File string   `json:"file,omitempty"`
+}
+
+// Command 是服务下发给代理的指令：launch 拉起、stop 结束、query 查询。
 type Command struct {
 	ID     string      `json:"id"`
 	Kind   string      `json:"kind"`
 	Launch *Assignment `json:"launch,omitempty"`
 	Stop   *RunRef     `json:"stop,omitempty"`
+	Query  *Query      `json:"query,omitempty"`
 }
 
-// Ack 是代理对指令的回执。
+// Ack 是代理对指令的回执。拉起回 PID 与工作目录；查询回输出（读文件时 Missing 表示没有这个文件）。
 type Ack struct {
-	ID    string `json:"id"`
-	OK    bool   `json:"ok"`
-	PID   int    `json:"pid,omitempty"`
-	Error string `json:"error,omitempty"`
+	ID      string `json:"id"`
+	OK      bool   `json:"ok"`
+	PID     int    `json:"pid,omitempty"`
+	Dir     string `json:"dir,omitempty"`
+	Output  string `json:"output,omitempty"`
+	Missing bool   `json:"missing,omitempty"`
+	Error   string `json:"error,omitempty"`
 }
 
 // hub 是服务进程里与代理往来的内存状态：每台待领的指令、在等的长轮询、在等的回执、运行变化的通知。
@@ -172,24 +184,24 @@ func (h *hub) changes() chan struct{} {
 // ackWait 是等代理领走并回执拉起的上限。
 var ackWait = 60 * time.Second
 
-// Launch 把一次运行派到远程机器：记下这一轮、下发指令、等代理拉起后回执 pid。返回轮号与 pid。
+// Launch 把一次运行派到远程机器：记下这一轮、下发指令、等代理拉起后回执。返回轮号、pid 与那台上的工作目录。
 // 之后日志按字节偏移追加到 a.Log，退出用 WaitExit 等。
-func Launch(ctx context.Context, env *app.Env, host string, a Assignment) (run, pid int, err error) {
+func Launch(ctx context.Context, env *app.Env, host string, a Assignment) (run, pid int, dir string, err error) {
 	h, err := Get(ctx, env.DB, host)
 	if err != nil {
-		return 0, 0, err
+		return 0, 0, "", err
 	}
 	if h.Kind != "remote" {
-		return 0, 0, api.Usage("%s 是本机，本机的执行者由 dispatch 直接拉起", host)
+		return 0, 0, "", api.Usage("%s 是本机，本机的执行者由 dispatch 直接拉起", host)
 	}
 	if !h.Joined {
-		return 0, 0, api.Conflict("%s 还没接入", host)
+		return 0, 0, "", api.Conflict("%s 还没接入", host)
 	}
 	if !validLogFile(a.Log) {
-		return 0, 0, api.Usage("Assignment.Log 不能为空")
+		return 0, 0, "", api.Usage("Assignment.Log 不能为空")
 	}
 	if err := os.MkdirAll(filepath.Dir(a.Log), 0o700); err != nil {
-		return 0, 0, err
+		return 0, 0, "", err
 	}
 	err = env.DB.Tx(ctx, func(tx *sql.Tx) error {
 		prev, err := getRun(ctx, tx, a.Task)
@@ -208,21 +220,21 @@ func Launch(ctx context.Context, env *app.Env, host string, a Assignment) (run, 
 		return err
 	})
 	if err != nil {
-		return 0, 0, err
+		return 0, 0, "", err
 	}
 	// 日志文件接着写（多轮追加）；各轮的续传位置记在 host_runs。
 	f, err := os.OpenFile(a.Log, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
-		return 0, 0, err
+		return 0, 0, "", err
 	}
 	f.Close()
 	cmd := Command{Kind: "launch", Launch: &a}
 	id, ackc := theHub.push(host, cmd)
-	fail := func(e error) (int, int, error) {
+	fail := func(e error) (int, int, string, error) {
 		// 没拉起：这一轮按退出不明收尾，免得 WaitExit 永远等。
 		finishRun(context.WithoutCancel(ctx), env.DB, RunRef{a.Task, a.Run}, Exit{Lost: true})
 		theHub.notify()
-		return 0, 0, e
+		return 0, 0, "", e
 	}
 	select {
 	case ack := <-ackc:
@@ -230,15 +242,36 @@ func Launch(ctx context.Context, env *app.Env, host string, a Assignment) (run, 
 			return fail(api.Conflict("%s 拉起失败：%s", host, ack.Error))
 		}
 		if _, err := env.DB.ExecContext(ctx, `UPDATE host_runs SET pid = ? WHERE task = ? AND run = ?`, ack.PID, a.Task, a.Run); err != nil {
-			return 0, 0, err
+			return 0, 0, "", err
 		}
-		return a.Run, ack.PID, nil
+		return a.Run, ack.PID, ack.Dir, nil
 	case <-time.After(ackWait):
 		theHub.withdraw(host, id)
 		return fail(api.Conflict("%s 在 %s 内没领走或没回执拉起指令（离线？）", host, ackWait))
 	case <-ctx.Done():
 		theHub.withdraw(host, id)
 		return fail(ctx.Err())
+	}
+}
+
+// queryWait 是等代理答一条查询的上限（含领走；fetch 要走网络）。
+var queryWait = 2 * time.Minute
+
+// Ask 问远程机器一条只读查询（关卡查远程工作树的事实）：下发、等回执。代理拒绝或跑失败返回错误。
+func Ask(ctx context.Context, host string, q Query) (Ack, error) {
+	id, ackc := theHub.push(host, Command{Kind: "query", Query: &q})
+	select {
+	case ack := <-ackc:
+		if !ack.OK {
+			return ack, fmt.Errorf("%s 上查询失败：%s", host, ack.Error)
+		}
+		return ack, nil
+	case <-time.After(queryWait):
+		theHub.withdraw(host, id)
+		return Ack{}, fmt.Errorf("%s 在 %s 内没答查询（离线？）", host, queryWait)
+	case <-ctx.Done():
+		theHub.withdraw(host, id)
+		return Ack{}, ctx.Err()
 	}
 }
 

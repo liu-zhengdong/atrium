@@ -121,6 +121,8 @@ type Need struct {
 	Tool   string `json:"tool"`
 	Repo   string `json:"repo"` // owner/name；没有仓库为空
 	Urgent bool   `json:"urgent"`
+	// LocalOnly 非空时只能在本机跑（远程拿不到这个仓库），写原因。
+	LocalOnly string `json:"local_only,omitempty"`
 }
 
 // Choice 是挑机器的结论：run 在 Host 上拉起；queue 排队（Host 非空表示钉在指定的那台）；refuse 拒绝。
@@ -152,6 +154,9 @@ func fit(c Candidate, n Need, pinned bool) (ok bool, later bool, reason string) 
 		case ConnOffline:
 			return false, false, c.ID + " 离线"
 		}
+	}
+	if c.Kind == "remote" && n.LocalOnly != "" {
+		return false, false, c.ID + " 是远程机器：" + n.LocalOnly
 	}
 	if c.Paused {
 		return false, false, c.ID + " 已暂停接活"
@@ -459,4 +464,53 @@ func AssignmentRefusal(a Assignment, knownTool func(string) bool) string {
 		}
 	}
 	return ""
+}
+
+// readGit 是代理替服务跑的 git 子命令：只查不改（fetch 只更新远端跟踪分支，关卡要拿它比默认分支）。
+var readGit = map[string]bool{"rev-parse": true, "status": true, "log": true, "diff": true, "rev-list": true,
+	"ls-remote": true, "fetch": true}
+
+// gitDenied 是只读子命令里也会写文件或拉起程序的选项前缀（-u 即 ls-remote/fetch 的 --upload-pack）。
+var gitDenied = []string{"--output", "--upload-pack", "--exec", "--ext-diff", "-u", "-o"}
+
+// QueryRefusal 是代理这一侧对查询的核对（纯函数）：目录只能是代理数据目录 root 下 repos/、tasks/ 里的；
+// git 只跑 readGit 里的子命令（前面可带 --no-optional-locks），读文件只读目录根下一个不隐藏的文件。
+func QueryRefusal(root string, q Query) string {
+	rel, err := filepath.Rel(root, q.Dir)
+	parts := strings.Split(filepath.ToSlash(rel), "/")
+	switch {
+	case !filepath.IsAbs(q.Dir) || filepath.Clean(q.Dir) != q.Dir || err != nil:
+		return "目录不合法：" + q.Dir
+	case len(parts) < 2 || (parts[0] != "repos" && parts[0] != "tasks") || strings.Contains(rel, ".."):
+		return "目录不在代理的工作目录里：" + q.Dir
+	case (len(q.Git) > 0) == (q.File != ""):
+		return "git 与 file 要且只要一个"
+	case q.File != "":
+		if filepath.Base(q.File) != q.File || strings.HasPrefix(q.File, ".") || strings.ContainsAny(q.File, `/\:`) {
+			return "文件名不合法：" + q.File
+		}
+		return ""
+	}
+	args := q.Git
+	if args[0] == "--no-optional-locks" {
+		args = args[1:]
+	}
+	if len(args) == 0 || !readGit[args[0]] {
+		return "只跑只读的 git 子命令，收到：" + strings.Join(firstArgs(q.Git, 2), " ")
+	}
+	for _, a := range args[1:] {
+		for _, d := range gitDenied {
+			if strings.HasPrefix(a, d) {
+				return "git 选项不允许：" + a
+			}
+		}
+	}
+	return ""
+}
+
+func firstArgs(s []string, n int) []string {
+	if len(s) > n {
+		return s[:n]
+	}
+	return s
 }

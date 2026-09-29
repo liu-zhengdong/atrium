@@ -36,11 +36,11 @@ Go 代码怎么分包、包之间怎么调用、并行开发时各自改哪里�
 | `events` | 完成 | 事件落库（要处理／知会两级、同一订阅者同一去重键合并）、`events wait/ack`（长轮询、首条后攒批、15 分钟租约）、订阅者「在听」 | `events` |
 | `dispatch` | 完成 | 派活队列、挑执行者与机器、拉起、退出后重试／换人／续上／交关卡；`task run`、`task tell`（捎话）、`task log`；装配 watch、agenda、gates 的入队钩子与 `hosts.AdapterFor` | `queue` |
 | `workers` | 完成 | 适配器（7 个内置 + 通用命令行）、档案三层叠加、日志信号判定、拉起记录 `Run`、经过解析 `Trace`（claude、codex 按执行者的话分段，其余逐行原文）；`workers`（列、看、改档案） | `worker_profiles` |
-| `gates` | 完成 | 查事实、判关卡、审阅（建审阅任务经 `gates.Enqueue` 派出）；档案经 `workers.Resolve`；没有仓库的任务判过时 `agenda.Settle` 登记 choice.json；与 dispatch 的经历约定见 `gates/records.go` | — |
+| `gates` | 完成 | 查事实、判关卡、审阅（建审阅任务经 `gates.Enqueue` 派出）；档案经 `workers.Resolve`；按工作树登记的机器查 git（远程经 `hosts.Ask`），PR 由服务查；没有仓库的任务不要求工作树，判过时 `agenda.Settle` 登记 choice.json；与 dispatch 的经历约定见 `gates/records.go` | — |
 | `merge` | 完成 | 合入队列、快检查；`task merge`（登记亲手做的 PR、放行受阻的交付）；快检查进程经 `watch.Track` 登记 | — |
 | `release` | 完成 | 等版本、自升级、平滑重启、上线冒烟；`update` | — |
 | `watch` | 完成 | 持球与期限表（`Rules`）、巡检循环、卡死判定、服务重启后接管；持球人判定 `HolderOf`；`top` 与 `/api/top` | — |
-| `hosts` | 完成 | 机器登记、挑机器（`Pick`）、派到远程（`Launch`/`Stop`/`WaitExit`）、ssh 隧道、远程代理；`host add/ls [hN]/edit`（edit 含 `--key` 私钥、`--join` 重新接入、`--rm` 移除）；`agent`、`agent install` 在远程机器上照 `host add` 回执跑，不列在帮助里 | `hosts` `host_runs` |
+| `hosts` | 完成 | 机器登记、挑机器（`Pick`）、派到远程（`Launch`/`Stop`/`WaitExit`）、问远程只读查询（`Ask`：只读 git 子命令、读工作目录根下的文件）、ssh 隧道、远程代理；`host add/ls [hN]/edit`（edit 含 `--key` 私钥、`--join` 重新接入、`--rm` 移除）；`agent`、`agent install` 在远程机器上照 `host add` 回执跑，不列在帮助里 | `hosts` `host_runs` |
 | `quota` | 完成 | 额度读取、多机合并、富余（`Spares`）、用尽标记（`SetHold`）；`quota` | `quota_cache` `quota_holds` `quota_settings` |
 | `web` | 完成 | 只读网页与只读接口；`map`；「等你」= 待拍板的选项单 + 递到你这层的卡住任务 + 上交到秘书还没确认的事；任务抽屉的「经过」是执行者真日志按段解析（`workers.ReadTrace`，与 `task log` 同一份解析）；代为注册一次性的 `import`（实现在 `importer`） | — |
 | `importer` | 完成 | 从旧 TS 库只读导入部门、要点、决定、负责人、备忘、技能、资料、档案、机器 | — |
@@ -132,7 +132,7 @@ type Module struct {
 - 派活（dispatch）：`org.SkillPaths(ctx, q, data, task.Skill)` → 提示词附的 SKILL.md 路径；`org.GetSkill` 取优先执行者 `Workers`、交付要查 `Checks`、要的凭据 `Secrets`；`org.SecretEnv(ctx, db, data, task.Org, names)` → 注入执行者的凭据（按部门往上找，找不到报错带修正命令）。
 - 负责人唤醒：`org.Overview(ctx, q, data, dept)` 总览全文；`org.Materials(…, MaterialFilter{Org})` 细节清单；`org.Decisions(…, DecisionFilter{Org})` 有效决定。
 - 权限：`org.CheckReach(ctx, q, actor, dept)`（用户都行；负责人只到自己部门及下属）；`org.CheckUser(actor, 做什么)`（拍板、决定、凭据只有用户）。
-- 关卡（gates）：没有仓库的任务判过时调 `agenda.Settle(ctx, db, task, workdir)`，工作目录根有 `choice.json` 就登记成选项单（不合法返回 usage 错误，按关卡不过交回）。
+- 关卡（gates）：没有仓库的任务判过时读工作目录根的 `choice.json`（远程经代理），调 `agenda.Settle(ctx, db, task, raw)` 登记成选项单（没有为 nil；不合法返回 usage 错误，按关卡不过交回）。
 - 负责人的执行者组合与 `task run --worker` 同一种写法；登记时经 `org.CheckWorker`（workers 接上的 `Resolve`）核对。
 - dispatch 装配时设 `agenda.Enqueue = func(ctx, env, task, actor) error`（即 task run）；周期任务每轮建任务后调它。
 

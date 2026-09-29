@@ -357,23 +357,38 @@ func TestFlowAdopt(t *testing.T) {
 }
 
 // 远程机器：拉起指令交给 hosts（纯数据的请求），退出码由 hosts 报回后照常收尾；代理按同一份适配器算调用。
+// 本机克隆的仓库派到远程时换成它 origin 的 GitHub 地址；工作树登记记那台的机器与目录。
 func TestFlowRemote(t *testing.T) {
+	clone := t.TempDir()
+	for _, args := range [][]string{{"init", "--quiet", clone}, {"-C", clone, "remote", "add", "origin", "git@github.com:owner/name.git"}} {
+		if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v：%v %s", args, err, out)
+		}
+	}
+	for _, repo := range []string{"owner/name", clone} {
+		t.Run(filepath.Base(repo), func(t *testing.T) { flowRemote(t, repo) })
+	}
+}
+
+func flowRemote(t *testing.T, repo string) {
 	env, d := setup(t)
 	ctx := context.Background()
 	var got Remote
 	exit := make(chan int, 1)
 	oldPick, oldLaunch, oldWait := pickHost, launchRemote, waitRemote
 	t.Cleanup(func() { pickHost, launchRemote, waitRemote = oldPick, oldLaunch, oldWait })
-	pickHost = func(context.Context, *app.Env, HostNeed, string) (HostChoice, error) {
+	var need HostNeed
+	pickHost = func(_ context.Context, _ *app.Env, n HostNeed, _ string) (HostChoice, error) {
+		need = n
 		return HostChoice{Kind: "run", Host: "h2"}, nil
 	}
-	launchRemote = func(_ context.Context, _ *app.Env, host string, r Remote) (int, int, error) {
+	launchRemote = func(_ context.Context, _ *app.Env, host string, r Remote) (int, int, string, error) {
 		got = r
 		os.WriteFile(r.Log, []byte(`{"type":"result","is_error":false,"result":"远程做完了"}`+"\n"), 0o600)
-		return 1, 4242, nil
+		return 1, 4242, "/agent/repos/owner-name-" + r.Task, nil
 	}
 	waitRemote = func(context.Context, *app.Env, string, int) (int, error) { return <-exit, nil }
-	tk, _ := ledger.Add(ctx, env.DB, ledger.NewTask{Title: "远程活", Repo: "owner/name"}, "u1")
+	tk, _ := ledger.Add(ctx, env.DB, ledger.NewTask{Title: "远程活", Repo: repo}, "u1")
 	if _, err := Enqueue(ctx, env, tk.ID, Options{Worker: "claude"}, "u1"); err != nil {
 		t.Fatal(err)
 	}
@@ -381,6 +396,9 @@ func TestFlowRemote(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitFor(t, env, tk.ID, func(x ledger.Task) bool { return x.Status == ledger.Running })
+	if need.Repo != "owner/name" || need.LocalOnly != "" {
+		t.Fatalf("挑机器的要求：%+v", need)
+	}
 	if got.Tool != "claude" || got.Repo != "https://github.com/owner/name.git" || got.Branch != "task-"+tk.ID || got.Base != "main" ||
 		!strings.Contains(got.Request.Prompt, "远程活") || got.Request.Live || got.Request.Dir != "" {
 		t.Fatalf("拉起指令：%+v", got)
@@ -393,6 +411,9 @@ func TestFlowRemote(t *testing.T) {
 	body, _, _ := gatesLast(ctx, env, tk.ID, "result")
 	if body != "远程做完了" {
 		t.Errorf("最后回复：%q", body)
+	}
+	if wt, _, _ := gatesLast(ctx, env, tk.ID, "worktree"); wt != `{"host":"h2","dir":"/agent/repos/owner-name-`+tk.ID+`"}` {
+		t.Errorf("工作树登记：%s", wt)
 	}
 	// 代理那边：同一份适配器，提示词从内存走标准输入。
 	a, ok := adapterFor("claude")
@@ -407,6 +428,20 @@ func TestFlowRemote(t *testing.T) {
 	}
 	if _, ok := adapterFor("../x"); ok {
 		t.Error("不合法的工具名应拒绝")
+	}
+}
+
+// 本机克隆读不出 GitHub 上的 origin：只派本机。
+func TestHostNeedLocalOnly(t *testing.T) {
+	plain := t.TempDir()
+	if out, err := exec.Command("git", "init", "--quiet", plain).CombinedOutput(); err != nil {
+		t.Fatalf("%v %s", err, out)
+	}
+	for repo, local := range map[string]bool{"": false, "owner/name": false, plain: true} {
+		n := hostNeed(context.Background(), "claude", ledger.Task{Repo: repo})
+		if (n.LocalOnly != "") != local {
+			t.Errorf("%q：%+v", repo, n)
+		}
 	}
 }
 

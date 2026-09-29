@@ -242,21 +242,18 @@ func (q *Queue) merged(ctx context.Context, t ledger.Task, repo, url, commit, no
 }
 
 // CleanupWorktree 判登记的目录是否为这件任务在本机数据目录下的仓库工作树。
-// 远程代理和手工登记的其他目录不由本机合入队列清理。
+// 远程代理的（登记的机器不是本机）和手工登记的其他目录不由本机合入队列清理。
 func CleanupWorktree(data, task, recorded string) bool {
 	return recorded != "" && filepath.IsAbs(recorded) &&
 		filepath.Clean(recorded) == filepath.Join(data, "tasks", task, "repo")
 }
 
 func (q *Queue) cleanupWorktree(ctx context.Context, t ledger.Task) error {
-	_, found, err := gates.Last(ctx, q.DB, t.ID, gates.KindWorktree)
-	if err != nil || !found {
+	w, found, err := gates.Workspace(ctx, q.DB, t.ID)
+	if err != nil || !found || w.Remote() {
 		return err
 	}
-	dir, err := gates.Workspace(ctx, q.DB, t.ID)
-	if err != nil {
-		return err
-	}
+	dir := w.Dir
 	if !CleanupWorktree(filepath.Dir(q.Dir), t.ID, dir) {
 		return nil
 	}

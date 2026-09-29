@@ -3,6 +3,7 @@ package hosts
 import (
 	"bytes"
 	"encoding/binary"
+	"encoding/csv"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -250,8 +251,12 @@ func StatusQuery(l Layout) Step {
 	case "linux":
 		return Step{Command: "systemctl", Args: []string{"--user", "show", l.Name, "--property=LoadState,ActiveState,MainPID,UnitFileState"}}
 	}
-	return Step{Command: "schtasks", Args: []string{"/Query", "/TN", l.Name}}
+	return Step{Command: "schtasks", Args: []string{"/Query", "/TN", l.Name, "/V", "/FO", "CSV", "/NH"}}
 }
+
+// schedRunning 是计划任务「上次运行结果」列在任务正在跑时的值（SCHED_S_TASK_RUNNING，0x41301）。
+// 状态列随系统语言变（「正在运行」／Running），这一列是数字，不随语言变。
+const schedRunning = "267009"
 
 // ServiceState 是系统里这个服务的状态。
 type ServiceState struct {
@@ -260,7 +265,7 @@ type ServiceState struct {
 	PID       int  `json:"pid,omitempty"`
 }
 
-// ParseStatus 解析 StatusQuery 的结果（纯函数）。Windows 查询不给在不在跑，由 agent.pid 判。
+// ParseStatus 解析 StatusQuery 的结果（纯函数）。Windows 看 schtasks /V /FO CSV 的第 7 列「上次运行结果」（schedRunning）。
 func ParseStatus(goos string, ok bool, out string) ServiceState {
 	switch goos {
 	case "darwin":
@@ -283,6 +288,17 @@ func ParseStatus(goos string, ok bool, out string) ServiceState {
 		s.Running = s.Installed && f["ActiveState"] == "active"
 		if s.Running {
 			s.PID, _ = strconv.Atoi(f["MainPID"])
+		}
+		return s
+	case "windows":
+		s := ServiceState{Installed: ok}
+		r := csv.NewReader(strings.NewReader(out))
+		r.FieldsPerRecord, r.LazyQuotes = -1, true
+		rows, _ := r.ReadAll()
+		for _, row := range rows {
+			if len(row) > 6 && strings.TrimSpace(row[6]) == schedRunning {
+				s.Running = ok
+			}
 		}
 		return s
 	}

@@ -157,13 +157,13 @@ type gateRecord struct {
 	Facts Facts `json:"facts"`
 }
 
-// gate 查事实、判关卡。没有仓库的任务（调研、审阅）没有 PR 要合：工作目录根有 choice.json 就登记成选项单
-// （agenda.Settle；不合法按关卡不过交回执行者改），然后完成。
+// gate 查事实、判关卡：git 在工作树所在机器上查（On），PR 由服务查 GitHub。没有仓库的任务（调研、审阅）
+// 没有 PR 要合：执行者正常收尾即过，工作目录根有 choice.json 就登记成选项单（agenda.Settle；不合法按关卡不过交回执行者改）。
 func (g *Gate) gate(ctx context.Context, t ledger.Task) error {
 	if t.Repo == "" {
 		return g.settle(ctx, t)
 	}
-	dir, err := Workspace(ctx, g.DB, t.ID)
+	w, err := mustWorkspace(ctx, g.DB, t.ID)
 	if err != nil {
 		return err
 	}
@@ -175,7 +175,7 @@ func (g *Gate) gate(ctx context.Context, t ledger.Task) error {
 	if err != nil {
 		return err
 	}
-	facts, err := Collect(ctx, g.R, dir, repo)
+	facts, err := Collect(ctx, On(g.R, w), w.Dir, repo)
 	if err != nil {
 		return err
 	}
@@ -212,12 +212,26 @@ func (g *Gate) gate(ctx context.Context, t ledger.Task) error {
 	return err
 }
 
+// mustWorkspace 取有仓库的任务的工作树登记，没有就报错。
+func mustWorkspace(ctx context.Context, q store.Querier, id string) (Worktree, error) {
+	w, found, err := Workspace(ctx, q, id)
+	if err == nil && !found {
+		err = fmt.Errorf("%s 没有工作树登记（经历里没有 %s）", id, KindWorktree)
+	}
+	return w, err
+}
+
+// settle 过没有仓库的任务：不要求工作树；登记过就读它根下的 choice.json（远程经代理读）。
 func (g *Gate) settle(ctx context.Context, t ledger.Task) error {
-	dir, err := Workspace(ctx, g.DB, t.ID)
+	var raw []byte
+	w, found, err := Workspace(ctx, g.DB, t.ID)
+	if err == nil && found {
+		raw, err = ReadFile(ctx, w, agenda.ChoiceFile)
+	}
 	if err != nil {
 		return err
 	}
-	c, err := agenda.Settle(ctx, g.DB, t.ID, dir)
+	c, err := agenda.Settle(ctx, g.DB, t.ID, raw)
 	var ae *api.Error
 	if errors.As(err, &ae) && ae.Code == "usage" {
 		_, err := Bounce(ctx, g.DB, t.ID, Actor, "关卡没过："+ae.Message)
@@ -314,7 +328,7 @@ func (g *Gate) startReview(ctx context.Context, t ledger.Task) error {
 	if err != nil {
 		return err
 	}
-	dir, err := Workspace(ctx, g.DB, t.ID)
+	w, err := mustWorkspace(ctx, g.DB, t.ID)
 	if err != nil {
 		return err
 	}
@@ -336,6 +350,10 @@ func (g *Gate) startReview(ctx context.Context, t ledger.Task) error {
 		return err
 	} else if ok {
 		json.Unmarshal([]byte(body), &last)
+	}
+	dir := w.Dir
+	if w.Remote() {
+		dir = ""
 	}
 	brief := ReviewBrief(t.ID, t.Title, repo, pr.PR, dir, pr.Base, why, last.Facts.Diff, t.Detail)
 	rt, err := ledger.Add(ctx, g.DB, ledger.NewTask{Title: Clip("审阅 "+t.ID+"："+t.Title, 200), Detail: brief,

@@ -251,6 +251,8 @@ func (a *Agent) session(ctx context.Context) (bool, error) {
 			switch c.Kind {
 			case "launch":
 				go a.launchAndAck(ctx, c)
+			case "query":
+				go a.answer(ctx, c)
 			case "stop":
 				if c.Stop != nil {
 					a.stop(*c.Stop)
@@ -304,10 +306,10 @@ func (a *Agent) launchAndAck(ctx context.Context, c Command) {
 	ack := Ack{ID: c.ID}
 	if c.Launch == nil {
 		ack.Error = "拉起指令缺内容"
-	} else if pid, err := a.launch(ctx, *c.Launch); err != nil {
+	} else if pid, dir, err := a.launch(ctx, *c.Launch); err != nil {
 		ack.Error = err.Error()
 	} else {
-		ack.OK, ack.PID = true, pid
+		ack.OK, ack.PID, ack.Dir = true, pid, dir
 	}
 	if err := a.call(ctx, "/api/agent/ack", ack, nil); err != nil {
 		a.Log.Warn("回执没送到", "id", c.ID, "err", err)
@@ -322,29 +324,29 @@ func knownTool(t string) bool {
 	return ok
 }
 
-// launch 在这台准备工作目录并拉起执行者，返回 pid。
-func (a *Agent) launch(ctx context.Context, as Assignment) (int, error) {
+// launch 在这台准备工作目录并拉起执行者，返回 pid 与工作目录。
+func (a *Agent) launch(ctx context.Context, as Assignment) (int, string, error) {
 	if AdapterFor == nil {
-		return 0, errors.New("代理没接上执行者适配器")
+		return 0, "", errors.New("代理没接上执行者适配器")
 	}
 	if why := AssignmentRefusal(as, knownTool); why != "" {
-		return 0, errors.New(why)
+		return 0, "", errors.New(why)
 	}
 	a.mu.Lock()
 	if st := a.runs[as.Task]; st != nil && !st.rec.Exited {
 		a.mu.Unlock()
-		return 0, fmt.Errorf("%s 的第 %d 轮还在跑", as.Task, st.rec.Run)
+		return 0, "", fmt.Errorf("%s 的第 %d 轮还在跑", as.Task, st.rec.Run)
 	}
 	a.mu.Unlock()
 	taskDir := filepath.Join(a.Dir, "tasks", as.Task)
 	cwd := filepath.Join(taskDir, "work")
 	if err := os.MkdirAll(cwd, 0o700); err != nil {
-		return 0, err
+		return 0, "", err
 	}
 	if as.Repo != "" {
 		wt, err := a.worktree(ctx, as)
 		if err != nil {
-			return 0, err
+			return 0, "", err
 		}
 		cwd = wt
 	}
@@ -357,12 +359,12 @@ func (a *Agent) launch(ctx context.Context, as Assignment) (int, error) {
 	req.Task, req.Dir = as.Task, cwd
 	spec, err := adapter.Spec(req, env)
 	if err != nil {
-		return 0, err
+		return 0, "", err
 	}
 	logPath := filepath.Join(taskDir, "run-"+strconv.Itoa(as.Run)+".log")
 	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
 	if err != nil {
-		return 0, err
+		return 0, "", err
 	}
 	defer f.Close()
 	spec.Stdout, spec.Stderr, spec.Detached = f, f, true
@@ -374,13 +376,13 @@ func (a *Agent) launch(ctx context.Context, as Assignment) (int, error) {
 	}
 	cmd, err := platform.Start(spec)
 	if err != nil {
-		return 0, err
+		return 0, "", err
 	}
 	st := &runState{rec: runRecord{RunRef: RunRef{as.Task, as.Run}, PID: cmd.Process.Pid, Log: logPath}, done: make(chan struct{})}
 	if err := a.save(st.rec); err != nil {
 		platform.KillTree(cmd.Process.Pid)
 		cmd.Wait()
-		return 0, err
+		return 0, "", err
 	}
 	a.mu.Lock()
 	a.runs[as.Task] = st
@@ -400,7 +402,7 @@ func (a *Agent) launch(ctx context.Context, as Assignment) (int, error) {
 		a.markExit(st, &code)
 	}()
 	go a.follow(st)
-	return cmd.Process.Pid, nil
+	return cmd.Process.Pid, cwd, nil
 }
 
 func (a *Agent) markExit(st *runState, code *int) {
@@ -434,7 +436,57 @@ func (a *Agent) worktree(ctx context.Context, as Assignment) (string, error) {
 	return wt, nil
 }
 
+// queryMax 是查询回执里输出的上限（回执请求体上限 1MB）。
+const queryMax = 512 * 1024
+
+// answer 答服务的只读查询：核对（QueryRefusal）后在工作目录里跑 git 或读文件，回执带输出。
+func (a *Agent) answer(ctx context.Context, c Command) {
+	ack := Ack{ID: c.ID}
+	out, missing, err := a.query(ctx, c.Query)
+	switch {
+	case err != nil:
+		ack.Error = err.Error()
+	case len(out) > queryMax:
+		ack.Error = fmt.Sprintf("输出 %d 字节，超过上限 %d", len(out), queryMax)
+	default:
+		ack.OK, ack.Output, ack.Missing = true, out, missing
+	}
+	if err := a.call(ctx, "/api/agent/ack", ack, nil); err != nil {
+		a.Log.Warn("回执没送到", "id", c.ID, "err", err)
+	}
+}
+
+func (a *Agent) query(ctx context.Context, q *Query) (out string, missing bool, err error) {
+	if q == nil {
+		return "", false, errors.New("查询指令缺内容")
+	}
+	if why := QueryRefusal(a.Dir, *q); why != "" {
+		return "", false, errors.New(why)
+	}
+	if q.File != "" {
+		b, err := os.ReadFile(filepath.Join(q.Dir, q.File))
+		if errors.Is(err, os.ErrNotExist) {
+			return "", true, nil
+		}
+		return string(b), false, err
+	}
+	var stdout, stderr bytes.Buffer
+	if err := a.runGit(ctx, q.Dir, q.Git, &stdout, &stderr); err != nil {
+		return "", false, fmt.Errorf("git %s 失败：%v：%s", strings.Join(firstArgs(q.Git, 3), " "), err, strings.TrimSpace(tail(stderr.String(), 500)))
+	}
+	return stdout.String(), false, nil
+}
+
 func (a *Agent) git(ctx context.Context, dir string, args ...string) error {
+	var out bytes.Buffer
+	if err := a.runGit(ctx, dir, args, &out, &out); err != nil {
+		return fmt.Errorf("git %s 失败：%v：%s", args[0], err, strings.TrimSpace(tail(out.String(), 500)))
+	}
+	return nil
+}
+
+// runGit 在 dir（空为当前目录）跑一条 git，至多 10 分钟。
+func (a *Agent) runGit(ctx context.Context, dir string, args []string, stdout, stderr io.Writer) error {
 	env := platform.WorkerEnv(runtime.GOOS, a.Env)
 	env["GIT_TERMINAL_PROMPT"] = "0"
 	path, err := platform.LookPath("git", env)
@@ -444,8 +496,7 @@ func (a *Agent) git(ctx context.Context, dir string, args ...string) error {
 	if dir != "" {
 		args = append([]string{"-C", dir}, args...)
 	}
-	var out bytes.Buffer
-	cmd, err := platform.Start(platform.Spec{Path: path, Args: args, Env: env, Stdout: &out, Stderr: &out})
+	cmd, err := platform.Start(platform.Spec{Path: path, Args: args, Env: env, Stdout: stdout, Stderr: stderr})
 	if err != nil {
 		return err
 	}
@@ -460,10 +511,7 @@ func (a *Agent) git(ctx context.Context, dir string, args ...string) error {
 		cmd.Process.Kill()
 		err = <-done
 	}
-	if err != nil {
-		return fmt.Errorf("git %s 失败：%v：%s", args[0], err, strings.TrimSpace(tail(out.String(), 500)))
-	}
-	return nil
+	return err
 }
 
 func tail(s string, n int) string {

@@ -107,7 +107,7 @@ func dryRun(q *api.Req, env *app.Env, id string, o Options) (RunResult, error) {
 		tool = strings.SplitN(strings.SplitN(v.Recommended, "+", 2)[0], ":", 2)[0]
 	}
 	if tool != "" {
-		c, err := pickHost(ctx, env, HostNeed{Tool: tool, Repo: t.Repo, Urgent: t.Priority == ledger.Urgent}, o.Host)
+		c, err := pickHost(ctx, env, hostNeed(ctx, tool, t), o.Host)
 		if err != nil {
 			return RunResult{}, err
 		}

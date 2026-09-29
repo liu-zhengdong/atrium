@@ -280,18 +280,24 @@ func ParseReview(text string) (pass bool, notes string, ok bool) {
 	return m[1] == "通过", notes, true
 }
 
-// ReviewBrief 是派给审阅者的任务详述：只读、按清单审、最后一行给结论。
+// ReviewBrief 是派给审阅者的任务详述：只读、按清单审、最后一行给结论。dir 是本机工作树；原工作树在远程机器上时为空，只看 PR。
 func ReviewBrief(task, title, repo string, pr PR, dir, base, why, diff, detail string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# 审阅 %s 的 PR\n\n原任务：%s %s\nPR：%s（gh 一律带 -R %s）\n", task, task, title, pr.URL, repo)
-	fmt.Fprintf(&b, "代码：%s（分支 %s 已推送；基线 origin/%s）\n为什么要审阅：%s\n改动规模：%s\n", dir, pr.Head, base, why, diff)
+	code, local := dir, ""
+	if dir == "" {
+		code = "原工作树在远程机器上，看 PR"
+	} else {
+		local = fmt.Sprintf(" 或 `git -C %s diff origin/%s...HEAD`；需要时读工作树里的文件", dir, base)
+	}
+	fmt.Fprintf(&b, "代码：%s（分支 %s 已推送；基线 origin/%s）\n为什么要审阅：%s\n改动规模：%s\n", code, pr.Head, base, why, diff)
 	if strings.TrimSpace(detail) != "" {
 		fmt.Fprintf(&b, "\n## 原任务详述\n\n%s\n", strings.TrimSpace(detail))
 	}
 	fmt.Fprintf(&b, `
 ## 怎么看
 
-- `+"`gh pr diff %d -R %s`"+` 或 `+"`git -C %s diff origin/%s...HEAD`"+`；需要时读工作树里的文件。
+- `+"`gh pr diff %d -R %s`"+`%s。
 - 只读：不修改、提交、推送，不在 PR 上评论、批准或合入。
 
 ## 清单
@@ -306,6 +312,6 @@ func ReviewBrief(task, title, repo string, pr PR, dir, base, why, diff, detail s
 
 打回时先逐条写问题（文件:行、现象、怎么改），只写必须改的。
 最后一行单独写 `+"`审阅结论：通过`"+` 或 `+"`审阅结论：打回`"+`。
-`, pr.Number, repo, dir, base)
+`, pr.Number, repo, local)
 	return b.String()
 }

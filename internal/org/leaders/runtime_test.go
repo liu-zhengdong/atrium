@@ -148,6 +148,20 @@ func TestLeaderGuard(t *testing.T) {
 			t.Errorf("%s：越权提示应指向上交：%q", c.name, ae.Next)
 		}
 	}
+	for path, body := range map[string]any{
+		"/api/org/o1/points": map[string]string{"text": "x"},
+		"/api/org/o1":        map[string]string{"next": "x"},
+		"/api/tasks":         map[string]string{"title": "新活", "org": "o1"},
+	} {
+		method := "POST"
+		if path == "/api/org/o1" {
+			method = "PATCH"
+		}
+		var ae *api.Error
+		if err := a2.Do(ctx, method, path, body, nil); !errors.As(err, &ae) || !strings.HasPrefix(ae.Message, "部门 o1 ") {
+			t.Errorf("%s %s 越部门的说明应写出目标部门：%v", method, path, err)
+		}
+	}
 	// 介绍真改上了，别的字段没动；上级负责人改下属部门介绍放行。
 	d, err := org.Get(ctx, env.DB, "o2")
 	if err != nil || d.Next != "下一步" || d.Name != "运行时" || d.Leader != "a2" {

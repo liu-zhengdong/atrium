@@ -143,10 +143,10 @@ func TestIntroOnly(t *testing.T) {
 
 func TestInScope(t *testing.T) {
 	scope := map[string]bool{"o2": true, "o3": true}
-	if InScope("a1", scope, []Check{{"任务 t1", "o2"}, {"部门", "o3"}}) != nil {
+	if InScope("a1", scope, []Check{{"任务 t1", "o2"}, {"部门 o3", "o3"}}) != nil {
 		t.Error("都在管辖内应放行")
 	}
-	for _, checks := range [][]Check{{{"任务 t1", "o1"}}, {{"任务 t1", ""}}, {{"任务 t1", "o2"}, {"部门", "o4"}}} {
+	for _, checks := range [][]Check{{{"任务 t1", "o1"}}, {{"任务 t1", ""}}, {{"任务 t1", "o2"}, {"部门 o4", "o4"}}} {
 		err := InScope("a1", scope, checks)
 		if err == nil || err.(interface{ Error() string }).Error() == "" {
 			t.Errorf("%v 应拒绝", checks)

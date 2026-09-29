@@ -119,6 +119,8 @@ func Transition(from State, e Event) (State, error) {
 		return from, fmt.Errorf(format, a...)
 	}
 	delivering := s == Running && st != StageNone
+	// 审阅阶段受阻（多是审阅任务失败）后审阅重跑出了结论，仍按结论走：过、打回、或换个原因再受阻。
+	reviewing := st == StageReview && (s == Running || s == Blocked)
 	passOr := func(e Event, st Stage) (State, error) {
 		next, err := passTo(e, st)
 		if err != nil {
@@ -154,7 +156,7 @@ func Transition(from State, e Event) (State, error) {
 		}
 		return passOr(e, st)
 	case ReviewPass:
-		if !delivering || st != StageReview {
+		if !reviewing {
 			return reject("任务不在审阅阶段（当前 %s/%s）", s, st)
 		}
 		return passOr(e, st)
@@ -165,7 +167,7 @@ func Transition(from State, e Event) (State, error) {
 		e.AcceptBy = ""
 		return passOr(e, st)
 	case Bounce:
-		if !delivering {
+		if !delivering && !reviewing {
 			return reject("任务不在交付中（当前 %s/%s），无可交回", s, st)
 		}
 		if e.Bounces >= MaxBounces {
@@ -184,7 +186,7 @@ func Transition(from State, e Event) (State, error) {
 		}
 		return State{Running, e.Land}, nil
 	case Block:
-		if s == Todo || s == Queued || s == Running {
+		if s == Todo || s == Queued || s == Running || reviewing {
 			return State{Blocked, st}, nil
 		}
 		return reject("任务当前 %s，不能标受阻", s)

@@ -103,7 +103,7 @@ type Module struct {
 | `Start` | queued → running | dispatch（进程已拉起） |
 | `ExitOK` / `ExitFail` | running → running/gate ／ failed | dispatch 或 watch |
 | `GatePass{NeedReview, AcceptBy, Land}` | gate → review ／ accept ／ 落地步骤 ／ done | gates |
-| `ReviewPass{AcceptBy, Land}` | review → accept ／ 落地步骤 ／ done | gates |
+| `ReviewPass{AcceptBy, Land}` | review（running 或 blocked）→ accept ／ 落地步骤 ／ done | gates（审阅阶段受阻后审阅任务重跑出了结论，照结论接着走；`Bounce`、`Block` 同样收 blocked/review） |
 | `Accept{Land}` | accept → 落地步骤 ／ done | gates（`task accept`） |
 | `Bounce` | gate/review/accept/落地中 → queued；第 3 次 → blocked | gates（含 `task reject`）、merge（次数由 Apply 从经历里数） |
 | `Land{Land, Final}` | 落地中 → 下一步（running）／ done | merge（合入）、release（上线） |

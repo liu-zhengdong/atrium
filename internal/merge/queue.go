@@ -270,7 +270,8 @@ func (q *Queue) cleanupWorktree(ctx context.Context, t ledger.Task) error {
 	if !filepath.IsAbs(common) {
 		common = filepath.Join(dir, common)
 	}
-	if _, err := q.R.Run(ctx, dir, "git", "worktree", "remove", dir); err != nil {
+	// 在工作树外执行：Windows 上删不掉进程当前所在的目录。
+	if _, err := q.R.Run(ctx, "", "git", "--git-dir", common, "worktree", "remove", dir); err != nil {
 		return err
 	}
 	if _, err := q.R.Run(ctx, "", "git", "--git-dir", common, "branch", "-D", "task-"+t.ID); err != nil {

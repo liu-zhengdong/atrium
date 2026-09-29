@@ -48,6 +48,13 @@ func Start(s Spec) (*exec.Cmd, error) {
 	if err := cmd.Start(); err != nil {
 		return nil, err
 	}
+	if s.Detached {
+		if err := adopt(cmd.Process.Pid); err != nil {
+			cmd.Process.Kill()
+			cmd.Wait()
+			return nil, err
+		}
+	}
 	return cmd, nil
 }
 
@@ -102,6 +109,9 @@ func LookPath(name string, env map[string]string) (string, error) {
 
 // KillTree 强制结束 pid 及其整棵子进程树（进程须以 Detached 拉起）。
 func KillTree(pid int) error {
+	if found, err := killJob(pid); found {
+		return err
+	}
 	if inv, ok := KillTreeInvocation(runtime.GOOS, pid); ok {
 		out, err := exec.Command(inv.Command, inv.Args...).CombinedOutput()
 		if err != nil {

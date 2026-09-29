@@ -10,6 +10,7 @@ import (
 
 	"github.com/liu-zhengdong/atrium/internal/events"
 	"github.com/liu-zhengdong/atrium/internal/ledger"
+	"github.com/liu-zhengdong/atrium/internal/org"
 	"github.com/liu-zhengdong/atrium/internal/platform"
 	"github.com/liu-zhengdong/atrium/internal/watch"
 )
@@ -260,11 +261,20 @@ func HookEntry() map[string]any {
 	return map[string]any{"hooks": []any{map[string]any{"type": "command", "command": HookCommand, "timeout": 30}}}
 }
 
-// Brief 是秘书会话开头看到的：此刻的全景（从账本现算）、记草稿的说明与秘书备忘。
-// 进展只从全景读，备忘只记账本里没有的；都放进会话，新会话不用记得去查。
-func Brief(v watch.View, memo string) string {
+// Brief 是秘书会话开头看到的：根部门的要点（管到秘书自己）、此刻的全景（从账本现算）、记草稿的说明与秘书备忘。
+// 进展只从全景读，备忘只记账本里没有的；都放进会话，新会话不用记得去查。没有要点时不出要点一节。
+func Brief(points []org.Point, v watch.View, memo string) string {
 	if strings.TrimSpace(memo) == "" {
 		memo = "（空）"
 	}
-	return "此刻全景（atrium top）：\n" + watch.Render(v) + "\n\n记草稿：" + ledger.DraftHowTo + "\n\n秘书备忘（atrium memo show）：\n" + memo
+	var b strings.Builder
+	if len(points) > 0 {
+		b.WriteString("组织要点（靠前的优先）：\n")
+		for _, p := range points {
+			b.WriteString("- " + org.ChainLine(p) + "\n")
+		}
+		b.WriteString("\n")
+	}
+	b.WriteString("此刻全景（atrium top）：\n" + watch.Render(v) + "\n\n记草稿：" + ledger.DraftHowTo + "\n\n秘书备忘（atrium memo show）：\n" + memo)
+	return b.String()
 }

@@ -12,6 +12,7 @@ import (
 
 	"github.com/liu-zhengdong/atrium/internal/cli"
 	"github.com/liu-zhengdong/atrium/internal/events"
+	"github.com/liu-zhengdong/atrium/internal/org"
 	"github.com/liu-zhengdong/atrium/internal/platform"
 	"github.com/liu-zhengdong/atrium/internal/watch"
 )
@@ -222,13 +223,22 @@ func TestLiveness(t *testing.T) {
 
 func TestBrief(t *testing.T) {
 	v := watch.View{Choices: 2, Tasks: []watch.TaskRow{{ID: "t9", Title: "活", Holder: watch.Holder{Kind: "worker"}}}}
-	got := Brief(v, "规矩放哪")
-	for _, want := range []string{"此刻全景", "在干活（1）", "t9", "选项单 2", "秘书备忘", "规矩放哪"} {
+	points := []org.Point{{ID: "k32", Org: "o1", Text: "秘书只决定交给哪个部门", Why: "用户纠正过两次"}, {ID: "k27", Org: "o1", Text: "先求简洁"}}
+	got := Brief(points, v, "规矩放哪")
+	for _, want := range []string{"此刻全景", "在干活（1）", "t9", "选项单 2", "秘书备忘", "规矩放哪",
+		"组织要点（靠前的优先）：\n- k32（o1）秘书只决定交给哪个部门——用户纠正过两次\n- k27（o1）先求简洁\n"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("Brief 缺 %q：\n%s", want, got)
 		}
 	}
-	if got := Brief(watch.View{}, " \n"); !strings.HasSuffix(got, "（空）") {
+	if !strings.HasPrefix(got, "组织要点") || strings.Index(got, "k27") > strings.Index(got, "此刻全景") {
+		t.Fatalf("要点应在全景之前、按给的顺序：\n%s", got)
+	}
+	got = Brief(nil, watch.View{}, " \n")
+	if !strings.HasSuffix(got, "（空）") {
 		t.Fatalf("空备忘应写（空）：\n%s", got)
+	}
+	if strings.Contains(got, "组织要点") || !strings.HasPrefix(got, "此刻全景") {
+		t.Fatalf("没有要点不出要点一节：\n%s", got)
 	}
 }

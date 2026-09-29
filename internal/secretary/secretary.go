@@ -7,7 +7,7 @@
 // statusline 给 Claude Code 状态栏一行字；服务不在只显示「未运行」，不拉起。
 // --install-hook 同时在项目设置 env 里写 ATRIUM_AS=secretary：秘书会话发的命令署名秘书（权限同用户）。
 // 执行者的工作树顺着读到秘书目录的项目设置，SessionStart hook 也会在执行者会话里跑：那里 --detach 静默退出。
-// --detach 起好后再输出此刻全景与秘书备忘（Brief）：hook 的输出进会话上下文，进展以账本为准，备忘不记进展。
+// --detach 起好后再输出根部门要点、此刻全景与秘书备忘（Brief）：hook 的输出进会话上下文，进展以账本为准，备忘不记进展。
 // 判定在 plan.go、statusline.go（纯函数）。
 package secretary
 
@@ -30,6 +30,7 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/cli"
 	"github.com/liu-zhengdong/atrium/internal/config"
 	"github.com/liu-zhengdong/atrium/internal/events"
+	"github.com/liu-zhengdong/atrium/internal/org"
 	"github.com/liu-zhengdong/atrium/internal/platform"
 	"github.com/liu-zhengdong/atrium/internal/store"
 	"github.com/liu-zhengdong/atrium/internal/watch"
@@ -43,7 +44,7 @@ func Commands(t *cli.Table) {
 	t.Add(cli.Command{Path: "secretary bridge",
 		Summary: "在 Claude Code 秘书会话里常驻，把要处理的事件注入会话；--install-hook 让它随会话自动起",
 		Flags: []cli.Flag{
-			{Name: "detach", Bool: true, Help: "后台起（SessionStart hook 用），起好后输出此刻全景与秘书备忘就返回"},
+			{Name: "detach", Bool: true, Help: "后台起（SessionStart hook 用），起好后输出根部门要点、此刻全景与秘书备忘就返回"},
 			{Name: "install-hook", Bool: true, Help: "在秘书目录的 .claude/settings.local.json 加 SessionStart hook 与 env ATRIUM_AS=secretary（命令署名秘书）"},
 			{Name: "dir", Value: "目录", Help: "--install-hook 的秘书目录（缺省当前目录）"},
 			{Name: "status", Bool: true, Help: "看 bridge 在不在跑、秘书在不在听"},
@@ -373,8 +374,21 @@ func detach(c *cli.Ctx, p config.Paths, endpoint string, batch int) error {
 // WorkStyle 是秘书会话开头的工作方式：秘书要随时能被用户插话，不在前台干等。
 const WorkStyle = "超过半分钟的命令（构建、渲染、部署、等外部结果）一律放后台跑，完成通知回来再核对；派活、合入后直接回来，结果会作为事件送来。"
 
-// sessionBrief 取全景与秘书备忘，拼成会话开头的一段（SessionStart hook 的输出进会话上下文）。
+// sessionBrief 取根部门要点、全景与秘书备忘，拼成会话开头的一段（SessionStart hook 的输出进会话上下文）。
+// 只取顶层部门自己的要点（秘书在组织树之上，下属部门的规矩管的是负责人与执行者）。
 func sessionBrief(c *cli.Ctx) (string, error) {
+	var roots []*org.Node
+	if err := c.Call("GET", "/api/org", nil, &roots); err != nil {
+		return "", err
+	}
+	var points []org.Point
+	for _, r := range roots {
+		var s org.Show
+		if err := c.Call("GET", "/api/org/"+url.PathEscape(r.ID), nil, &s); err != nil {
+			return "", err
+		}
+		points = append(points, s.Points...)
+	}
 	var v watch.View
 	if err := c.Call("GET", "/api/top", nil, &v); err != nil {
 		return "", err
@@ -385,7 +399,7 @@ func sessionBrief(c *cli.Ctx) (string, error) {
 	if err := c.Call("GET", "/api/memo?as="+events.Secretary, nil, &m); err != nil {
 		return "", err
 	}
-	return Brief(v, m.Body), nil
+	return Brief(points, v, m.Body), nil
 }
 
 // ---- --status 与 --install-hook ----

@@ -15,7 +15,7 @@
 3. `go build` 出 v2，卸掉 npm 全局的旧 `atrium`（`npm uninstall -g atrium`），`mise reshim`，把二进制放到 `~/.local/bin/atrium`，并核对 PATH 上的 `atrium` 就是它。PATH 里 mise 的 node bin 与 shims 排在 `~/.local/bin` 前面，所以一定要先卸旧版。
 4. `atrium import --from <副本>`：搬部门、要点、决定、负责人、备忘、技能、资料、执行者档案、机器；**导入后自动全局暂停**。
 5. `atrium start`，并确认是全局暂停状态。
-6. 冒烟：`status`、`org tree`、`task ls`、`leader ls`、`workers`、`host ls`、`--help`、`map`（打印一次性链接）。
+6. 冒烟：`status`、`org tree`、`task ls`、`leader ls`、`workers`、`host ls`、`--help`、`map`（打印网址）。
 
 脚本结束时服务在跑、仍然暂停。看过网页和 `org show` 没问题后，由你决定 `atrium resume`。
 

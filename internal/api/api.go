@@ -152,8 +152,8 @@ func (r *Router) Handle(pattern string, h Handler) { r.handle(pattern, h, true) 
 // Public 注册免认证的路由（只给 /health 这类）。
 func (r *Router) Public(pattern string, h Handler) { r.handle(pattern, h, false) }
 
-// Raw 注册不走 JSON 信封与令牌认证的原始处理函数：只给网页（静态文件、会话 cookie、SSE）用，
-// 处理函数自己认证，默认拒绝。
+// Raw 注册不走 JSON 信封与令牌认证的原始处理函数：只给网页（静态文件、只读接口、SSE）用，
+// 处理函数自己把关（web 只放行本机 Host 头）。
 func (r *Router) Raw(pattern string, h http.HandlerFunc) { r.mux.HandleFunc(pattern, h) }
 
 // WriteJSON 按信封写一次结果（Raw 处理函数里返回 JSON 用）。

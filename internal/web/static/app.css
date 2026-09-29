@@ -244,9 +244,6 @@ table.perf{width:100%;border-collapse:collapse;font-size:13px}
 .opt{grid-template-columns:20px 1fr}
 .opt .pick{font-size:11px;color:var(--accent);font-weight:500}
 .status-line{margin:14px 0 0;color:var(--ink2);font-size:13px}
-.gate{max-width:420px;margin:18vh auto 0;text-align:center;color:var(--ink2)}
-.gate h1{font-size:20px;color:var(--ink);margin:0 0 8px}
-.gate code{font:13px var(--mono);background:var(--raise);padding:3px 8px;border-radius:6px;color:var(--ink)}
 .loading{color:var(--ink3);padding:40px 0;text-align:center}
 .dot.off{background:transparent;border:1.5px solid var(--line)}
 .drawer{box-shadow:none;visibility:hidden;transition:transform .22s ease,visibility 0s .22s}

@@ -227,29 +227,37 @@ func (c *Ctx) Paths() (config.Paths, error) { return config.Resolve(c.Env.Getenv
 
 // Call 经服务 HTTP 完成一次调用，结果解到 out。
 func (c *Ctx) Call(method, path string, body, out any) error {
+	if _, err := c.Base(); err != nil {
+		return err
+	}
+	return c.client.Do(c.Context, method, path, body, out)
+}
+
+// Base 返回服务地址（http://127.0.0.1:端口）并备好调用用的令牌；服务没在运行时报错。
+func (c *Ctx) Base() (string, error) {
 	if c.client == nil {
 		p, err := c.Paths()
 		if err != nil {
-			return err
+			return "", err
 		}
 		info, err := config.ReadService(p)
 		if errors.Is(err, config.ErrNotRegistered) {
-			return (&api.Error{Code: "not_running", Message: "服务没在运行（数据目录 " + p.Data + "）"}).WithNext(c.Table.Name + " start")
+			return "", (&api.Error{Code: "not_running", Message: "服务没在运行（数据目录 " + p.Data + "）"}).WithNext(c.Table.Name + " start")
 		}
 		if err != nil {
-			return err
+			return "", err
 		}
 		// 负责人进程带本次唤醒签发的令牌，服务端按它判权限；其余用用户令牌。
 		// ATRIUM_AS（秘书会话的项目设置写 secretary）原样带给服务，由服务端 api.Sign 定署名。
 		token := c.Env.Getenv("ATRIUM_LEADER_TOKEN")
 		if token == "" {
 			if token, err = config.ReadToken(p); err != nil {
-				return err
+				return "", err
 			}
 		}
 		c.client = &api.Client{Base: fmt.Sprintf("http://127.0.0.1:%d", info.Port), Token: token, As: c.Env.Getenv("ATRIUM_AS")}
 	}
-	return c.client.Do(c.Context, method, path, body, out)
+	return c.client.Base, nil
 }
 
 // ResetClient 丢掉缓存的连接信息（服务重启后端口或令牌可能变了）。

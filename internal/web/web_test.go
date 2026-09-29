@@ -7,14 +7,12 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strconv"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/liu-zhengdong/atrium/internal/api"
 	"github.com/liu-zhengdong/atrium/internal/app"
@@ -27,51 +25,24 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/workers"
 )
 
-func TestSessions(t *testing.T) {
-	now := time.Unix(1000, 0)
-	s := newSessions()
-	s.now = func() time.Time { return now }
-	code, _ := s.newLink()
-	if _, ok := s.redeem("wrong"); ok {
-		t.Error("错码不该换到会话")
-	}
-	sid, ok := s.redeem(code)
-	if !ok || !s.check(sid) {
-		t.Fatal("有效码应换到会话")
-	}
-	if _, ok := s.redeem(code); ok {
-		t.Error("码只能用一次")
-	}
-	late, _ := s.newLink()
-	now = now.Add(linkTTL)
-	if _, ok := s.redeem(late); ok {
-		t.Error("过期码不该换到会话")
-	}
-	now = now.Add(sessionTTL)
-	if s.check(sid) {
-		t.Error("会话过期后应失效")
-	}
-	if s.check("") {
-		t.Error("空会话")
-	}
-}
-
-func TestLocalRequest(t *testing.T) {
+func TestLocalHost(t *testing.T) {
 	cases := []struct {
-		remote, host string
-		ok           bool
+		host string
+		ok   bool
 	}{
-		{"127.0.0.1:5555", "127.0.0.1:4320", true},
-		{"127.0.0.1:5555", "localhost:4320", true},
-		{"[::1]:5555", "[::1]:4320", true},
-		{"127.0.0.1:5555", "evil.example:4320", false}, // DNS 重绑定
-		{"127.0.0.1:5555", "127.0.0.1:9999", false},
-		{"192.168.1.9:5555", "127.0.0.1:4320", false},
-		{"garbage", "127.0.0.1:4320", false},
+		{"127.0.0.1:4320", true},
+		{"localhost:4320", true},
+		{"LOCALHOST:4320", true},
+		{"evil.example:4320", false}, // DNS 重绑定：解析到 127.0.0.1 的外部域名
+		{"127.0.0.1.evil.example:4320", false},
+		{"127.0.0.1:9999", false},
+		{"127.0.0.1", false},
+		{"[::1]:4320", false}, // 服务只听 127.0.0.1
+		{"", false},
 	}
 	for _, c := range cases {
-		if got := localRequest(c.remote, c.host, 4320); got != c.ok {
-			t.Errorf("%s %s：得到 %v", c.remote, c.host, got)
+		if got := localHost(c.host, 4320); got != c.ok {
+			t.Errorf("%q：得到 %v", c.host, got)
 		}
 	}
 }
@@ -142,7 +113,7 @@ func TestBrowserInvocation(t *testing.T) {
 	}
 }
 
-// 整条路径：取链接（要用户令牌）→ 打开链接换 cookie → 读接口；不带 cookie、错 Host、码用两次都拒绝。
+// 整条路径：不登录直接读接口；外来 Host 一律 403，不带 CORS 头。
 func TestRoutes(t *testing.T) {
 	// 额度读取不碰开发者本机的登录与 OpenQuota。
 	t.Setenv("ATRIUM_QUOTA_READERS", "off")
@@ -172,54 +143,33 @@ func TestRoutes(t *testing.T) {
 	m := Module()
 	m.Routes(r, &app.Env{DB: db, Port: port, Log: slog.New(slog.NewTextHandler(io.Discard, nil))})
 
-	client := &api.Client{Base: srv.URL, Token: "secret"}
-	var link Link
-	if err := client.Do(ctx, "POST", "/api/web/link", nil, &link); err != nil {
-		t.Fatal(err)
-	}
-	if (&api.Client{Base: srv.URL, Token: "bad"}).Do(ctx, "POST", "/api/web/link", nil, nil) == nil {
-		t.Error("错令牌不该拿到链接")
-	}
-	u, _ := url.Parse(link.URL)
-	noRedirect := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	get := func(path, cookie, host string) *http.Response {
+	get := func(path, host string) *http.Response {
 		req, _ := http.NewRequest("GET", srv.URL+path, nil)
-		if cookie != "" {
-			req.Header.Set("Cookie", cookieName+"="+cookie)
-		}
+		req.Header.Set("Origin", "http://evil.example")
 		if host != "" {
 			req.Host = host
 		}
-		res, err := noRedirect.Do(req)
+		res, err := http.DefaultClient.Do(req)
 		if err != nil {
 			t.Fatal(err)
 		}
 		return res
 	}
-	res := get("/login?"+u.RawQuery, "", "")
-	var sid string
-	for _, c := range res.Cookies() {
-		if c.Name == cookieName && c.HttpOnly && c.SameSite == http.SameSiteStrictMode {
-			sid = c.Value
+	for _, path := range []string{"/", "/ui/api/today", "/ui/stream", "/ui/assets/app.js"} {
+		res := get(path, "evil.example:"+strconv.Itoa(port))
+		res.Body.Close()
+		if res.StatusCode != 403 {
+			t.Errorf("%s 外来 Host 应 403，得到 %d", path, res.StatusCode)
 		}
 	}
-	if res.StatusCode != 303 || sid == "" {
-		t.Fatalf("登录：%d cookie %q", res.StatusCode, sid)
+	if res := get("/ui/api/today", ""); res.StatusCode != 200 || res.Header.Get("Access-Control-Allow-Origin") != "" {
+		t.Errorf("本机 Host 不登录应 200 且无 CORS 头：%d %q", res.StatusCode, res.Header.Get("Access-Control-Allow-Origin"))
 	}
-	if res := get("/login?"+u.RawQuery, "", ""); res.Header.Get("Location") != "/#expired" {
-		t.Error("码第二次用应转到过期页")
-	}
-	if res := get("/ui/api/today", "", ""); res.StatusCode != 401 {
-		t.Errorf("不带 cookie 应 401，得到 %d", res.StatusCode)
-	}
-	if res := get("/ui/api/today", sid, "evil.example:"+strconv.Itoa(port)); res.StatusCode != 403 {
-		t.Errorf("外来 Host 应 403，得到 %d", res.StatusCode)
-	}
-	if res := get("/ui/api/dept/..", sid, ""); res.StatusCode == 200 {
+	if res := get("/ui/api/dept/..", ""); res.StatusCode == 200 {
 		t.Error("路径穿越不该 200")
 	}
 	read := func(path string, out any) {
-		res := get("/ui/api/"+path, sid, "")
+		res := get("/ui/api/"+path, "")
 		defer res.Body.Close()
 		var env struct {
 			OK     bool            `json:"ok"`
@@ -287,7 +237,7 @@ func TestRoutes(t *testing.T) {
 	if page.Leader == nil || page.Leader.Name != "运行时负责人" {
 		t.Errorf("负责人：%+v", page.Leader)
 	}
-	if res := get("/", "", ""); res.StatusCode != 200 || !strings.Contains(res.Header.Get("Content-Security-Policy"), "script-src") && !strings.Contains(res.Header.Get("Content-Security-Policy"), "default-src 'self'") {
+	if res := get("/", ""); res.StatusCode != 200 || !strings.Contains(res.Header.Get("Content-Security-Policy"), "script-src") && !strings.Contains(res.Header.Get("Content-Security-Policy"), "default-src 'self'") {
 		t.Errorf("首页：%d", res.StatusCode)
 	}
 }

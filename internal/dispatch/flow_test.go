@@ -415,6 +415,19 @@ func TestFlowStopAndTell(t *testing.T) {
 	if _, err := Enqueue(ctx, env, tBad.ID, Options{}, "u1"); err == nil || !strings.Contains(err.Error(), "等不到") {
 		t.Errorf("依赖失败应报错：%v", err)
 	}
+	// 还有没结束的子任务的父任务不派；子任务都结束后照常能派。
+	tp, _ := ledger.Add(ctx, env.DB, ledger.NewTask{Title: "父任务"}, "u1")
+	tc, _ := ledger.Add(ctx, env.DB, ledger.NewTask{Title: "子任务", Parent: tp.ID}, "u1")
+	if _, err := Enqueue(ctx, env, tp.ID, Options{}, "u1"); err == nil || !strings.Contains(err.Error(), "子任务没结束") {
+		t.Errorf("有没结束的子任务应拒：%v", err)
+	}
+	if got, _ := ledger.Get(ctx, env.DB, tp.ID); got.Status != ledger.Todo {
+		t.Errorf("被拒后应仍是 todo：%s", got.Status)
+	}
+	ledger.Apply(ctx, env.DB, tc.ID, ledger.Event{Kind: ledger.Set, To: ledger.Cancelled}, "u1", "")
+	if _, err := Enqueue(ctx, env, tp.ID, Options{}, "u1"); err != nil {
+		t.Errorf("子任务都结束后应能派：%v", err)
+	}
 	t3, _ := ledger.Add(ctx, env.DB, ledger.NewTask{Title: "高风险"}, "u1")
 	if _, err := Enqueue(ctx, env, t3.ID, Options{Worker: "claude", Risk: "high"}, "u1"); err == nil || !strings.Contains(err.Error(), "接不了") {
 		t.Errorf("风险：%v", err)

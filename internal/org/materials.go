@@ -25,8 +25,10 @@ const (
 	maxMaterialNote  = 200
 	maxMaterialFiles = 50
 	maxMaterialDepth = 4
-	// 一次上传的原始字节上限（JSON 里 base64 再涨 1/3，请求体上限按它放宽，见 materialRoutes）。
+	// 一次上传的原始字节上限（JSON 里 base64 再涨 1/3，请求体上限按它放宽）。
 	maxMaterialRequest = 2 * MaxMaterialFile << 20
+	// MaxMaterialBody 是资料上传接口的请求体上限，也是所有接口里最大的（负责人权限判定先读全请求体，按它读）。
+	MaxMaterialBody = maxMaterialRequest/3*4 + 1<<20
 )
 
 // Units 纯函数：资料的字数。文本（合法 UTF-8、无 NUL）按字（rune）数；二进制（图片等）不折算字数，
@@ -341,7 +343,7 @@ func materialRoutes(r *api.Router, env *app.Env) {
 	})
 	r.Handle("POST /api/materials", func(q *api.Req) (any, error) {
 		var in MaterialInput
-		if err := q.DecodeMax(&in, maxMaterialRequest/3*4+1<<20); err != nil {
+		if err := q.DecodeMax(&in, MaxMaterialBody); err != nil {
 			return nil, err
 		}
 		return AddMaterials(q.Context(), db, data, in, q.Actor.ID)
@@ -398,7 +400,7 @@ func readLocalMaterials(p string) ([]MaterialFile, error) {
 			return nil
 		}
 		if len(out) >= maxMaterialFiles {
-			return api.Usage("%s 里文件超过 %d 个：分几次加，或先归档不用的", p, maxMaterialFiles)
+			return api.Usage("%s 里文件超过 %d 个：目录里只放这次要加的文件（如报告和它的图片），或分几次加", p, maxMaterialFiles)
 		}
 		raw, err := os.ReadFile(f)
 		if err != nil {
@@ -432,6 +434,11 @@ func materialCommands(t *cli.Table) {
 	t.Add(cli.Command{Path: "material add", Args: "<oN> <文件或目录>",
 		Summary: fmt.Sprintf("加资料或给同名资料追加一版（总览 ≤%d 字，部门文本合计 ≤%d 字；单个文件 ≤%d MB，部门二进制合计 ≤%d MB）",
 			MaxOverview, MaxMaterial, MaxMaterialFile, MaxMaterialBin),
+		Detail: fmt.Sprintf(`传文件：加这一个文件，标题是文件名。
+传目录：加目录里全部文件（跳过点开头的隐藏项），标题是相对这个目录的路径，如 report.md、images/arch.png；
+报告按相对路径引用的图片，网页预览照这个标题找。
+目录要只放这次要加的东西：报告和它引用的图片先放进单独的目录再传；目录里还有别的（如克隆的仓库）就不要直接传它。
+一次最多 %d 个文件、%d 层、合计 %d MB。同一部门里标题相同就是给那份资料追加一版。`, maxMaterialFiles, maxMaterialDepth, maxMaterialRequest>>20),
 		Flags: []cli.Flag{
 			{Name: "overview", Bool: true, Help: "这是部门总览（每次附给负责人；一个部门一份）"},
 			{Name: "note", Value: "文字", Help: "这份资料是什么、什么时候用（必填）"},

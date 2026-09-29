@@ -263,8 +263,9 @@ func Prompt(in PromptInput) string {
 	w("")
 	w("## 收尾")
 	w("1. 要记住的（在等什么、下次先看什么）写进备忘；做了取舍的写进那件任务的备注。")
-	w("2. 处理完确认：atrium events ack %s", strings.Join(ids, " "))
-	w("3. 退出。没确认的事件会再次唤醒你；连续 %d 次没处理完，会转交 %s。", MaxFails, in.Upstream)
+	w("2. 原地干（--dir）的报告、调研类交付，收尾时 material add oN 报告所在目录 --note 是什么，进部门资料（报告和它的图片放在单独的目录里）。")
+	w("3. 处理完确认：atrium events ack %s", strings.Join(ids, " "))
+	w("4. 退出。没确认的事件会再次唤醒你；连续 %d 次没处理完，会转交 %s。", MaxFails, in.Upstream)
 	return b.String()
 }
 

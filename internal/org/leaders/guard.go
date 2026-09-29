@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
+	"net/http"
 	"strconv"
 
 	"github.com/liu-zhengdong/atrium/internal/api"
@@ -53,12 +55,17 @@ func guard(db *store.DB) api.Guard {
 	}
 }
 
-// peekBody 读出请求体（上限 1MB）再放回去，处理函数照常 Decode。
+// peekBody 读出整个请求体再放回去，处理函数照常 Decode（各接口自己的上限在那里卡）。
+// 按所有接口里最大的上限读：只读一截会把合法的大请求（如报告连图片加资料）截断成不合法的 JSON。
 func peekBody(q *api.Req) (map[string]any, error) {
 	if q.Body == nil {
 		return map[string]any{}, nil
 	}
-	raw, err := io.ReadAll(io.LimitReader(q.Body, 1<<20))
+	raw, err := io.ReadAll(http.MaxBytesReader(nil, q.Body, org.MaxMaterialBody))
+	var tooBig *http.MaxBytesError
+	if errors.As(err, &tooBig) {
+		return nil, api.Usage("请求体超过上限 %.1f MB：拆小或分几次", float64(org.MaxMaterialBody)/(1<<20))
+	}
 	if err != nil {
 		return nil, err
 	}

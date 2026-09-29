@@ -1,4 +1,4 @@
-// Atrium 只读网页。地址：#today、#legion、#oN[/tasks|rules|files]；末段是 tN、cN 或 sN 时打开抽屉。
+// Atrium 只读网页。地址：#today、#legion、#oN[/tasks|rules|files]；末段是 tN、cN、sN 或 aN（负责人，只在部门页）时打开抽屉。
 // 数据只从 /ui/api/… 读；/ui/stream 推「changed」时重取当前页与抽屉。
 "use strict";
 
@@ -59,7 +59,7 @@ const deptName = id => nav.depts.find(d => d.id === id)?.name || id;
 function parseHash() {
   const segs = location.hash.slice(1).split("/").filter(Boolean);
   let open = null;
-  if (segs.length && /^[tcs][1-9]\d*$/.test(segs[segs.length - 1])) open = segs.pop();
+  if (segs.length && /^[tcsa][1-9]\d*$/.test(segs[segs.length - 1])) open = segs.pop();
   return { page: segs[0] || "today", tab: segs[1] || "", open };
 }
 function hashWith(open) {
@@ -170,19 +170,10 @@ function soonHTML(soon) {
     + (soon.later ? `<div class="more">另有 ${soon.later} 条在 7 天以后</div>` : "");
 }
 
-/* 负责人一行：默认收起，点开看执行者组合、负责哪些部门、备忘全文（与任务树折叠共用 openKids） */
-function leadHTML(l, key) {
-  const open = openKids.has(key);
-  const head = `<button class="lead" data-kids="${esc(key)}" aria-expanded="${open}"><b>${esc([...l.name][0] || "负")}</b>${esc(l.name)}${l.inherited ? "（上级）" : ""}<span class="chev">›</span></button>`;
-  if (!open) return head;
-  return head + `<dl class="intro">${[["执行者", esc(l.workers)],
-    ["负责", l.depts.map(p => `<a href="#${esc(p.id)}">${esc(p.name)}</a>`).join("、")],
-    ["备忘", l.memo ? esc(l.memo) : `<span class="none">暂无备忘</span>`]].map(x => `<dt>${x[0]}</dt><dd>${x[1]}</dd>`).join("")}</dl>`;
-}
-
-/* 部门 */
+/* 部门；负责人一行只是入口，详情（执行者组合、负责哪些部门、备忘）开在抽屉里，数据就用这一页的 */
+let deptPage = null;
 async function renderDept(id, tab) {
-  const d = await api("dept/" + id);
+  const d = deptPage = await api("dept/" + id);
   tab = ["tasks", "rules", "files"].includes(tab) ? tab : "tasks";
   const dept = d.dept;
   const subCards = d.subs.map(s => {
@@ -207,7 +198,7 @@ async function renderDept(id, tab) {
       (d.inherited.length ? `<div class="inh-h">从上级继承</div>${d.inherited.map(r => rule(r, null)).join("")}` : "");
   }
   if (tab === "files") body = d.materials.length ? `<div class="rows">${d.materials.map(m => `
-    <div class="row"><span class="dot idle"></span><div class="title"><span class="id">${esc(m.id)}</span>${esc(m.title)}</div>
+    <div class="row still"><span class="dot idle"></span><div class="title"><span class="id">${esc(m.id)}</span>${esc(m.title)}</div>
     <div class="who">${m.kind === "overview" ? "总览 · " : ""}v${m.rev} · ${size(m.size)}</div><div class="time num">${date(m.created_at)}</div></div>`).join("")}</div>`
     : `<div class="empty">还没有资料</div>`;
   const cap = d.rules.length > d.rule_max ? "cap over" : "cap";
@@ -217,7 +208,7 @@ async function renderDept(id, tab) {
     <h1 class="dept-title">${esc(dept.name)}</h1>
     ${dept.what ? `<p class="dept-what">${esc(dept.what)}</p>` : ""}
     ${intro.length ? `<dl class="intro">${intro.map(x => `<dt>${x[0]}</dt><dd>${esc(x[1])}</dd>`).join("")}</dl>` : ""}
-    ${d.leader ? leadHTML(d.leader, "lead:" + dept.id) : `<div class="lead"><b>你</b>你直接管<span>秘书帮你盯着</span></div>`}
+    ${d.leader ? `<button class="lead" data-open="${esc(d.leader.id)}"><b>${esc([...d.leader.name][0] || "负")}</b>${esc(d.leader.name)}${d.leader.inherited ? "（上级）" : ""}<span class="chev">›</span></button>` : `<div class="lead"><b>你</b>你直接管<span>秘书帮你盯着</span></div>`}
     ${sched}
     ${d.subs.length ? `<section class="section"><h2>下属部门</h2><div class="subs">${subCards}</div></section>` : ""}
     <section class="section">
@@ -331,11 +322,19 @@ function relHTML(d) {
     + part("在等它", d.waiters.map(rel).join(""));
 }
 
-/* 抽屉 */
+/* 抽屉：头部写短号与部门，同一件东西重画时保留滚动位置（推送一来就重画，读长文不能跳回顶） */
+let drawerId = "";
+function drawer(id, head, body) {
+  const keep = drawerId === id ? $("#drawer .dbody")?.scrollTop || 0 : 0;
+  drawerId = id;
+  $("#drawer").innerHTML = `<div class="dhead"><span class="id">${esc(head)}</span><button class="x" data-close aria-label="关闭">${icon.x}</button></div>
+    <div class="dbody">${body}</div>`;
+  $("#drawer .dbody").scrollTop = keep;
+}
 const sourceLabel = { user: "用户纠正", org: "组织发现" };
-/* 来源后的记录人：负责人的名字链到他负责的部门，并展开那里的负责人一行 */
-const byHTML = d => !d.by_name ? "" : " · " + (d.by_dept
-  ? `<a href="#${esc(d.by_dept)}" data-lead="lead:${esc(d.by_dept)}">${esc(d.by_name)}</a>` : esc(d.by_name));
+/* 来源后的记录人：负责人的名字链到他的负责人抽屉 */
+const byHTML = d => !d.by_name ? "" : " · " + (d.by_lead
+  ? `<a href="#${esc(d.by_lead)}">${esc(d.by_name)}</a>` : esc(d.by_name));
 let drawerTask = null, liveTimer = null;
 async function openTask(id) {
   const d = await api("task/" + id);
@@ -344,16 +343,13 @@ async function openTask(id) {
   renderTask(d);
 }
 function renderTask(d) {
-  const body = $("#drawer .dbody"), keep = body && drawerTask?.task.id === d.task.id ? body.scrollTop : 0;
   drawerTask = d;
   const t = d.task;
   const stuck = d.state === "bad";
   const pr = !t.pr ? "还没有" : /^https?:\/\//.test(t.pr) ? `<a href="${esc(t.pr)}" target="_blank" rel="noreferrer">${esc(t.pr.replace(/^.*\/pull\//, "#"))}</a>` : esc(t.pr);
   const draft = d.state === "draft";
   const label = stuck ? "卡住" : draft ? "草稿" : d.state === "done" ? "完成" : d.state === "off" ? "取消" : "现在";
-  $("#drawer").innerHTML = `
-    <div class="dhead"><span class="id">${esc(t.id)}</span>${d.dept_name ? `<span class="id">· ${esc(d.dept_name)}</span>` : ""}<button class="x" data-close aria-label="关闭">${icon.x}</button></div>
-    <div class="dbody">
+  drawer(t.id, [t.id, d.dept_name].filter(Boolean).join(" · "), `
       ${d.parent ? `<div class="crumb up"><a href="${esc(hashWith(d.parent.id))}"><span class="id">${esc(d.parent.id)}</span>${esc(d.parent.title)}</a><span>/</span></div>` : ""}
       <h3>${esc(t.title)}</h3>
       ${draft ? "" : `<div class="steps">${d.steps.map((s, i) => `<div class="step ${i < d.step ? "past" : i === d.step ? "now" + (stuck ? " stuck" : "") : ""}"><i></i>${s}</div>`).join("")}</div>`}
@@ -361,17 +357,13 @@ function renderTask(d) {
       ${draft ? `<p class="draft-detail">${t.detail ? esc(t.detail) : "没有详述"}</p>` : `<dl class="facts"><dt>执行者</dt><dd>${esc(t.worker || "还没派")}</dd><dt>机器</dt><dd>${t.host ? esc(t.host + (d.host_name ? " " + d.host_name : "")) : "还没派"}</dd><dt>PR</dt><dd>${pr}</dd>${t.skill ? `<dt>技能</dt><dd>${esc(t.skill)}</dd>` : ""}${d.schedule ? `<dt>来自</dt><dd><a href="${esc(hashWith(d.schedule))}">周期任务 ${esc(d.schedule)}</a></dd>` : ""}${d.choice ? `<dt>选项单</dt><dd><a href="${esc(hashWith(d.choice))}">${esc(d.choice)}</a></dd>` : ""}</dl>`}
       ${t.source || t.class ? `<dl class="facts"><dt>来源</dt><dd>${esc(sourceLabel[t.source] || "没写")}${byHTML(d)}</dd><dt>类</dt><dd>${esc(t.class || "没归类")}</dd></dl>` : ""}
       ${relHTML(d)}
-      ${traceHTML(d)}
-    </div>`;
-  $("#drawer .dbody").scrollTop = keep;
+      ${traceHTML(d)}`);
 }
 async function openChoice(id) {
   const c = await api("choice/" + id);
   const status = c.status === "open" ? "" : c.status === "picked" ? "已拍板" : "这轮都不做";
   const rec = new Set(c.recommend || []);
-  $("#drawer").innerHTML = `
-    <div class="dhead"><span class="id">${esc(c.id)}${c.dept_name ? " · " + esc(c.dept_name) : ""}</span><button class="x" data-close aria-label="关闭">${icon.x}</button></div>
-    <div class="dbody"><h3>${esc(c.title)}</h3><p class="sub-t">${c.task ? "出自 " + esc(c.task) + " · " : ""}${esc(ago(c.created_at))}前${status ? " · " + status : ""}</p>
+  drawer(c.id, [c.id, c.dept_name].filter(Boolean).join(" · "), `<h3>${esc(c.title)}</h3><p class="sub-t">${c.task ? "出自 " + esc(c.task) + " · " : ""}${esc(ago(c.created_at))}前${status ? " · " + status : ""}</p>
       ${c.reason ? `<p class="status-line">${esc(c.reason)}</p>` : ""}
       <div class="opts">${c.options.map(o => `
         <div class="opt ${o.task ? "on" : ""}">
@@ -381,8 +373,7 @@ async function openChoice(id) {
           <div class="cost">${esc(o.cost)}</div>
           ${o.why_now || o.if_not ? `<details><summary>为什么现在</summary><div class="whyt">${esc(o.why_now)}${o.if_not ? `<br>不做：${esc(o.if_not)}` : ""}</div></details>` : ""}</div></div>`).join("")}</div>
       ${c.note ? `<p class="status-line">${esc(c.note)}</p>` : ""}
-      ${c.status === "open" ? `<p class="status-line">选哪几个，在终端里告诉秘书。</p>` : ""}
-    </div>`;
+      ${c.status === "open" ? `<p class="status-line">选哪几个，在终端里告诉秘书。</p>` : ""}`);
 }
 /* 周期任务抽屉：下一轮的完整时刻、每轮做什么、最近几轮（点开是那件任务）、最近一笔记录，详述折起 */
 const kindDoes = { "调研": "写一张选项单给你挑", "体验巡检": "把主路径走一遍，能修的开 PR" };
@@ -393,20 +384,33 @@ async function openSchedule(id) {
     : /^\d\d-/.test(w) ? `${w} ${clock(s.next_at)}` : `${/^\d\d:/.test(w) ? "今天 " : ""}${w}（${pad(next.getMonth() + 1)}-${pad(next.getDate())}）`;
   const facts = [["每轮", kindDoes[s.kind] || firstPara(s.detail)], ["技能", s.skill]].filter(x => x[1]);
   const day = r => (r.title.match(/（(\d\d-\d\d)）$/) || [])[1];
-  $("#drawer").innerHTML = `
-    <div class="dhead"><span class="id">${esc(s.id)} · ${esc(s.dept_name)}</span><button class="x" data-close aria-label="关闭">${icon.x}</button></div>
-    <div class="dbody"><h3>${esc(s.title)}</h3>
+  drawer(s.id, s.id + " · " + s.dept_name, `<h3>${esc(s.title)}</h3>
       <p class="sub-t">${esc([s.cadence, s.kind].filter(Boolean).join(" · "))} · ${esc({ secretary: "秘书", u1: "你" }[s.by] || s.by)} ${esc(date(s.created_at))} 建</p>
       <div class="holder"><b>下一轮</b>　${esc(when)}</div>
       ${facts.length ? `<dl class="facts">${facts.map(f => `<dt>${f[0]}</dt><dd>${esc(f[1])}</dd>`).join("")}</dl>` : ""}
       <div class="jh"><b>最近几轮</b>${s.skips ? `<span>跳过过 ${s.skips} 轮</span>` : ""}</div>
       ${s.rounds.length ? `<div class="rows">${s.rounds.map(r => taskRow({ ...r, title: day(r) ? day(r) + " 这一轮" : r.title })).join("")}</div>` : `<div class="quiet-line">还没跑过</div>`}
       ${s.note ? `<p class="status-line${s.trouble ? " warn" : ""}">${esc(s.note)}</p>` : ""}
-      ${s.detail ? `<details class="full"><summary>详述</summary><div class="result">${md(s.detail.trim())}</div></details>` : ""}
-    </div>`;
+      ${s.detail ? `<details class="full"><summary>详述</summary><div class="result">${md(s.detail.trim())}</div></details>` : ""}`);
+}
+/* 负责人抽屉：执行者组合、负责哪些部门，备忘一行一段，行首「话题：」加重，两千字也能扫着找 */
+const memoHTML = s => s.trim().split(/\n\s*/).map(p => {
+  const m = p.match(/^([^：，。；]{1,24})：(.+)$/s);
+  return `<p>${m ? `<b>${esc(m[1])}</b>：${md(m[2])}` : md(p)}</p>`;
+}).join("");
+function openLeader(id) {
+  const l = deptPage?.leader;
+  if (l?.id !== id) throw new Error(id + " 不是这个部门的负责人");
+  const n = [...l.memo].length;
+  drawer(l.id, l.id + " · 负责人", `<h3>${esc(l.name)}</h3>
+    ${l.inherited ? `<p class="sub-t">${esc(deptPage.dept.name)}没有自己的负责人，由上级的这一位管</p>` : ""}
+    <dl class="facts"><dt>执行者</dt><dd>${esc(l.workers)}</dd>
+      <dt>负责</dt><dd>${l.depts.map(p => `<a href="#${esc(p.id)}">${esc(p.name)}</a>`).join("、")}</dd></dl>
+    <div class="jh"><b>备忘</b><span class="num">${n}/${deptPage.memo_max} 字</span></div>
+    ${n ? `<div class="memo">${memoHTML(l.memo)}</div>` : `<div class="quiet-line">还没写备忘</div>`}`);
 }
 function openDrawer() { $("#island").classList.add("open"); setTimeout(() => $("#drawer").focus(), 50); }
-function closeDrawer() { $("#island").classList.remove("open"); }
+function closeDrawer() { $("#island").classList.remove("open"); drawerId = ""; }
 
 /* 侧栏 */
 function renderTree(cur) {
@@ -436,6 +440,7 @@ async function route(keepScroll) {
   const scroll = $("#scroll").scrollTop;
   try {
     nav = await api("nav");
+    deptPage = null;
     renderTree(page);
     if (page === "legion") await renderLegion();
     else if (/^o[1-9]\d*$/.test(page)) await renderDept(page, tab);
@@ -443,7 +448,7 @@ async function route(keepScroll) {
     if (keepScroll) $("#scroll").scrollTop = scroll;
     if (toDrafts) { toDrafts = false; $("#drafts")?.scrollIntoView({ block: "start" }); }
     if (open) {
-      await (open[0] === "c" ? openChoice(open) : open[0] === "s" ? openSchedule(open) : openTask(open));
+      await ({ c: openChoice, s: openSchedule, a: openLeader }[open[0]] || openTask)(open);
       if (!$("#island").classList.contains("open")) openDrawer();
     } else closeDrawer();
   } catch (err) { fail(err); }
@@ -457,7 +462,6 @@ addEventListener("hashchange", () => route(false));
 $("#mnav").onchange = e => { location.hash = e.target.value; };
 document.addEventListener("click", e => {
   if (e.target.closest("[data-drafts]")) toDrafts = true;
-  const ld = e.target.closest("[data-lead]"); if (ld) openKids.add(ld.dataset.lead);
   const fold = e.target.closest("#drawer [data-g]");
   if (fold) {
     const k = fold.dataset.g;

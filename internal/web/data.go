@@ -420,7 +420,8 @@ type DeptPage struct {
 	Rules     []Rule         `json:"rules"`
 	Inherited []Rule         `json:"inherited"`
 	RuleMax   int            `json:"rule_max"`
-	Accept    *Accept        `json:"accept"` // 验收人（沿树继承）；缺省 auto 为空
+	MemoMax   int            `json:"memo_max"` // 负责人备忘上限（字），抽屉里写「用量/上限」
+	Accept    *Accept        `json:"accept"`   // 验收人（沿树继承）；缺省 auto 为空
 	Materials []org.Material `json:"materials"`
 	MatMax    int            `json:"material_max"` // 资料文本总量上限（字），用量由页面按 units 合计
 	Schedules []Sched        `json:"schedules"`
@@ -428,7 +429,7 @@ type DeptPage struct {
 }
 
 // Leader 是部门负责人：自己没有就是往上最近一级的（Inherited），和事件投递同一个判定（org.Recipient）。
-// Depts（直接负责的部门）与 Memo（备忘全文）在页面上点开负责人一行才显示。
+// Depts（直接负责的部门）与 Memo（备忘全文）在页面上点开负责人一行、在抽屉里显示。
 type Leader struct {
 	ID        string `json:"id"`
 	Name      string `json:"name"`
@@ -465,7 +466,7 @@ func loadDept(ctx context.Context, q store.Querier, data, id string) (DeptPage, 
 		return DeptPage{}, err
 	}
 	page := DeptPage{Dept: d, Path: []Pair{}, Subs: []DeptBrief{}, Rules: []Rule{}, Inherited: []Rule{}, RuleMax: org.MaxPoints,
-		MatMax: org.MaxMaterial, Schedules: []Sched{}, SchedMax: org.MaxSchedules}
+		MemoMax: org.MaxMemo, MatMax: org.MaxMaterial, Schedules: []Sched{}, SchedMax: org.MaxSchedules}
 	chain, err := org.Ancestors(ctx, q, id)
 	if err != nil {
 		return DeptPage{}, err
@@ -799,9 +800,9 @@ type TaskDetail struct {
 	// 由哪条周期任务生成（sN），它交出的或它选自的选项单（cN）；没有为空。
 	Schedule string `json:"schedule,omitempty"`
 	Choice   string `json:"choice,omitempty"`
-	// 带来源的：派活人（记录人）的名字，是负责人时给他负责的第一个部门（点名字到部门页看负责人详情）。
+	// 带来源的：派活人（记录人）的名字，是负责人时给他的负责人抽屉地址「oN/aN」（负责的第一个部门/身份）。
 	ByName string `json:"by_name,omitempty"`
-	ByDept string `json:"by_dept,omitempty"`
+	ByLead string `json:"by_lead,omitempty"`
 }
 
 func loadTask(ctx context.Context, q store.Querier, id string) (TaskDetail, error) {
@@ -856,7 +857,7 @@ func loadTask(ctx context.Context, q store.Querier, id string) (TaskDetail, erro
 	return out, err
 }
 
-// recorder 填来源一行的记录人：派活人的名字（org.NameOf），负责人另给他负责的第一个部门。
+// recorder 填来源一行的记录人：派活人的名字（org.NameOf），负责人另给他的负责人抽屉地址。
 func recorder(ctx context.Context, q store.Querier, d *TaskDetail) error {
 	p, err := ledger.PartiesOf(ctx, q, d.Task.ID)
 	if err != nil || p.By == "" {
@@ -870,7 +871,7 @@ func recorder(ctx context.Context, q store.Querier, d *TaskDetail) error {
 		return err
 	}
 	if led := org.Led(leaders, p.By); len(led) > 0 {
-		d.ByDept = led[0]
+		d.ByLead = led[0] + "/" + p.By
 	}
 	return nil
 }

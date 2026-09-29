@@ -151,7 +151,11 @@ func (g *Gate) Loop(ctx context.Context) error {
 
 // InStage 列正在某交付阶段的任务（status running）。
 func InStage(ctx context.Context, q store.Querier, stage ledger.Stage) ([]ledger.Task, error) {
-	all, err := ledger.List(ctx, q, ledger.Filter{Status: []ledger.Status{ledger.Running}, Limit: 500})
+	return inStage(ctx, q, stage, ledger.Running)
+}
+
+func inStage(ctx context.Context, q store.Querier, stage ledger.Stage, status ...ledger.Status) ([]ledger.Task, error) {
+	all, err := ledger.List(ctx, q, ledger.Filter{Status: status, Limit: 500})
 	if err != nil {
 		return nil, err
 	}
@@ -176,10 +180,14 @@ func Paused(ctx context.Context, db *store.DB, p *pause.Store, t ledger.Task, ho
 	return p.Paused(ctx, pause.Scope{Orgs: orgs, Host: host})
 }
 
-// Sweep 推进一轮：先关卡，再审阅。
+// Sweep 推进一轮：先关卡，再审阅（含审阅阶段受阻的，见 review）。
 func (g *Gate) Sweep(ctx context.Context) error {
 	for _, stage := range []ledger.Stage{ledger.StageGate, ledger.StageReview} {
-		tasks, err := InStage(ctx, g.DB, stage)
+		status := []ledger.Status{ledger.Running}
+		if stage == ledger.StageReview {
+			status = append(status, ledger.Blocked)
+		}
+		tasks, err := inStage(ctx, g.DB, stage, status...)
 		if err != nil {
 			return err
 		}
@@ -334,6 +342,7 @@ func lastID(ctx context.Context, q store.Querier, task, kind string) (int64, err
 }
 
 // review 推进审阅阶段：这一轮还没有审阅任务就建一个交给派活；审阅任务结束后读结论。
+// 审阅阶段受阻的任务（多是审阅任务失败）只在审阅任务之后重跑出结论时接着按结论走。
 func (g *Gate) review(ctx context.Context, t ledger.Task) error {
 	passedAt, err := lastID(ctx, g.DB, t.ID, string(ledger.GatePass))
 	if err != nil {
@@ -344,6 +353,9 @@ func (g *Gate) review(ctx context.Context, t ledger.Task) error {
 		return err
 	}
 	if pickedAt < passedAt {
+		if t.Status == ledger.Blocked {
+			return nil // 建审阅任务时出错受阻，等人处理
+		}
 		return g.startReview(ctx, t)
 	}
 	ref, _, err := Last(ctx, g.DB, t.ID, KindReviewer)
@@ -353,6 +365,9 @@ func (g *Gate) review(ctx context.Context, t ledger.Task) error {
 	rt, err := ledger.Get(ctx, g.DB, ref)
 	if err != nil {
 		return err
+	}
+	if t.Status == ledger.Blocked && (rt.Status != ledger.Done || rt.FinishedAt == nil || *rt.FinishedAt <= t.UpdatedAt) {
+		return nil // 受阻之后审阅任务没再完成过：结论已经用过或还没有
 	}
 	switch rt.Status {
 	case ledger.Todo, ledger.Queued, ledger.Running:

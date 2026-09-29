@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/liu-zhengdong/atrium/internal/gates"
 	"github.com/liu-zhengdong/atrium/internal/gates/fakegh"
@@ -120,6 +121,12 @@ func (e *env) lastNote(id string) string {
 		e.t.Fatal(err)
 	}
 	return h[len(h)-1].Body
+}
+
+func (e *env) count(id, kind string) int {
+	var n int
+	e.db.QueryRowContext(e.ctx, `SELECT count(*) FROM task_events WHERE task = ? AND kind = ?`, id, kind).Scan(&n)
+	return n
 }
 
 const goodBody = "## 做了什么\nx\n## 端到端验证\n$ atrium task ls\nok\n"
@@ -276,6 +283,54 @@ func TestReview(t *testing.T) {
 			}
 			if got := e.get(task.ID); got.Status != c.status || got.Stage != c.stage {
 				t.Fatalf("原任务 %s/%s，期望 %s/%s：%s", got.Status, got.Stage, c.status, c.stage, e.lastNote(task.ID))
+			}
+		})
+	}
+}
+
+// 审阅任务失败、原任务转受阻后，审阅任务重跑出了结论：原任务照结论接着走，不用人转交。
+func TestReviewRerunAfterBlock(t *testing.T) {
+	cases := []struct {
+		name   string
+		result string
+		status ledger.Status
+		stage  ledger.Stage
+		blocks int
+	}{
+		{"通过", "看过了\n审阅结论：通过", ledger.Running, ledger.StageMerge, 1},
+		{"打回", "a.go:1 缺测试\n审阅结论：打回", ledger.Queued, "", 1},
+		{"还是没写结论", "看过了", ledger.Blocked, ledger.StageReview, 2},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			e := setup(t)
+			dir := filepath.Join(t.TempDir(), "wt")
+			e.gh.Branch(dir, "t1-work", map[string]string{"a.go": "package a\n"})
+			e.gh.Open("t1-work", goodBody)
+			task := e.delivered("做事", "claude+haiku", dir)
+			e.sweep()
+			ref, _, _ := gates.Last(e.ctx, e.db, task.ID, gates.KindReviewer)
+			e.db.ExecContext(e.ctx, `DELETE FROM queue WHERE task = ?`, ref)
+			ledger.Apply(e.ctx, e.db, ref, ledger.Event{Kind: ledger.Start}, "dispatch", "")
+			ledger.Apply(e.ctx, e.db, ref, ledger.Event{Kind: ledger.ExitFail}, "dispatch", "没登录")
+			e.sweep()
+			e.sweep() // 受阻后审阅任务没再出结论：原任务不动，也不重复记受阻
+			if got := e.get(task.ID); got.Status != ledger.Blocked || got.Stage != ledger.StageReview || e.count(task.ID, "block") != 1 {
+				t.Fatalf("审阅任务失败原任务应受阻一次：%+v，受阻 %d 次", got, e.count(task.ID, "block"))
+			}
+
+			time.Sleep(2 * time.Millisecond) // 结论新旧按毫秒比
+			e.start(ref, "codex+gpt")        // 负责人改派重跑
+			ledger.Record(e.ctx, e.db, ref, gates.KindResult, "dispatch", c.result)
+			ledger.Record(e.ctx, e.db, ref, gates.KindWorktree, "dispatch", `{"host":"h1","dir":"`+filepath.ToSlash(t.TempDir())+`"}`)
+			e.exit(ref)
+			e.sweep()
+			e.sweep()
+			if got := e.get(ref); got.Status != ledger.Done {
+				t.Fatalf("审阅任务应完成：%+v", got)
+			}
+			if got := e.get(task.ID); got.Status != c.status || got.Stage != c.stage || e.count(task.ID, "block") != c.blocks {
+				t.Fatalf("原任务 %s/%s、受阻 %d 次，期望 %s/%s、%d 次：%s", got.Status, got.Stage, e.count(task.ID, "block"), c.status, c.stage, c.blocks, e.lastNote(task.ID))
 			}
 		})
 	}

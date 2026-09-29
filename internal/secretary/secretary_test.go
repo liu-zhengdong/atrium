@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"regexp"
 	"strings"
 	"testing"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/liu-zhengdong/atrium/internal/cli"
 	"github.com/liu-zhengdong/atrium/internal/events"
+	"github.com/liu-zhengdong/atrium/internal/platform"
 	"github.com/liu-zhengdong/atrium/internal/watch"
 )
 
@@ -179,5 +181,41 @@ func TestStatusLine(t *testing.T) {
 	}
 	if got := ansi.ReplaceAllString(StatusLine(v), ""); !strings.Contains(got, "另 2 件") {
 		t.Errorf("多了应折叠：%s", got)
+	}
+}
+
+func TestLiveness(t *testing.T) {
+	gone := errors.Join(platform.ErrEndpointGone, errors.New("no such file"))
+	busy := errors.New("connection refused")
+	type probe struct {
+		at  time.Duration // 距第一次探测
+		err error
+	}
+	cases := []struct {
+		name   string
+		probes []probe
+		exitAt int // 第几次探测后退出；-1 是一直不退出
+	}{
+		{"一直连得上", []probe{{0, nil}, {time.Minute, nil}, {10 * time.Minute, nil}}, -1},
+		{"服务重启期间一次连不上不退出", []probe{{0, nil}, {5 * time.Second, busy}, {10 * time.Second, nil}}, -1},
+		{"文件被删立即退出", []probe{{0, nil}, {5 * time.Second, gone}}, 1},
+		{"一开始文件就不在立即退出", []probe{{0, gone}}, 0},
+		{"一直连不上 2 分钟退出", []probe{{0, busy}, {time.Minute, busy}, {119 * time.Second, busy}, {2 * time.Minute, busy}}, 3},
+		{"中间连上一次重新计时", []probe{{0, busy}, {90 * time.Second, nil}, {100 * time.Second, busy}, {200 * time.Second, busy}, {220 * time.Second, busy}}, 4},
+		{"连不上一阵后文件被删立即退出", []probe{{0, busy}, {30 * time.Second, gone}}, 1},
+	}
+	start := time.Unix(1_800_000_000, 0)
+	for _, tc := range cases {
+		var l Liveness
+		got := -1
+		for i, p := range tc.probes {
+			if reason := l.Observe(start.Add(p.at), p.err); reason != "" {
+				got = i
+				break
+			}
+		}
+		if got != tc.exitAt {
+			t.Errorf("%s：第 %d 次后退出，应为 %d", tc.name, got, tc.exitAt)
+		}
 	}
 }

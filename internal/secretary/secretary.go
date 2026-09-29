@@ -2,7 +2,8 @@
 //
 // secretary bridge 在 Claude Code 秘书会话里常驻：挂 events wait --as secretary 取要处理的事件，
 // 攒 30 秒拼成一条「【Atrium 事件】」消息经会话收件 socket 注入；不替秘书确认；同一事件送过不重送，
-// 送过 30 分钟没确认再提醒一次；每 30 秒向服务报「秘书在听」；会话没了就退出。
+// 送过 30 分钟没确认再提醒一次；每 30 秒向服务报「秘书在听」；会话关了就退出（判定见 Liveness：
+// 收件地址不在了立即退出，地址还在但连不上要连续 2 分钟；没送进去的留着下一轮重送）。
 // statusline 给 Claude Code 状态栏一行字；服务不在只显示「未运行」，不拉起。
 // --install-hook 同时在项目设置 env 里写 ATRIUM_AS=secretary：秘书会话发的命令署名秘书（权限同用户）。
 // 执行者的工作树顺着读到秘书目录的项目设置，SessionStart hook 也会在执行者会话里跑：那里 --detach 静默退出。
@@ -204,6 +205,21 @@ type bridge struct {
 	log      *log.Logger
 	sent     Sent
 	batch    time.Duration
+	live     Liveness
+}
+
+// closed 记一次连会话的结果（探测或送入），返回退出原因；空串是会话还在。连不上与恢复各记一行日志。
+func (b *bridge) closed(err error) string {
+	wasDown := b.live.Down()
+	reason := b.live.Observe(time.Now(), err)
+	switch {
+	case reason != "":
+	case err != nil && !wasDown:
+		b.log.Printf("连不上会话，稍后重试（连续 %d 分钟连不上才算会话已关闭）：%v", int(SessionDownAfter.Minutes()), err)
+	case err == nil && wasDown:
+		b.log.Printf("会话又连上了")
+	}
+	return reason
 }
 
 func (b *bridge) listen(stop bool) error {
@@ -249,8 +265,8 @@ func (b *bridge) run(ctx context.Context) string {
 		if r, err := readRecord(b.p); err == nil && r != nil && r.PID != b.me {
 			return "另一个秘书会话的 bridge 已接手"
 		}
-		if err := platform.ProbeEndpoint(b.endpoint, 3*time.Second); errors.Is(err, platform.ErrEndpointGone) {
-			return "会话已关闭（收件地址不在了）"
+		if reason := b.closed(platform.ProbeEndpoint(b.endpoint, 3*time.Second)); reason != "" {
+			return reason
 		}
 		wait := 60 * time.Second
 		if len(pending) > 0 {
@@ -275,19 +291,21 @@ func (b *bridge) run(ctx context.Context) string {
 			continue
 		}
 		batch := PlanBatch(b.sent, pending, store.Now(), RemindAfter)
-		pending = nil
 		if batch.Empty() {
+			pending = nil
 			continue
 		}
 		err := platform.SendLines(b.endpoint, InboxLines(b.token, Prompt(batch, RemindAfter)), 5*time.Second)
-		if errors.Is(err, platform.ErrEndpointGone) {
-			return "会话已关闭（收件地址不在了）"
+		if reason := b.closed(err); reason != "" {
+			return reason
 		}
 		if err != nil {
-			// 没送进去：事件已取走，租约到期后会重投，那时按新事件再送。
-			b.log.Printf("送入会话失败：%v", err)
+			// 没送进去：留在 pending，5 秒后下一轮重送（不等租约到期重投）。
+			b.log.Printf("送入会话失败，5 秒后重送：%v", err)
+			sleep(ctx, 5*time.Second)
 			continue
 		}
+		pending = nil
 		all := append(append([]events.Row{}, batch.Fresh...), batch.Remind...)
 		b.sent.Record(all, store.Now())
 		b.log.Printf("送入 %d 条（其中再提醒 %d 条）", len(all), len(batch.Remind))

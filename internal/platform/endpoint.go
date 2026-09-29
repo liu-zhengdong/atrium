@@ -32,7 +32,7 @@ func MessagingEndpoint(goos, raw string) string {
 	return ""
 }
 
-// ErrEndpointGone 表示会话已经没了（地址不在、没人监听）；其余错误当作暂时的。
+// ErrEndpointGone 表示收件地址不在了（socket 文件、命名管道不存在）；其余错误（含拒绝连接）当作暂时的。
 var ErrEndpointGone = errors.New("会话收件地址不在了")
 
 // SendLines 连上收件地址，写完各行（每行以换行结尾）后关闭。Claude Code 不回执：写完没出错就算送到。

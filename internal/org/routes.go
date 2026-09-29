@@ -18,6 +18,9 @@ type Show struct {
 	Inherited []Point  `json:"inherited"`
 	Room      int      `json:"room"` // 还能加几条要点
 	Limits    []Count  `json:"limits"`
+	// Accept 是验收人（沿树继承）；AcceptFrom 是设它的部门，没设过（缺省 auto）为空。
+	Accept     string `json:"accept"`
+	AcceptFrom string `json:"accept_from,omitempty"`
 }
 
 func Routes(r *api.Router, env *app.Env) {
@@ -42,6 +45,9 @@ func Routes(r *api.Router, env *app.Env) {
 		}
 		s := Show{Dept: d, Children: []*Node{}}
 		if s.Path, err = Ancestors(q.Context(), db, id); err != nil {
+			return nil, err
+		}
+		if s.Accept, s.AcceptFrom, err = Acceptor(q.Context(), db, id); err != nil {
 			return nil, err
 		}
 		chain, err := Chain(q.Context(), db, id)

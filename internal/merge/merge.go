@@ -2,7 +2,7 @@
 // gh pr merge --squash --match-head-commit。冲突或检查没过交回原执行者，第三次转受阻。
 //
 // 命令：task merge（登记亲手做的 PR，或放行受阻的交付，都进合入队列）。
-// 快检查进程登记给 watch（Role check），10 分钟没输出由 watch 结束，这里判交回还是重跑（check.go）。结果经 ledger.Apply(Merged / Bounce) 落账。
+// 快检查进程登记给 watch（Role check），10 分钟没输出由 watch 结束，这里判交回还是重跑（check.go）。结果经 ledger.Apply(Land / Bounce) 落账：合入、上线是 pr 交付方式的落地步骤。
 package merge
 
 import (
@@ -19,6 +19,7 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/events"
 	"github.com/liu-zhengdong/atrium/internal/gates"
 	"github.com/liu-zhengdong/atrium/internal/ledger"
+	"github.com/liu-zhengdong/atrium/internal/org"
 	"github.com/liu-zhengdong/atrium/internal/release"
 	"github.com/liu-zhengdong/atrium/internal/store"
 )
@@ -51,6 +52,9 @@ func Commands(t *cli.Table) {
 			var t ledger.Task
 			if err := c.Call("POST", "/api/tasks/"+id+"/merge", Body{PR: c.Str("pr"), Repo: c.Str("repo")}, &t); err != nil {
 				return err
+			}
+			if t.Stage == ledger.StageAccept {
+				return c.Done(t, fmt.Sprintf("%s 已登记 %s，部门的验收人要先验收", t.ID, t.PR), "atrium task show "+t.ID)
 			}
 			text, next, err := events.AsyncNext(c, fmt.Sprintf("%s 已进合入队列（%s，%s）", t.ID, t.Repo, t.PR), "atrium task wait "+t.ID)
 			if err != nil {
@@ -99,12 +103,19 @@ func Routes(r *api.Router, env *app.Env) {
 }
 
 // Deliver 把任务放进合入队列：登记 PR（给了的话）、核对 PR 开着、Apply(Deliver)。
+// 放行的人判不了这个部门的验收（负责人碰上验收人是用户的部门）时，先停在等验收。
 func Deliver(ctx context.Context, db *store.DB, r gates.Runner, id string, in Body, actor string) (ledger.Task, error) {
 	t, err := ledger.Get(ctx, db, id)
 	if err != nil {
 		return t, err
 	}
-	if _, err := ledger.Transition(ledger.State{Status: t.Status, Stage: t.Stage}, ledger.Event{Kind: ledger.Deliver}); err != nil {
+	ev := ledger.Event{Kind: ledger.Deliver, Land: ledger.StageMerge}
+	if who, _, err := org.Acceptor(ctx, db, t.Org); err != nil {
+		return t, err
+	} else if who != org.AcceptAuto && !org.MayAccept(actor, who) {
+		ev.AcceptBy = who
+	}
+	if _, err := ledger.Transition(ledger.State{Status: t.Status, Stage: t.Stage}, ev); err != nil {
 		return t, api.Conflict("%s：%v", id, err).WithNext("atrium task show " + id)
 	}
 	repo, ref := t.Repo, t.PR
@@ -148,5 +159,9 @@ func Deliver(ctx context.Context, db *store.DB, r gates.Runner, id string, in Bo
 	if err := ledger.SetFacts(ctx, db, id, ledger.Facts{PR: &pr.URL}, actor); err != nil {
 		return t, err
 	}
-	return ledger.Apply(ctx, db, id, ledger.Event{Kind: ledger.Deliver}, actor, "进合入队列："+pr.URL)
+	note := "进合入队列：" + pr.URL
+	if ev.AcceptBy != "" {
+		note = "登记 " + pr.URL + "，等验收：atrium task accept " + id
+	}
+	return ledger.Apply(ctx, db, id, ev, actor, note)
 }

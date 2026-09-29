@@ -101,8 +101,8 @@ func (q *Queue) next(ctx context.Context) (ledger.Task, bool, error) {
 	var items []Item
 	for _, t := range tasks {
 		var at int64
-		if err := q.DB.QueryRowContext(ctx, `SELECT COALESCE(max(id), 0) FROM task_events WHERE task = ? AND kind IN (?, ?, ?)`,
-			t.ID, ledger.GatePass, ledger.ReviewPass, ledger.Deliver).Scan(&at); err != nil {
+		if err := q.DB.QueryRowContext(ctx, `SELECT COALESCE(max(id), 0) FROM task_events WHERE task = ? AND kind IN (?, ?, ?, ?)`,
+			t.ID, ledger.GatePass, ledger.ReviewPass, ledger.Accept, ledger.Deliver).Scan(&at); err != nil {
 			return ledger.Task{}, false, err
 		}
 		byID[t.ID] = t
@@ -237,7 +237,7 @@ func (q *Queue) merged(ctx context.Context, t ledger.Task, repo, url, commit, no
 	if need {
 		note += "，等发版上线"
 	}
-	_, err := ledger.Apply(ctx, q.DB, t.ID, ledger.Event{Kind: ledger.Merged, NeedRelease: need}, Actor, note+"（"+short(commit)+"）")
+	_, err := ledger.Apply(ctx, q.DB, t.ID, ledger.Event{Kind: ledger.Land, Land: ledger.StageMerged, Final: !need}, Actor, note+"（"+short(commit)+"）")
 	return err
 }
 

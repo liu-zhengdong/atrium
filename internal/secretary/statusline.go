@@ -20,8 +20,8 @@ const (
 // statusTasks：状态栏最多列几件任务，多了写「另 N 件」。
 const statusTasks = 4
 
-// kindOrder：先列到期的，再按执行者、负责人、秘书、检查、发版。
-var kindOrder = map[string]int{"worker": 1, "leader": 2, "secretary": 3, "check": 4, "release": 5}
+// kindOrder：先列到期的，再按等你验收、执行者、负责人、秘书、检查、发版。
+var kindOrder = map[string]int{"user": 0, "worker": 1, "leader": 2, "secretary": 3, "check": 4, "release": 5}
 
 // StatusLine 是给 Claude Code 状态栏的一行（纯函数）。
 func StatusLine(v watch.View) string {
@@ -91,6 +91,9 @@ func holderShort(h watch.Holder) string {
 			w = "执行者"
 		}
 		return w
+	}
+	if h.Kind == "user" {
+		return h.Text
 	}
 	who := h.Who
 	if who == "secretary" {

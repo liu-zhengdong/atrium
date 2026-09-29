@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/liu-zhengdong/atrium/internal/ledger"
+	"github.com/liu-zhengdong/atrium/internal/org"
 )
 
 // Role 是期限表里的一行：按谁持球、从什么时候起算。
@@ -16,6 +17,7 @@ const (
 	RoleWorker      Role = "worker"       // 执行者有过进展后又停住
 	RoleCheck       Role = "check"        // 合入前的快检查
 	RoleRelease     Role = "release"      // 已合入等发版
+	RoleAccept      Role = "accept"       // 等验收人（部门设置的 leader 或 user）
 	RoleLeader      Role = "leader"       // 负责人（受阻、失败、待派活、积压事件）
 	RoleSecretary   Role = "secretary"    // 秘书的事件没人取
 )
@@ -34,6 +36,7 @@ var Rules = []Rule{
 	{RoleWorker, "执行者", 20 * time.Minute, "结束，转受阻交负责人"},
 	{RoleCheck, "检查", 10 * time.Minute, "结束；有失败用例交回，没有按没跑成重跑一次（合入队列判）"},
 	{RoleRelease, "发版", 30 * time.Minute, "告诉负责人"},
+	{RoleAccept, "验收人", 24 * time.Hour, "提醒验收人一次，不往上交"},
 	{RoleLeader, "负责人", 30 * time.Minute, "叫醒一次，再 30 分钟上交上一层"},
 	{RoleSecretary, "秘书", 3 * time.Minute, "状态栏标红"},
 }
@@ -63,7 +66,7 @@ func (p Proc) Local() bool { return p.Host == "" || p.Host == "h1" }
 
 // Holder 是「球现在在谁手里」。Role 为空表示不算期限（排队、等依赖、运行时自己推进）。
 type Holder struct {
-	Kind  string `json:"kind"` // worker check runtime release leader secretary deps draft
+	Kind  string `json:"kind"` // worker check runtime release leader secretary user deps draft
 	Who   string `json:"who,omitempty"`
 	Text  string `json:"text"`
 	Role  Role   `json:"role,omitempty"`
@@ -75,6 +78,7 @@ type Holder struct {
 type Facts struct {
 	Task       ledger.Task
 	Owner      string   // 所属部门往上最近的负责人，没有是 secretary
+	Acceptor   string   // 等验收时部门的验收人（org.AcceptLeader、org.AcceptUser）；别的阶段不取
 	WaitingOn  []string // 没完成的依赖
 	Proc       *Proc    // 与当前阶段对应的在跑进程；没有为 nil
 	ProgressAt int64    // 进程最近一次有进展；0 表示拉起后还没有
@@ -123,6 +127,13 @@ func HolderOf(f Facts) Holder {
 		return Holder{Kind: "runtime", Who: "运行时", Text: "关卡在查"}
 	case ledger.StageReview:
 		return Holder{Kind: "runtime", Who: "运行时", Text: "审阅中"}
+	case ledger.StageAccept:
+		next := "atrium task accept " + t.ID
+		if f.Acceptor == org.AcceptUser {
+			return Holder{Kind: "user", Who: "u1", Text: "等你验收", Role: RoleAccept, Since: t.UpdatedAt, Next: next}
+		}
+		owner.Text, owner.Role, owner.Next = "等负责人验收", RoleAccept, next
+		return owner
 	case ledger.StageMerge:
 		if f.Proc != nil && f.Proc.Role == "check" {
 			since := f.Proc.At
@@ -239,6 +250,10 @@ func Decide(h Holder, o Obs, now int64) Action {
 		return Keep
 	case RoleRelease:
 		return Notify
+	case RoleAccept:
+		if lv == 1 { // 只提醒一次：验收人已是这件事的最上层
+			return Notify
+		}
 	case RoleLeader:
 		if lv == 2 {
 			return Escalate

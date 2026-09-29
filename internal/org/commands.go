@@ -67,6 +67,14 @@ func Commands(t *cli.Table) {
 					fmt.Fprintf(&b, "%s：%s\n", kv[0], kv[1])
 				}
 			}
+			switch s.AcceptFrom {
+			case "":
+				fmt.Fprintf(&b, "验收人：%s（缺省）\n", s.Accept)
+			case d.ID:
+				fmt.Fprintf(&b, "验收人：%s\n", s.Accept)
+			default:
+				fmt.Fprintf(&b, "验收人：%s（继承自 %s）\n", s.Accept, s.AcceptFrom)
+			}
 			if len(s.Children) > 0 {
 				b.WriteString("\n下属：\n")
 				for _, ch := range s.Children {
@@ -121,9 +129,10 @@ func Commands(t *cli.Table) {
 			}
 			return c.Done(d, fmt.Sprintf("已建部门 %s %s", d.ID, d.Name), "atrium point add "+d.ID+" <一句话>")
 		}})
-	t.Add(cli.Command{Path: "org edit", Args: "<oN>", Summary: "改部门：名字、上级、介绍、负责人、仓库；--delete 删掉",
+	t.Add(cli.Command{Path: "org edit", Args: "<oN>", Summary: "改部门：名字、上级、介绍、负责人、验收人、仓库；--delete 删掉",
 		Flags: append([]cli.Flag{
 			{Name: "name", Value: "名字", Help: "改名"},
+			{Name: "accept", Value: "谁", Help: "验收人（沿树继承）：auto 运行时过了关卡就落地（缺省）/ leader 负责人 / user 你；给 - 改回继承上级"},
 			{Name: "parent", Value: "oN", Help: "挪到别的上级下（给 - 挪到顶层）"},
 			{Name: "repo-add", Value: "仓库", Multi: true, Help: "加仓库"},
 			{Name: "repo-rm", Value: "仓库", Multi: true, Help: "去掉仓库"},
@@ -135,7 +144,7 @@ func Commands(t *cli.Table) {
 				return err
 			}
 			p := DeptPatch{Name: c.Opt("name"), Parent: c.Opt("parent"), What: c.Opt("what"), Uses: c.Opt("uses"),
-				Now: c.Opt("now"), Next: c.Opt("next"), Leader: c.Opt("leader"),
+				Now: c.Opt("now"), Next: c.Opt("next"), Leader: c.Opt("leader"), Accept: c.Opt("accept"),
 				RepoAdd: c.List("repo-add"), RepoDrop: c.List("repo-rm"), Delete: c.Bool("delete")}
 			var d Dept
 			if err := c.Call("PATCH", "/api/org/"+url.PathEscape(id), p, &d); err != nil {

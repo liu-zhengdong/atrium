@@ -17,6 +17,7 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/gates/fakegh"
 	"github.com/liu-zhengdong/atrium/internal/ledger"
 	"github.com/liu-zhengdong/atrium/internal/merge"
+	"github.com/liu-zhengdong/atrium/internal/org"
 	"github.com/liu-zhengdong/atrium/internal/pause"
 	"github.com/liu-zhengdong/atrium/internal/platform"
 	"github.com/liu-zhengdong/atrium/internal/store"
@@ -276,7 +277,7 @@ func TestThirdBounceBlocksAndMergeReleases(t *testing.T) {
 			// 模拟 dispatch 重派、执行者再次交付、关卡再过
 			e.db.ExecContext(e.ctx, `DELETE FROM queue WHERE task = ?`, task.ID)
 			for _, k := range []ledger.EventKind{ledger.Start, ledger.ExitOK, ledger.GatePass} {
-				if _, err := ledger.Apply(e.ctx, e.db, task.ID, ledger.Event{Kind: k}, "t", ""); err != nil {
+				if _, err := ledger.Apply(e.ctx, e.db, task.ID, ledger.Event{Kind: k, Land: ledger.StageMerge}, "t", ""); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -383,5 +384,40 @@ func TestPausedNotMerged(t *testing.T) {
 	e.drain()
 	if got := e.get(task.ID); got.Stage != ledger.StageMerge || got.Status != ledger.Running {
 		t.Fatalf("暂停时不合：%+v", got)
+	}
+}
+
+// 验收人是用户的部门：负责人放行的交付先等你验收，合入队列不碰；验收通过后进合入队列并合入。
+func TestAcceptThenMerge(t *testing.T) {
+	e := setup(t, nil)
+	d, err := org.Add(e.ctx, e.db, org.NewDept{Name: "哆啦美"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	who := org.AcceptUser
+	if _, err := org.Edit(e.ctx, e.db, d.ID, org.DeptPatch{Accept: &who}); err != nil {
+		t.Fatal(err)
+	}
+	e.gh.Branch(filepath.Join(t.TempDir(), "wt"), "t1-a", map[string]string{"a.go": "package a\n"})
+	n := e.gh.Open("t1-a", "")
+	task, _ := ledger.Add(e.ctx, e.db, ledger.NewTask{Title: "交付", Org: d.ID}, "u1")
+	got, err := merge.Deliver(e.ctx, e.db, e.gh, task.ID, merge.Body{PR: "https://github.com/o/r/pull/" + strconv.Itoa(n)}, "a1")
+	if err != nil || got.Status != ledger.Running || got.Stage != ledger.StageAccept {
+		t.Fatalf("负责人放行应先等你验收：%+v %v", got, err)
+	}
+	e.drain()
+	if got := e.get(task.ID); got.Stage != ledger.StageAccept {
+		t.Fatalf("合入队列不该碰等验收的：%+v", got)
+	}
+	g := &gates.Gate{DB: e.db, Pause: e.q.Pause, R: e.gh, Log: e.q.Log}
+	if got, err := g.Accept(e.ctx, task.ID, "u1"); err != nil || got.Stage != ledger.StageMerge {
+		t.Fatalf("验收通过应进合入队列：%+v %v", got, err)
+	}
+	e.drain()
+	if got := e.get(task.ID); got.Status != ledger.Done || got.Stage != ledger.StageMerged {
+		t.Fatalf("应合入完成：%+v %s", got, e.lastNote(task.ID))
+	}
+	if files := e.gh.Must(e.gh.Bare, "ls-tree", "--name-only", "main"); !strings.Contains(files, "a.go") {
+		t.Fatalf("main 上应有 a.go：%s", files)
 	}
 }

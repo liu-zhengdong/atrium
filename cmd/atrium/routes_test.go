@@ -38,6 +38,8 @@ func TestLeaderRulesCoverRealRoutes(t *testing.T) {
 		"POST /api/tasks/{id}/run":            leaders.RuleTaskRef,
 		"POST /api/tasks/{id}/tell":           leaders.RuleTaskRef,
 		"POST /api/tasks/{id}/merge":          leaders.RuleTaskRef,
+		"POST /api/tasks/{id}/accept":         leaders.RuleTaskRef, // 验收人是用户时由 gates 另拒
+		"POST /api/tasks/{id}/reject":         leaders.RuleTaskRef,
 		"POST /api/org/{id}/points":           leaders.RuleDeptRef,
 		"PATCH /api/points/{id}":              leaders.RulePointRef,
 		"POST /api/materials":                 leaders.RuleBodyDept,

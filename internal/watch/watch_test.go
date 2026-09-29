@@ -12,6 +12,7 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/app"
 	"github.com/liu-zhengdong/atrium/internal/events"
 	"github.com/liu-zhengdong/atrium/internal/ledger"
+	"github.com/liu-zhengdong/atrium/internal/org"
 	"github.com/liu-zhengdong/atrium/internal/pause"
 	"github.com/liu-zhengdong/atrium/internal/platform"
 	"github.com/liu-zhengdong/atrium/internal/store"
@@ -76,6 +77,8 @@ func TestHolderOf(t *testing.T) {
 		{"检查在跑", Facts{Task: task(ledger.Running, ledger.StageMerge), Proc: &Proc{Role: "check", At: 700}}, "check", "运行时", RoleCheck, 700},
 		{"排队合入", Facts{Task: task(ledger.Running, ledger.StageMerge)}, "runtime", "运行时", "", 0},
 		{"等发版", Facts{Task: task(ledger.Running, ledger.StageMerged)}, "release", "运行时", RoleRelease, 500},
+		{"等你验收", Facts{Task: task(ledger.Running, ledger.StageAccept), Owner: "a1", Acceptor: org.AcceptUser}, "user", "u1", RoleAccept, 500},
+		{"等负责人验收", Facts{Task: task(ledger.Running, ledger.StageAccept), Owner: "a1", Acceptor: org.AcceptLeader}, "leader", "a1", RoleAccept, 500},
 		{"失败归负责人", Facts{Task: task(ledger.Failed, ""), Owner: "a2"}, "leader", "a2", RoleLeader, 500},
 		{"已完成", Facts{Task: task(ledger.Done, "")}, "", "", "", 0},
 	}
@@ -111,6 +114,9 @@ func TestDecide(t *testing.T) {
 		{"等发版到期", Holder{Kind: "release", Role: RoleRelease, Since: now - 31*minute}, Obs{}, Notify},
 		{"负责人到期", Holder{Kind: "leader", Role: RoleLeader, Since: now - 31*minute}, Obs{}, Notify},
 		{"负责人再到期上交", Holder{Kind: "leader", Role: RoleLeader, Since: now - 61*minute}, Obs{}, Escalate},
+		{"验收人没到期", Holder{Kind: "user", Role: RoleAccept, Since: now - 60*minute}, Obs{}, Keep},
+		{"验收人到期提醒", Holder{Kind: "user", Role: RoleAccept, Since: now - 25*60*minute}, Obs{}, Notify},
+		{"验收人只提醒一次不上交", Holder{Kind: "user", Role: RoleAccept, Since: now - 49*60*minute}, Obs{}, Keep},
 		{"不算期限", Holder{Kind: "runtime"}, Obs{}, Keep},
 	}
 	for _, c := range cases {
@@ -280,5 +286,38 @@ func TestTickPausedAndEscalates(t *testing.T) {
 	Tick(ctx, env)
 	if rows, _ := events.Pending(ctx, env.DB, "a1", false, 10); len(rows) != 0 {
 		t.Fatalf("确认后同一次到期不该再发：%+v", rows)
+	}
+}
+
+// 等你验收超过一天：经秘书提醒一次，不投负责人、不往上交。
+func TestTickRemindsUserToAccept(t *testing.T) {
+	env, ctx := setup(t)
+	env.DB.Exec(`INSERT INTO acceptors (department, who) VALUES ('o1', 'user')`)
+	task, _ := ledger.Add(ctx, env.DB, ledger.NewTask{Title: "等验收", Org: "o2"}, "u1")
+	for _, ev := range []ledger.Event{{Kind: ledger.Enqueue}, {Kind: ledger.Start}, {Kind: ledger.ExitOK}, {Kind: ledger.GatePass, AcceptBy: org.AcceptUser}} {
+		if _, err := ledger.Apply(ctx, env.DB, task.ID, ev, "runtime", ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	env.DB.Exec(`UPDATE events SET acked_at = 1`) // 转入等验收时投的事件先确认掉，只看提醒
+	env.DB.Exec(`UPDATE tasks SET updated_at = ? WHERE id = ?`, store.Now()-25*60*minute, task.ID)
+	for i := 0; i < 2; i++ {
+		if err := Tick(ctx, env); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rows, _ := events.Pending(ctx, env.DB, "secretary", false, 10)
+	if len(rows) != 1 || rows[0].Kind != events.Overdue || rows[0].Task != task.ID {
+		t.Fatalf("应经秘书提醒一次：%+v", rows)
+	}
+	for _, who := range []string{"a1", "a2"} {
+		if rows, _ := events.Pending(ctx, env.DB, who, false, 10); len(rows) != 0 {
+			t.Fatalf("不该投负责人 %s：%+v", who, rows)
+		}
+	}
+	env.DB.Exec(`UPDATE tasks SET updated_at = ? WHERE id = ?`, store.Now()-49*60*minute, task.ID)
+	Tick(ctx, env)
+	if rows, _ := events.Pending(ctx, env.DB, "secretary", false, 10); len(rows) != 1 {
+		t.Fatalf("两天也只提醒过一次：%+v", rows)
 	}
 }

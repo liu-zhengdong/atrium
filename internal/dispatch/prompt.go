@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/liu-zhengdong/atrium/internal/gates"
 	"github.com/liu-zhengdong/atrium/internal/workers"
 )
 
@@ -22,17 +23,13 @@ type PromptInput struct {
 	Guide   string // 目标仓库自己的约定（.agents/README.md 正文）；没有就空
 }
 
-// 通用约束：对所有仓库成立的，每件活都附；仓库自己的约定从目标仓库的 .agents/README.md 读（PromptInput.Guide）。
+// 通用约束：对所有仓库成立的，每件活都附；怎么交由交付方式定（gates.PromptRules）；
+// 仓库自己的约定从目标仓库的 .agents/README.md 读（PromptInput.Guide）。
 var commonRules = []string{
 	"凭据不打印、不写进提交、PR、issue 或日志。",
 	"不碰用户的真实环境：不启停用户在跑的服务，不读写用户主目录里的数据；要跑起来验证，就用临时数据目录与空闲端口起隔离实例，用完停掉。",
 	"只跑改动相关的快检查，不跑全量测试（全量由运行时跑）。",
 	"过程说明与最后的总结用中文（命令、代码、标识符照原样）。",
-}
-
-var repoRules = []string{
-	"只交 PR：在分支 %s 上提交、推送并开 PR；不要合入、不要改默认分支、不要发版。",
-	"PR 正文写「端到端验证」一节：在隔离实例里跑了什么、输出摘要；会停服务、改机器状态的步骤标注「只在隔离环境」。",
 }
 
 // BuildPrompt 拼提示词（纯函数）：标题 + 详述 + 部门要点链 + 技能路径 + 执行者档案正文 + 仓库约定 + 捎话与交回原因 + 通用约束。
@@ -63,15 +60,7 @@ func BuildPrompt(in PromptInput) string {
 	}
 	section("上次交付被交回的原因（先解决这些）", in.Bounces)
 	section("运行中的补充（后说的优先）", in.Tells)
-	rules := []string{}
-	if in.Repo != "" {
-		for _, r := range repoRules {
-			rules = append(rules, strings.ReplaceAll(r, "%s", in.Branch))
-		}
-	} else {
-		rules = append(rules, "这件活没有仓库：在当前目录干，交付物是最后一条消息里的结论（写清调查结果与依据）。")
-	}
-	section("通用约束", append(rules, commonRules...))
+	section("通用约束", append(gates.PromptRules(in.Repo, in.Branch), commonRules...))
 	return b.String()
 }
 

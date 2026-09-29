@@ -201,6 +201,7 @@ func TestBounceCause(t *testing.T) {
 		{"merge_queue", "合入冲突：rebase 到 origin/main 时冲突", "冲突"},
 		{"merge_queue", "快检查没过（rebase 到 origin/main 后跑 .agents/check）", "检查没过"},
 		{"review", "审阅打回（t9，codex）：缺测试", "审阅打回"},
+		{"accept", "验收打回（u1）：本地跑不起来", "验收打回"},
 		{"gate", "关卡没过：没有 PR", "关卡没过"},
 	}
 	for _, c := range cases {

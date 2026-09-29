@@ -301,6 +301,9 @@ func perform(ctx context.Context, env *app.Env, hk Hooks, t ledger.Task, f Facts
 		return nil
 	}
 	target := f.Owner
+	if h.Who == "u1" { // 等你验收：经秘书提醒
+		target = org.Secretary
+	}
 	if act == Escalate {
 		up, err := upOf(ctx, db, t.Org)
 		if err != nil || up == "" {

@@ -1,8 +1,10 @@
 // Package gates 是验收关卡：执行者退出后运行时自己查事实（PR、提交、推送、改动规模、PR 正文），
-// 按档案 checks 判过或不过，不采信执行者自述；高风险或低信任的交付先另派不同工具、不同模型的审阅者。
+// 按档案 checks 判过或不过，不采信执行者自述；高风险或低信任的交付先另派不同工具、不同模型的审阅者；
+// 部门的验收人是 leader、user 时停在等验收，由 task accept / task reject 判。
 //
-// 判定在 judge.go（纯函数）；查事实在 facts.go；与 dispatch 的约定在 records.go。
-// 结论经 ledger.Apply(GatePass / ReviewPass / Bounce / Block) 落账，理由用 ledger.Record 记进经历。
+// 交付方式（pr、choice、message：怎么交、查什么、怎么落地）在 delivery.go；判定在 judge.go（纯函数）；
+// 查事实在 facts.go；与 dispatch 的约定在 records.go。
+// 结论经 ledger.Apply(GatePass / ReviewPass / Accept / Bounce / Block) 落账，理由用 ledger.Record 记进经历。
 // merge、release 也用本包的 Runner、ViewPR、Bounce、Paused。
 package gates
 
@@ -12,15 +14,17 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"strings"
 	"time"
 	"unicode/utf8"
 
 	"github.com/liu-zhengdong/atrium/internal/api"
 	"github.com/liu-zhengdong/atrium/internal/app"
+	"github.com/liu-zhengdong/atrium/internal/cli"
+	"github.com/liu-zhengdong/atrium/internal/events"
 	"github.com/liu-zhengdong/atrium/internal/ledger"
 	"github.com/liu-zhengdong/atrium/internal/org"
-	"github.com/liu-zhengdong/atrium/internal/org/agenda"
 	"github.com/liu-zhengdong/atrium/internal/pause"
 	"github.com/liu-zhengdong/atrium/internal/store"
 )
@@ -28,12 +32,88 @@ import (
 // Actor 是运行时关卡在经历里的署名。
 const Actor = "gates"
 
-// Module 是本包接入点：后台循环推进关卡与审阅阶段的任务。
+// Module 是本包接入点：后台循环推进关卡与审阅阶段的任务；task accept / task reject 判等验收的任务。
 func Module() app.Module {
-	return app.Module{Name: "gates", Run: func(ctx context.Context, env *app.Env) error {
-		g := &Gate{DB: env.DB, Pause: env.Pause, R: NewExec(), Log: env.Log}
-		return g.Loop(ctx)
-	}}
+	return app.Module{Name: "gates", Commands: Commands, Routes: Routes,
+		Run: func(ctx context.Context, env *app.Env) error {
+			g := &Gate{DB: env.DB, Pause: env.Pause, R: NewExec(), Log: env.Log}
+			return g.Loop(ctx)
+		}}
+}
+
+func Commands(t *cli.Table) {
+	t.Add(cli.Command{Path: "task accept", Args: "<tN>", Summary: "验收通过：等验收的交付落地（有仓库进合入队列，调研登记选项单，其余直接完成）",
+		Run: func(c *cli.Ctx) error {
+			id, err := c.Arg(0, "<tN>")
+			if err != nil {
+				return err
+			}
+			if err := c.MaxArgs(1); err != nil {
+				return err
+			}
+			var t ledger.Task
+			if err := c.Call("POST", "/api/tasks/"+url.PathEscape(id)+"/accept", struct{}{}, &t); err != nil {
+				return err
+			}
+			if t.Status == ledger.Done {
+				return c.Done(t, fmt.Sprintf("%s「%s」验收通过，已完成", t.ID, t.Title), "atrium task show "+t.ID)
+			}
+			text, next, err := events.AsyncNext(c, fmt.Sprintf("%s「%s」验收通过，落地中（%s）", t.ID, t.Title, t.Stage), "atrium task wait "+t.ID)
+			if err != nil {
+				return err
+			}
+			return c.Done(t, text, next)
+		}})
+	t.Add(cli.Command{Path: "task reject", Args: "<tN>", Summary: fmt.Sprintf("验收打回：交回原执行者照原因改（第 %d 次转受阻）", ledger.MaxBounces+1),
+		Flags: []cli.Flag{{Name: "reason", Value: "文字", Help: "哪里不行、要改成什么（必填，附进执行者的提示词）"}},
+		Run: func(c *cli.Ctx) error {
+			id, err := c.Arg(0, "<tN>")
+			if err != nil {
+				return err
+			}
+			if err := c.MaxArgs(1); err != nil {
+				return err
+			}
+			var t ledger.Task
+			if err := c.Call("POST", "/api/tasks/"+url.PathEscape(id)+"/reject", RejectBody{Reason: c.Str("reason")}, &t); err != nil {
+				return err
+			}
+			if t.Status == ledger.Blocked {
+				return c.Done(t, fmt.Sprintf("%s「%s」打回次数用尽，转受阻", t.ID, t.Title), "atrium task show "+t.ID)
+			}
+			return c.Done(t, fmt.Sprintf("%s「%s」已打回，交回原执行者重做", t.ID, t.Title), "atrium task log "+t.ID+" --follow")
+		}})
+}
+
+// RejectBody 是 POST /api/tasks/{id}/reject。
+type RejectBody struct {
+	Reason string `json:"reason"`
+}
+
+func Routes(r *api.Router, env *app.Env) {
+	g := &Gate{DB: env.DB, Pause: env.Pause, R: NewExec(), Log: env.Log}
+	r.Handle("POST /api/tasks/{id}/accept", func(q *api.Req) (any, error) {
+		id, err := q.Ref("id", "t")
+		if err != nil {
+			return nil, err
+		}
+		var in struct{}
+		if err := q.Decode(&in); err != nil {
+			return nil, err
+		}
+		return g.Accept(q.Context(), id, q.Actor.ID)
+	})
+	r.Handle("POST /api/tasks/{id}/reject", func(q *api.Req) (any, error) {
+		id, err := q.Ref("id", "t")
+		if err != nil {
+			return nil, err
+		}
+		var in RejectBody
+		if err := q.Decode(&in); err != nil {
+			return nil, err
+		}
+		return g.Reject(q.Context(), id, q.Actor.ID, in.Reason)
+	})
 }
 
 // Gate 推进 stage 为 gate、review 的任务。
@@ -157,59 +237,25 @@ type gateRecord struct {
 	Facts Facts `json:"facts"`
 }
 
-// gate 查事实、判关卡：git 在工作树所在机器上查（On），PR 由服务查 GitHub。没有仓库的任务（调研、审阅）
-// 没有 PR 要合：执行者正常收尾即过，工作目录根有 choice.json 就登记成选项单（agenda.Settle；不合法按关卡不过交回执行者改）。
+// gate 按交付方式查事实、判关卡：不过交回执行者；过了按风险先审阅，或按部门的验收人等验收，或直接落地。
 func (g *Gate) gate(ctx context.Context, t ledger.Task) error {
-	if t.Repo == "" {
-		return g.settle(ctx, t)
-	}
-	w, err := mustWorkspace(ctx, g.DB, t.ID)
+	d, err := g.deliveryOf(ctx, t)
 	if err != nil {
 		return err
 	}
-	prof, err := LoadProfile(ctx, g.DB, t.Worker)
+	c, err := d.check(g, ctx, t)
 	if err != nil {
 		return err
 	}
-	repo, err := Slug(ctx, g.R, t.Repo)
-	if err != nil {
+	if len(c.reasons) > 0 {
+		_, err := Bounce(ctx, g.DB, t.ID, Actor, "关卡没过："+strings.Join(c.reasons, "；"))
 		return err
 	}
-	facts, err := Collect(ctx, On(g.R, w), w.Dir, repo)
-	if err != nil {
+	if c.review != "" {
+		_, err := ledger.Apply(ctx, g.DB, t.ID, ledger.Event{Kind: ledger.GatePass, NeedReview: true}, Actor, c.note+"；落地前审阅："+c.review)
 		return err
 	}
-	checks := prof.Checks
-	if checks == nil {
-		checks = DefaultChecks
-	}
-	v := Judge(checks, facts)
-	if v.Pass && (facts.PR == nil || facts.PR.State != "OPEN") {
-		v.Pass = false
-		v.Reasons = append(v.Reasons, "pr_exists：分支 "+facts.Branch+" 没有开着的 PR，无从合入")
-	}
-	if err := record(ctx, g.DB, t.ID, KindGate, gateRecord{v, facts}); err != nil {
-		return err
-	}
-	if !v.Pass {
-		_, err := Bounce(ctx, g.DB, t.ID, Actor, "关卡没过："+strings.Join(v.Reasons, "；"))
-		return err
-	}
-	url := facts.PR.URL
-	if err := ledger.SetFacts(ctx, g.DB, t.ID, ledger.Facts{PR: &url}, Actor); err != nil {
-		return err
-	}
-	risk, err := Risk(ctx, g.DB, t.ID)
-	if err != nil {
-		return err
-	}
-	need, why := NeedReview(risk, prof.Trust)
-	note := fmt.Sprintf("关卡通过（%s）：%s", strings.Join(checks, "、"), facts.Diff)
-	if need {
-		note += "；合入前审阅：" + why
-	}
-	_, err = ledger.Apply(ctx, g.DB, t.ID, ledger.Event{Kind: ledger.GatePass, NeedReview: need}, Actor, note)
-	return err
+	return g.pass(ctx, t, d, ledger.GatePass, c.note)
 }
 
 // mustWorkspace 取有仓库的任务的工作树登记，没有就报错。
@@ -219,33 +265,6 @@ func mustWorkspace(ctx context.Context, q store.Querier, id string) (Worktree, e
 		err = fmt.Errorf("%s 没有工作树登记（经历里没有 %s）", id, KindWorktree)
 	}
 	return w, err
-}
-
-// settle 过没有仓库的任务：不要求工作树；登记过就读它根下的 choice.json（远程经代理读）。
-func (g *Gate) settle(ctx context.Context, t ledger.Task) error {
-	var raw []byte
-	w, found, err := Workspace(ctx, g.DB, t.ID)
-	if err == nil && found {
-		raw, err = ReadFile(ctx, w, agenda.ChoiceFile)
-	}
-	if err != nil {
-		return err
-	}
-	c, err := agenda.Settle(ctx, g.DB, t.ID, raw)
-	var ae *api.Error
-	if errors.As(err, &ae) && ae.Code == "usage" {
-		_, err := Bounce(ctx, g.DB, t.ID, Actor, "关卡没过："+ae.Message)
-		return err
-	}
-	if err != nil {
-		return err
-	}
-	note := "没有仓库，无 PR 要合"
-	if c != nil {
-		note += "；登记了选项单 " + c.ID
-	}
-	_, err = ledger.Apply(ctx, g.DB, t.ID, ledger.Event{Kind: ledger.GatePass, NoMerge: true}, Actor, note)
-	return err
 }
 
 // lastID 取某类经历最近一条的 id（没有为 0）。
@@ -313,8 +332,11 @@ func (g *Gate) review(ctx context.Context, t ledger.Task) error {
 		return err
 	}
 	if pass {
-		_, err := ledger.Apply(ctx, g.DB, t.ID, ledger.Event{Kind: ledger.ReviewPass}, Actor, "审阅通过（"+rt.ID+"，"+rt.Worker+"）")
-		return err
+		d, err := g.deliveryOf(ctx, t)
+		if err != nil {
+			return err
+		}
+		return g.pass(ctx, t, d, ledger.ReviewPass, "审阅通过（"+rt.ID+"，"+rt.Worker+"）")
 	}
 	if notes == "" {
 		notes = "审阅者没写具体问题"

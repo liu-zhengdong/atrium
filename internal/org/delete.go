@@ -107,6 +107,7 @@ func DeleteDept(ctx context.Context, db *store.DB, id string) (Dept, error) {
 		for _, s := range []string{
 			`DELETE FROM points WHERE department = ?`,
 			`DELETE FROM department_repos WHERE department = ?`,
+			`DELETE FROM acceptors WHERE department = ?`,
 			`DELETE FROM pauses WHERE scope = ?`,
 			`UPDATE events SET department = NULL WHERE department = ?`, // 只剩已确认的（没确认的上面挡了）
 			`DELETE FROM departments WHERE id = ?`,

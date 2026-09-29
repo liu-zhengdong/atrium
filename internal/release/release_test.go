@@ -142,13 +142,11 @@ func setup(t *testing.T, smokeOK bool) *env {
 func (e *env) merged(commit string) string {
 	e.t.Helper()
 	task, _ := ledger.Add(e.ctx, e.db, ledger.NewTask{Title: "x", Repo: "o/r"}, "u1")
-	for _, k := range []ledger.EventKind{ledger.Deliver} {
-		if _, err := ledger.Apply(e.ctx, e.db, task.ID, ledger.Event{Kind: k}, "u1", ""); err != nil {
-			e.t.Fatal(err)
-		}
+	if _, err := ledger.Apply(e.ctx, e.db, task.ID, ledger.Event{Kind: ledger.Deliver, Land: ledger.StageMerge}, "u1", ""); err != nil {
+		e.t.Fatal(err)
 	}
 	ledger.Record(e.ctx, e.db, task.ID, gates.KindMergeCommit, "merge", `{"pr":"u","commit":"`+commit+`"}`)
-	if _, err := ledger.Apply(e.ctx, e.db, task.ID, ledger.Event{Kind: ledger.Merged, NeedRelease: true}, "merge", ""); err != nil {
+	if _, err := ledger.Apply(e.ctx, e.db, task.ID, ledger.Event{Kind: ledger.Land, Land: ledger.StageMerged}, "merge", ""); err != nil {
 		e.t.Fatal(err)
 	}
 	return task.ID

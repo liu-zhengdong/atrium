@@ -294,6 +294,36 @@ step "第三波接缝：负责人组合按执行者解析；帮助末尾点名�
 out=$(json leader add 坏组合 --workers nosuch+x || true); has '.ok == false and .error.code == "usage"'
 "$bin" --help | grep -q "不列出的.*statusline" || fail "帮助末尾没点名隐藏命令"
 
+step "验收人是用户：等你验收 → 打回交回原执行者、第 3 次转受阻 → 再派 → 验收通过完成（gates，假执行者 fakesh）"
+out=$(json org add 验收演练 --parent o1); acc_org=$(jq -r .result.id <<<"$out")
+out=$(json org edit o1 --accept user); has '.ok'
+out=$(json org show "$acc_org"); has '.result.accept == "user" and .result.accept_from == "o1"'
+out=$(json org edit "$acc_org" --accept boss || true); has '.ok == false and .error.code == "usage"'
+out=$(json task add 验收的活 --org "$acc_org"); acc=$(jq -r .result.id <<<"$out")
+until_accept() {
+  for _ in $(seq 150); do
+    out=$(json task show "$acc"); jq -e '.result.task.stage == "accept" and .result.task.status == "running"' >/dev/null <<<"$out" && return 0; sleep 0.2
+  done
+  fail "$acc 没停在等验收：$out"
+}
+json task run "$acc" --worker fakesh >/dev/null
+out=$(json task wait "$acc" --timeout 30); has '.result.reached and .result.task.stage == "accept" and .next == "atrium task accept '"$acc"'"'   # 缺省等法停在等验收
+out=$(json task show "$acc"); has '.result.holder == "等你验收" and .next == "atrium task accept '"$acc"'"'
+grep -rq "开 PR" "$ATRIUM_DATA/tasks/"*"${acc#t}"/prompt-1.md && fail "没有仓库的活提示词里不该要求开 PR"
+out=$(json events wait --timeout 5); has '(.result|map(select(.task == "'"$acc"'" and .level == "act"))|length) == 1'
+out=$(curl -s "http://127.0.0.1:$ATRIUM_PORT/ui/api/today"); has '(.result.asks|map(select(.kind == "accept" and .id == "'"$acc"'"))|length) == 1'
+out=$(json task reject "$acc" || true); has '.ok == false and .error.code == "usage"'   # 打回要写原因
+for i in 1 2; do
+  out=$(json task reject "$acc" --reason "第 $i 次：本地跑不起来"); has '.result.status == "queued"'
+  until_accept   # 交回原执行者重做，再停在等验收
+done
+out=$(json task reject "$acc" --reason "第 3 次"); has '.result.status == "blocked" and .result.stage == "accept"'
+out=$(json task accept "$acc" || true); has '.ok == false and .error.code == "conflict"'
+json task run "$acc" --worker fakesh >/dev/null   # 固定假执行者：不挑本机真实工具
+until_accept
+out=$(json task accept "$acc"); has '.result.status == "done"'
+out=$(json org edit o1 --accept -); has '.ok'
+
 step "stop"
 out=$(json stop); has '.result.stopped'
 out=$(json status); has '.result.running == false'

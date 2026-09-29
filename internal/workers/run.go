@@ -21,14 +21,14 @@ const (
 	WhySwitch  = "switch"  // 额度用尽、思考耗尽、临时错误再犯：换执行者
 	WhyResume  = "resume"  // 本轮结束后带着捎话续上会话
 	WhyRestart = "restart" // 停掉带着捎话重派
-	WhyBounce  = "bounce"  // 交付被交回（冲突、检查没过、审阅打回、关卡没过）后原执行者接着改；原因在 Cause
+	WhyBounce  = "bounce"  // 交付被交回（冲突、检查没过、审阅打回、验收打回、关卡没过）后原执行者接着改；原因在 Cause
 )
 
 // Run 是一次拉起的记录（任务经历 kind "launch" 的正文）。gates 读 Risk、Dir、Worker；watch 读 PID、Log、Host。
 type Run struct {
 	N         int      `json:"n"` // 这件任务的第几次拉起（1 起），日志 run-N.log
 	Why       string   `json:"why"`
-	Cause     string   `json:"cause,omitempty"` // Why 为 bounce 时：冲突／检查没过／审阅打回／关卡没过
+	Cause     string   `json:"cause,omitempty"` // Why 为 bounce 时：冲突／检查没过／审阅打回／验收打回／关卡没过
 	Worker    string   `json:"worker"`
 	Host      string   `json:"host"`
 	PID       int      `json:"pid,omitempty"` // 本机进程；远程为 0

@@ -232,6 +232,8 @@ func BounceCause(stage, note string) string {
 		return "冲突"
 	case stage == string(ledger.StageReview) || strings.HasPrefix(note, "审阅打回"):
 		return "审阅打回"
+	case stage == string(ledger.StageAccept) || strings.HasPrefix(note, "验收打回"):
+		return "验收打回"
 	case stage == string(ledger.StageMerge):
 		return "检查没过"
 	}

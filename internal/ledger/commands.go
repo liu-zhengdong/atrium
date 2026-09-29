@@ -160,6 +160,8 @@ func Commands(t *cli.Table) {
 				next = "atrium task set " + t.ID + " --status todo"
 			case t.Status == Todo && d.Ready:
 				next = "atrium task run " + t.ID
+			case t.Stage == StageAccept && t.Status == Running:
+				next = "atrium task accept " + t.ID
 			case t.Status == Todo && len(d.WaitingOn) > 0:
 				next = "atrium task wait " + d.WaitingOn[0]
 			case t.Status.Finished():
@@ -322,7 +324,7 @@ func Commands(t *cli.Table) {
 		}})
 	t.Add(cli.Command{Path: "task wait", Args: "<tN>", Summary: "等任务到某些状态（服务端长轮询，不用自己轮询）",
 		Flags: []cli.Flag{
-			{Name: "until", Value: "状态", Multi: true, Help: "等到这些状态之一（缺省 done、failed、blocked、cancelled）"},
+			{Name: "until", Value: "状态", Multi: true, Help: "等到这些状态之一（缺省 done、failed、blocked、cancelled，或停在等验收）"},
 			{Name: "timeout", Value: "秒", Help: "最多等多久（缺省 600，上限 3600）"},
 		},
 		Run: func(c *cli.Ctx) error {
@@ -343,7 +345,11 @@ func Commands(t *cli.Table) {
 				return (&api.Error{Code: "timeout", Message: fmt.Sprintf("等到超时，%s 仍是 %s", id, stateLabel(res.Task))}).
 					WithNext("atrium task wait " + id)
 			}
-			return c.Done(res, fmt.Sprintf("%s「%s」：%s", id, res.Task.Title, stateLabel(res.Task)), "atrium task show "+id)
+			next := "atrium task show " + id
+			if res.Task.Stage == StageAccept && res.Task.Status == Running {
+				next = "atrium task accept " + id
+			}
+			return c.Done(res, fmt.Sprintf("%s「%s」：%s", id, res.Task.Title, stateLabel(res.Task)), next)
 		}})
 }
 

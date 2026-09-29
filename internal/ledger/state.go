@@ -30,17 +30,30 @@ func (s Status) Valid() bool {
 // Finished：进入这些状态记结束时间，不再自己动。
 func (s Status) Finished() bool { return s == Done || s == Failed || s == Cancelled }
 
-// Stage 是交付阶段：执行者交了 PR 之后，运行时推进它；状态保持 running 直到合入（或上线）。
+// Stage 是交付阶段：执行者交付之后由运行时（和验收人）推进；状态保持 running 直到落地完成。
+// 核心一生是 关卡 → 审阅（可选）→ 验收（部门的验收人不是运行时才有）→ 落地；落地的步骤归交付方式（gates），
+// 核心只认「落地中」（Landing）与「落地完成」。
 type Stage string
 
 const (
-	StageNone     Stage = ""
-	StageGate     Stage = "gate"        // 关卡：运行时查事实
-	StageReview   Stage = "review"      // 另一个模型审阅
-	StageMerge    Stage = "merge_queue" // 合入队列
-	StageMerged   Stage = "merged"      // 已合入，等发版
-	StageReleased Stage = "released"    // 已上线
+	StageNone   Stage = ""
+	StageGate   Stage = "gate"   // 关卡：运行时查事实
+	StageReview Stage = "review" // 另一个模型审阅
+	StageAccept Stage = "accept" // 等验收人（部门设置的 leader 或 user）判
 )
+
+// pr 交付方式的落地步骤（合入队列 → 已合入等发版 → 已上线）。核心不认它们的先后，只当落地中的阶段名；
+// merge、release 经 Land 推进，watch、web 按它们写人话。放在这里是因为 watch、web 在 gates 之下，引用不到 gates。
+const (
+	StageMerge    Stage = "merge_queue"
+	StageMerged   Stage = "merged"
+	StageReleased Stage = "released"
+)
+
+// Landing 判一个阶段是不是落地中（交付方式自己的步骤）。
+func (s Stage) Landing() bool {
+	return s != StageNone && s != StageGate && s != StageReview && s != StageAccept
+}
 
 // MaxBounces：交回原执行者的次数上限，再不过转受阻。
 const MaxBounces = 2
@@ -58,10 +71,12 @@ type Event struct {
 	To Status
 	// NeedReview：GatePass 后是否先审阅。
 	NeedReview bool
-	// NoMerge：GatePass/ReviewPass 时没有 PR 要合（调研类任务），直接完成。
-	NoMerge bool
-	// NeedRelease：Merged 后是否等发版（Atrium 自己的仓库）。
-	NeedRelease bool
+	// AcceptBy：GatePass、ReviewPass、Deliver 后要等谁验收（leader、user）；空表示不用等人，直接落地。
+	AcceptBy string
+	// Land：落地的下一步（交付方式的阶段）。GatePass、ReviewPass、Accept 时为空表示当场落完、任务完成；
+	// Land 事件把任务推到这一步，Final 为真时同时完成。
+	Land  Stage
+	Final bool
 	// Bounces：Bounce 之前已交回过几次（从 task_events 数）。
 	Bounces int
 }
@@ -75,14 +90,27 @@ const (
 	ExitFail   EventKind = "exit_fail"   // 执行者失败且重试用尽
 	GatePass   EventKind = "gate_pass"   // 关卡通过
 	ReviewPass EventKind = "review_pass" // 审阅通过
-	Bounce     EventKind = "bounce"      // 关卡不过、审阅打回、合入冲突：交回原执行者
-	Merged     EventKind = "merged"      // 已合入
-	Released   EventKind = "released"    // 已上线
+	Accept     EventKind = "accept"      // 验收通过（task accept）
+	Bounce     EventKind = "bounce"      // 关卡不过、审阅打回、验收打回、落地失败：交回原执行者
+	Land       EventKind = "land"        // 落地推进一步（如已合入、已上线）
 	Block      EventKind = "block"       // 缺条件、等决策
 	Cancel     EventKind = "cancel"      // 不做了
 	Set        EventKind = "set"         // 人工改状态（task set --status）
-	Deliver    EventKind = "deliver"     // 人工放进合入队列（task merge：登记亲手做的 PR，或放行受阻的交付）
+	Deliver    EventKind = "deliver"     // 人工放进落地（task merge：登记亲手做的 PR，或放行受阻的交付）
 )
+
+// passTo 是过了关卡、审阅或验收之后去哪：要等人验收 → accept；交付方式有落地步骤 → 那一步；否则当场完成（阶段留在 st）。
+func passTo(e Event, st Stage) (State, error) {
+	switch {
+	case e.AcceptBy != "":
+		return State{Running, StageAccept}, nil
+	case e.Land == "":
+		return State{Done, st}, nil
+	case !e.Land.Landing():
+		return State{}, fmt.Errorf("%q 不是落地步骤", e.Land)
+	}
+	return State{Running, e.Land}, nil
+}
 
 // Transition 是状态机的唯一判定：纯函数，不碰库和时间。
 func Transition(from State, e Event) (State, error) {
@@ -91,6 +119,13 @@ func Transition(from State, e Event) (State, error) {
 		return from, fmt.Errorf(format, a...)
 	}
 	delivering := s == Running && st != StageNone
+	passOr := func(e Event, st Stage) (State, error) {
+		next, err := passTo(e, st)
+		if err != nil {
+			return reject("%v", err)
+		}
+		return next, nil
+	}
 	switch e.Kind {
 	case Enqueue:
 		if s == Draft || s == Todo || s == Failed || s == Blocked {
@@ -114,42 +149,40 @@ func Transition(from State, e Event) (State, error) {
 		if !delivering || st != StageGate {
 			return reject("任务不在关卡阶段（当前 %s/%s）", s, st)
 		}
-		switch {
-		case e.NoMerge:
-			return State{Done, StageGate}, nil
-		case e.NeedReview:
+		if e.NeedReview {
 			return State{Running, StageReview}, nil
 		}
-		return State{Running, StageMerge}, nil
+		return passOr(e, st)
 	case ReviewPass:
 		if !delivering || st != StageReview {
 			return reject("任务不在审阅阶段（当前 %s/%s）", s, st)
 		}
-		if e.NoMerge {
-			return State{Done, StageReview}, nil
+		return passOr(e, st)
+	case Accept:
+		if !delivering || st != StageAccept {
+			return reject("任务不在等验收（当前 %s/%s）", s, st)
 		}
-		return State{Running, StageMerge}, nil
+		e.AcceptBy = ""
+		return passOr(e, st)
 	case Bounce:
-		if !delivering || (st != StageGate && st != StageReview && st != StageMerge) {
-			return reject("任务不在关卡、审阅或合入队列（当前 %s/%s），无可交回", s, st)
+		if !delivering {
+			return reject("任务不在交付中（当前 %s/%s），无可交回", s, st)
 		}
 		if e.Bounces >= MaxBounces {
 			return State{Blocked, st}, nil
 		}
 		return State{Queued, StageNone}, nil
-	case Merged:
-		if !delivering || st != StageMerge {
-			return reject("任务不在合入队列（当前 %s/%s）", s, st)
+	case Land:
+		if !delivering || !st.Landing() {
+			return reject("任务不在落地中（当前 %s/%s）", s, st)
 		}
-		if e.NeedRelease {
-			return State{Running, StageMerged}, nil
+		if !e.Land.Landing() {
+			return reject("%q 不是落地步骤", e.Land)
 		}
-		return State{Done, StageMerged}, nil
-	case Released:
-		if !delivering || st != StageMerged {
-			return reject("任务不在等发版（当前 %s/%s）", s, st)
+		if e.Final {
+			return State{Done, e.Land}, nil
 		}
-		return State{Done, StageReleased}, nil
+		return State{Running, e.Land}, nil
 	case Block:
 		if s == Todo || s == Queued || s == Running {
 			return State{Blocked, st}, nil
@@ -161,10 +194,13 @@ func Transition(from State, e Event) (State, error) {
 		}
 		return State{Cancelled, st}, nil
 	case Deliver:
-		if s == Todo || s == Failed || s == Blocked {
-			return State{Running, StageMerge}, nil
+		if s != Todo && s != Failed && s != Blocked {
+			return reject("任务当前 %s，不能放进落地（只有 todo、failed、blocked 能放）", s)
 		}
-		return reject("任务当前 %s，不能放进合入队列（只有 todo、failed、blocked 能放）", s)
+		if e.AcceptBy == "" && e.Land == "" {
+			return reject("放进落地要给落地步骤")
+		}
+		return passOr(e, st)
 	case Set:
 		switch e.To {
 		case Queued, Running:

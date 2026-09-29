@@ -147,9 +147,10 @@ func loadNav(ctx context.Context, q store.Querier) (Nav, error) {
 	return Nav{Depts: nonNil(ix.list), Asks: len(asks)}, nil
 }
 
-// Ask 是「等你」的一件：选项单等你挑，卡住的任务递到了你这层（往上没有负责人），或负责人上交到秘书这层还没处理的事。
+// Ask 是「等你」的一件：选项单等你挑，交付等你验收（部门的验收人是你），卡住的任务递到了你这层（往上没有负责人），
+// 或负责人上交到秘书这层还没处理的事。
 type Ask struct {
-	Kind     string `json:"kind"` // choose | stuck | escalate
+	Kind     string `json:"kind"` // choose | accept | stuck | escalate
 	ID       string `json:"id"`
 	Title    string `json:"title"`
 	Sub      string `json:"sub"`
@@ -170,6 +171,24 @@ func loadAsks(ctx context.Context, q store.Querier, ix *orgIndex) ([]Ask, error)
 			sub = fmt.Sprintf("%d 个方向，推荐 %s", len(c.Options), joinInts(c.Recommend))
 		}
 		out = append(out, Ask{Kind: "choose", ID: c.ID, Title: c.Title, Sub: sub, Dept: c.Org, DeptName: ix.name(c.Org), At: c.CreatedAt})
+	}
+	running, err := ledger.List(ctx, q, ledger.Filter{Status: []ledger.Status{ledger.Running}, Limit: 500})
+	if err != nil {
+		return nil, err
+	}
+	for _, t := range running {
+		if t.Stage != ledger.StageAccept {
+			continue
+		}
+		who, _, err := org.Acceptor(ctx, q, t.Org)
+		if err != nil {
+			return nil, err
+		}
+		if who != org.AcceptUser {
+			continue
+		}
+		out = append(out, Ask{Kind: "accept", ID: t.ID, Title: t.Title, Sub: "等你验收：atrium task accept " + t.ID + "，或 task reject " + t.ID + " --reason 原因",
+			Dept: t.Org, DeptName: ix.name(t.Org), At: t.UpdatedAt})
 	}
 	blocked, err := ledger.List(ctx, q, ledger.Filter{Status: []ledger.Status{ledger.Blocked}, Limit: 50})
 	if err != nil {

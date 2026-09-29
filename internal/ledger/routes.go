@@ -232,8 +232,9 @@ func Routes(r *api.Router, env *app.Env) {
 		if err != nil {
 			return nil, err
 		}
-		until := DefaultUntil
+		until, orAccept := DefaultUntil, true // 缺省等法也停在等验收：那时要有人判
 		if v := q.URL.Query().Get("until"); v != "" {
+			orAccept = false
 			until = nil
 			for _, s := range splitList(v) {
 				if !Status(s).Valid() {
@@ -257,6 +258,9 @@ func Routes(r *api.Router, env *app.Env) {
 			t, err := Get(q.Context(), db, id)
 			if err != nil {
 				return nil, err
+			}
+			if orAccept && t.Status == Running && t.Stage == StageAccept {
+				return WaitResult{Task: t, Reached: true}, nil
 			}
 			for _, s := range until {
 				if t.Status == s {

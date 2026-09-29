@@ -219,8 +219,11 @@ button.lead:hover{background:var(--hover)}
 
 
 /* 执行者 */
-.accts{display:grid;grid-template-columns:90px 1fr fit-content(240px);gap:16px 14px;align-items:center;padding:8px 0} /* 各行共用列宽：条对齐，右列按最长的说明定宽 */
+.accts{display:grid;grid-template-columns:auto 1fr fit-content(240px);gap:16px 14px;align-items:center;padding:8px 0} /* 各行共用列宽：条对齐，右列按最长的说明定宽 */
 .acct{display:contents}
+.acct .n{display:flex;align-items:center;gap:8px;white-space:nowrap}
+.acct .logo{width:16px;height:16px;flex:none;color:var(--ink2)}
+b.logo{display:grid;place-items:center;border-radius:4px;background:var(--raise);font:500 10px/1 var(--sans)} /* 没有图标的账号：首字母 */
 .bar{height:8px;border-radius:4px;background:var(--raise);position:relative;overflow:hidden}
 .bar i{position:absolute;inset:0 auto 0 0;border-radius:4px;background:var(--accent)}
 .bar .reserve{position:absolute;top:0;bottom:0;right:0;width:20%;background:repeating-linear-gradient(135deg,transparent 0 3px,color-mix(in srgb,var(--ink3) 35%,transparent) 3px 4px)}
@@ -258,7 +261,7 @@ table.perf{width:100%;border-collapse:collapse;font-size:13px}
   .row .time{display:none} /* 窄屏留行尾标签（等 tN、卡住）不留时间：状态比多久前更要紧 */
   .row.sched:not(.trouble) .who{display:none} /* 周期任务：下一轮比多久一轮要紧，用下一轮顶替标签；出了问题留问题 */
   .row.sched:not(.trouble) .time{display:block}
-  .accts{grid-template-columns:70px 1fr;row-gap:4px}
+  .accts{grid-template-columns:auto 1fr;row-gap:4px}
   .acct .r{grid-column:2;text-align:left}
 }
 

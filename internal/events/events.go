@@ -2,8 +2,8 @@
 //
 // 分两级：act（要处理）与 info（知会）；wait 缺省只取要处理的，--all 连知会一起取。
 // 投递对象（target）留空时调 org.Recipient：部门往上最近的负责人，没有投 secretary。
-// 任务事件经 EmitTask 按处理人分发（Route）：结果投处理人（缺省派活的人），负责人另收知会。
-// 同一投递对象同一去重键、还没取走也没确认的事件合并成一条（count 加一），免得刷屏。
+// 任务事件经 EmitTask 只投要动手的那一位（Route）：等验收投验收人，结果投处理人（有负责人的部门投负责人），过程不投。
+// 同一投递对象同一去重键、还没取走也没确认的事件合并成一条（count 加一，级别随最新一条），免得刷屏。
 // 一次操作引出的事件不投给做这次操作的身份本人（Event.By 与投递对象相同就不投）。
 // 事件是投递队列，不是任务经历：服务每小时删掉超过保留期的已确认事件与知会级事件（Prune），要处理且没确认的不删。
 // 判定（级别、去重键、投递对象）是纯函数，在 model.go；本文件是落库与等待。
@@ -76,7 +76,8 @@ type Row struct {
 }
 
 // Emit 在调用方的事务里落一条事件：与引起它的状态变化同生同死。
-// 同一投递对象同一去重键还有没取走、没确认的，就合并进那一条（正文换成最新的、count 加一、级别取高）。
+// 同一投递对象同一去重键还有没取走、没确认的，就合并进那一条（正文、级别换成最新的，count 加一）：
+// 旧的要处理已被新状态取代（如等验收之后已合入），不再叫人。
 func Emit(ctx context.Context, q store.Querier, e Event) error {
 	body := ""
 	if e.Body != nil {
@@ -104,8 +105,7 @@ func Emit(ctx context.Context, q store.Querier, e Event) error {
 	}
 	now := store.Now()
 	if e.Key != "" {
-		res, err := q.ExecContext(ctx, `UPDATE events SET body = ?, updated_at = ?, count = count + 1,
-			level = CASE WHEN level = 'act' OR ? = 'act' THEN 'act' ELSE 'info' END
+		res, err := q.ExecContext(ctx, `UPDATE events SET body = ?, updated_at = ?, count = count + 1, level = ?
 			WHERE id = (SELECT id FROM events WHERE key = ? AND target = ? AND acked_at IS NULL
 			AND (leased_until IS NULL OR leased_until < ?) ORDER BY id DESC LIMIT 1)`,
 			body, now, e.Level, e.Key, e.Target, now)
@@ -126,7 +126,7 @@ func Emit(ctx context.Context, q store.Querier, e Event) error {
 	return err
 }
 
-// EmitTask 在调用方的事务里发一件任务的事件：按处理人 owner 与部门负责人分发（见 Route）。
+// EmitTask 在调用方的事务里发一件任务的事件：按处理人 owner 与部门负责人定投给谁（见 Route）。
 func EmitTask(ctx context.Context, q store.Querier, owner string, e Event) error {
 	leader, err := org.Recipient(ctx, q, e.Dept)
 	if err != nil {
@@ -135,13 +135,12 @@ func EmitTask(ctx context.Context, q store.Querier, owner string, e Event) error
 	if leader == Secretary {
 		leader = ""
 	}
-	for _, d := range Route(owner, leader, e.Kind, e.Body) {
-		e.Target, e.Level = d.Target, d.Level
-		if err := Emit(ctx, q, e); err != nil {
-			return err
-		}
+	d, ok := Route(owner, leader, e.Kind, e.Body)
+	if !ok {
+		return nil
 	}
-	return nil
+	e.Target, e.Level = d.Target, d.Level
+	return Emit(ctx, q, e)
 }
 
 // Seen 判断某投递对象是否收到过（含已确认的）这个去重键的事件：watch 用它保证同一次到期只发一回。

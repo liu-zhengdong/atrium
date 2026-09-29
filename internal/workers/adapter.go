@@ -192,6 +192,8 @@ var initSession = regexp.MustCompile(`"type":"system","subtype":"init"[^\n]*?"se
 
 // claude -p：stream-json 逐轮输出事件（进展信号）；--input-format stream-json 让标准输入成为消息流，
 // 运行中写入的用户消息在工具调用边界读入，--replay-user-messages 把读入的消息带 isReplay 回显。
+// --setting-sources 不含 local：工作树顺着读到主检出的 .claude/settings.local.json（用户个人设置，
+// 秘书目录在那里写着 env ATRIUM_AS=secretary 与起秘书桥的 SessionStart hook），执行者不该带上。
 func claudeAdapter() *Driver {
 	a := &Driver{Tool: "claude", Exe: "claude", DefaultModel: "opus", Efforts: []string{"low", "medium", "high", "xhigh", "max"},
 		Tell: TellStdin, JSON: true, Endpoints: []string{"anthropic"}, KeyEnv: "ANTHROPIC_AUTH_TOKEN", read: readClaude, session: initSession}
@@ -204,7 +206,7 @@ func claudeAdapter() *Driver {
 		if in.Live {
 			args = append(args, "--input-format", "stream-json", "--replay-user-messages")
 		}
-		args = append(args, "--permission-mode", "bypassPermissions")
+		args = append(args, "--permission-mode", "bypassPermissions", "--setting-sources", "user,project")
 		if in.Model != "" {
 			args = append(args, "--model", in.Model)
 		}

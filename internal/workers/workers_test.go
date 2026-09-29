@@ -50,7 +50,7 @@ func TestBuild(t *testing.T) {
 		want []string // 必须按顺序出现的参数片段
 		bad  string
 	}{
-		{tool: "claude", in: in("opus", "high"), want: []string{"-p", "--output-format", "stream-json", "--permission-mode", "bypassPermissions", "--model", "opus", "--effort", "high"}},
+		{tool: "claude", in: in("opus", "high"), want: []string{"-p", "--output-format", "stream-json", "--permission-mode", "bypassPermissions", "--setting-sources", "user,project", "--model", "opus", "--effort", "high"}},
 		{tool: "claude", in: Request{Prompt: "x", PromptFile: pf, Dir: dir, Live: true}, want: []string{"--input-format", "stream-json", "--replay-user-messages"}},
 		{tool: "claude", in: Request{Prompt: "x", PromptFile: pf, Dir: dir, Session: "0123abcd-0123-0123-0123-0123456789ab"}, want: []string{"-p", "--resume", "0123abcd-0123-0123-0123-0123456789ab"}},
 		{tool: "claude", in: in("", "ultra"), bad: "思考强度只能是"},

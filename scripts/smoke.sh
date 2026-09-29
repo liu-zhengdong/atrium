@@ -311,44 +311,25 @@ step "第三波接缝：负责人组合按执行者解析；帮助末尾点名�
 out=$(json leader add 坏组合 --workers nosuch+x || true); has '.ok == false and .error.code == "usage"'
 "$bin" --help | grep -q "不列出的.*statusline" || fail "帮助末尾没点名隐藏命令"
 
-step "验收人是用户：等你验收 → 打回交回原执行者、第 3 次转受阻 → 再派 → 验收通过完成（gates，假执行者 fakesh）"
+step "验收人是用户：只交结论的活没有要落地的，过了关卡直接完成，不等验收（gates，假执行者 fakesh）"
 out=$(json org add 验收演练 --parent o1); acc_org=$(jq -r .result.id <<<"$out")
 out=$(json org edit o1 --accept user); has '.ok'
 out=$(json org show "$acc_org"); has '.result.accept == "user" and .result.accept_from == "o1"'
 out=$(json org edit "$acc_org" --accept boss || true); has '.ok == false and .error.code == "usage"'
-out=$(json task add 验收的活 --org "$acc_org"); acc=$(jq -r .result.id <<<"$out")
-until_accept() {
-  for _ in $(seq 150); do
-    out=$(json task show "$acc"); jq -e '.result.task.stage == "accept" and .result.task.status == "running"' >/dev/null <<<"$out" && return 0; sleep 0.2
-  done
-  fail "$acc 没停在等验收：$out"
-}
-json task run "$acc" --worker fakesh >/dev/null
-out=$(json task wait "$acc" --timeout 30); has '.result.reached and .result.task.stage == "accept" and .next == "atrium task accept '"$acc"'"'   # 缺省等法停在等验收
-out=$(json task show "$acc"); has '.result.holder == "等你验收" and .next == "atrium task accept '"$acc"'"'
-grep -rq "开 PR" "$ATRIUM_DATA/tasks/"*"${acc#t}"/prompt-1.md && fail "没有仓库的活提示词里不该要求开 PR"
-out=$(json events wait --timeout 5); has '(.result|map(select(.task == "'"$acc"'" and .level == "act"))|length) == 1'
-out=$(curl -s "http://127.0.0.1:$ATRIUM_PORT/ui/api/today"); has '(.result.asks|map(select(.kind == "accept" and .id == "'"$acc"'"))|length) == 1'
-out=$(json task reject "$acc" || true); has '.ok == false and .error.code == "usage"'   # 打回要写原因
-for i in 1 2; do
-  out=$(json task reject "$acc" --reason "第 $i 次：本地跑不起来"); has '.result.status == "queued"'
-  until_accept   # 交回原执行者重做，再停在等验收
-done
-out=$(json task reject "$acc" --reason "第 3 次"); has '.result.status == "blocked" and .result.stage == "accept"'
-out=$(json task accept "$acc" || true); has '.ok == false and .error.code == "conflict"'
-json task run "$acc" --worker fakesh >/dev/null
-until_accept
-out=$(json task accept "$acc"); has '.result.status == "done"'
+out=$(json task add 只交结论 --org "$acc_org"); msg=$(jq -r .result.id <<<"$out")
+json task run "$msg" --worker fakesh >/dev/null
+out=$(json task wait "$msg" --timeout 30); has '.result.task.status == "done"'
+grep -q "开 PR" "$ATRIUM_DATA/tasks/$msg/prompt-1.md" && fail "没有仓库的活提示词里不该要求开 PR"
 out=$(json org edit o1 --accept -); has '.ok'
 
-step "本机交付：本机仓库没有远程 → 假执行者提交 → 关卡 → 等你验收 → 合进本机 main → 删任务工作树与分支"
+step "本机交付：本机仓库没有远程 → 假执行者提交 → 关卡 → 等你验收 → 打回交回原执行者、第 3 次转受阻 → 再派 → 验收通过合进本机 main → 删任务工作树与分支"
 site="$work/site"; git init -q -b main "$site"; echo hi >"$site/README.md"
 git -C "$site" add -A; git -C "$site" -c user.name=t -c user.email=t@t commit -qm init
 cat >"$work/fakecommit.md" <<'MD'
 ---
 protocol: cli
 command: sh
-args: ["-c", "export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1; echo 正文 >post.md && git add -A && git -c user.name=t -c user.email=t@t commit -qm 写完 && echo DONE", "{prompt}"]
+args: ["-c", "export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1; echo 正文 >>post.md && git add -A && git -c user.name=t -c user.email=t@t commit -qm 写完 && echo DONE", "{prompt}"]
 done_match: "^DONE$"
 ---
 只回 DONE。
@@ -356,13 +337,31 @@ MD
 out=$(json workers edit harness/fakecommit --file "$work/fakecommit.md"); has '.ok'
 out=$(json org edit "$acc_org" --accept user); has '.ok'
 out=$(json task add 写文章 --org "$acc_org" --repo "$site"); loc=$(jq -r .result.id <<<"$out")
+until_accept() {
+  for _ in $(seq 150); do
+    out=$(json task show "$loc"); jq -e '.result.task.stage == "accept" and .result.task.status == "running"' >/dev/null <<<"$out" && return 0; sleep 0.2
+  done
+  fail "$loc 没停在等验收：$out"
+}
 json task run "$loc" --worker fakecommit >/dev/null
-out=$(json task wait "$loc" --timeout 30); has '.result.task.stage == "accept"'
+out=$(json task wait "$loc" --timeout 30); has '.result.reached and .result.task.stage == "accept" and .next == "atrium task accept '"$loc"'"'   # 缺省等法停在等验收
+out=$(json task show "$loc"); has '.result.holder == "等你验收" and .next == "atrium task accept '"$loc"'"'
 grep -q "本机交付：在分支 task-$loc 上提交" "$ATRIUM_DATA/tasks/$loc/prompt-1.md" || fail "本机仓库的提示词应写本机交付"
 grep -q "开 PR" "$ATRIUM_DATA/tasks/$loc/prompt-1.md" && fail "本机仓库的活提示词里不该要求开 PR"
+out=$(json events wait --timeout 5); has '(.result|map(select(.task == "'"$loc"'" and .level == "act"))|length) == 1'
+out=$(curl -s "http://127.0.0.1:$ATRIUM_PORT/ui/api/today"); has '(.result.asks|map(select(.kind == "accept" and .id == "'"$loc"'"))|length) == 1'
+out=$(json task reject "$loc" || true); has '.ok == false and .error.code == "usage"'   # 打回要写原因
+for i in 1 2; do
+  out=$(json task reject "$loc" --reason "第 $i 次：本地跑不起来"); has '.result.status == "queued"'
+  until_accept   # 交回原执行者重做，再停在等验收
+done
+out=$(json task reject "$loc" --reason "第 3 次"); has '.result.status == "blocked" and .result.stage == "accept"'
+out=$(json task accept "$loc" || true); has '.ok == false and .error.code == "conflict"'
+json task run "$loc" --worker fakecommit >/dev/null
+until_accept
 [ ! -f "$site/post.md" ] || fail "验收前不该合进 main"
 out=$(json task accept "$loc"); has '.result.status == "done"'
-[ "$(cat "$site/post.md")" = 正文 ] || fail "验收后 main 上应有执行者的提交"
+grep -q 正文 "$site/post.md" || fail "验收后 main 上应有执行者的提交"
 [ ! -d "$ATRIUM_DATA/tasks/$loc/repo" ] || fail "任务工作树应已删除"
 [ -z "$(git -C "$site" branch --list "task-$loc")" ] || fail "任务分支应已删除"
 out=$(json org edit "$acc_org" --accept -); has '.ok'

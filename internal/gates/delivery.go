@@ -25,7 +25,8 @@ type Delivery struct {
 	Rules []string
 	// check 查事实判关卡。
 	check func(g *Gate, ctx context.Context, t ledger.Task) (checked, error)
-	// land 是落地的第一步（关卡、审阅、验收都过了之后）。
+	// land 是落地的第一步（关卡、审阅、验收都过了之后）；nil 是没有要落地的（东西已在原地，或只是结论），
+	// 验收拦不住什么，过了关卡、审阅就完成，不等验收人。
 	land func(g *Gate, ctx context.Context, t ledger.Task) (landed, error)
 }
 
@@ -63,21 +64,19 @@ var (
 			"给人看的产物（页面、视频）把成品截图或关键帧放进工作树根的 preview/ 目录一并提交；交付说明写在最后的回复里。",
 		},
 		check: (*Gate).checkLocal, land: (*Gate).landLocal}
-	// dir：在工作地点（本机文件夹）原地干，东西已经在原地；关卡只看执行者正常收尾；落地为空。
+	// dir：在工作地点（本机文件夹）原地干，东西已经在原地；关卡只看执行者正常收尾；没有落地。
 	// 同一文件夹的几件活会不会互相踩由负责人派活时安排，运行时不隔离、不留回退。
 	deliverDir = Delivery{Name: "dir",
 		Rules: []string{"这件活在工作地点原地干：当前目录就是用户的文件夹，直接在这里改，不复制、不另建目录或 git 仓库；" +
 			"交付说明写在最后的回复里（改了哪些文件、结果与依据）。"},
 		check: func(*Gate, context.Context, ledger.Task) (checked, error) {
 			return checked{note: "在工作地点原地干，交付说明在最后的回复里"}, nil
-		},
-		land: func(*Gate, context.Context, ledger.Task) (landed, error) { return landed{}, nil }}
-	// message：结论写在最后的回复里；关卡只看执行者正常收尾；落地为空。
+		}}
+	// message：结论写在最后的回复里；关卡只看执行者正常收尾；没有落地。
 	deliverMessage = Delivery{Name: "message", Rules: noRepoRules,
 		check: func(*Gate, context.Context, ledger.Task) (checked, error) {
 			return checked{note: "没有仓库，结论在最后的回复里"}, nil
-		},
-		land: func(*Gate, context.Context, ledger.Task) (landed, error) { return landed{}, nil }}
+		}}
 	// choice：调研任务在工作目录根写 choice.json；关卡核对格式；落地是登记成选项单（agenda.Settle）。
 	deliverChoice = Delivery{Name: "choice", Rules: noRepoRules, check: (*Gate).checkChoice, land: (*Gate).landChoice}
 )
@@ -222,8 +221,11 @@ func (g *Gate) checkPR(ctx context.Context, t ledger.Task) (checked, error) {
 }
 
 // acceptBy 是这件任务过了关卡、审阅之后要等谁验收：部门的验收人（沿树继承），auto 为空。
-// 审阅任务是运行时自己建的，不等人验收。
-func acceptBy(ctx context.Context, q store.Querier, t ledger.Task) (string, error) {
+// 没有落地的交付方式（dir、message）和运行时自己建的审阅任务不等人验收。
+func acceptBy(ctx context.Context, q store.Querier, t ledger.Task, d Delivery) (string, error) {
+	if d.land == nil {
+		return "", nil
+	}
 	if _, review, err := Last(ctx, q, t.ID, KindReviewOf); err != nil || review {
 		return "", err
 	}
@@ -236,9 +238,9 @@ func acceptBy(ctx context.Context, q store.Querier, t ledger.Task) (string, erro
 
 var acceptLabel = map[string]string{org.AcceptUser: "你", org.AcceptLeader: "负责人"}
 
-// pass 过了关卡或审阅：部门的验收人是 leader、user 就停在等验收；否则当场落地。
+// pass 过了关卡或审阅：要等验收（acceptBy）就停在等验收；否则当场落地。
 func (g *Gate) pass(ctx context.Context, t ledger.Task, d Delivery, kind ledger.EventKind, note string) error {
-	by, err := acceptBy(ctx, g.DB, t)
+	by, err := acceptBy(ctx, g.DB, t, d)
 	if err != nil {
 		return err
 	}
@@ -252,9 +254,12 @@ func (g *Gate) pass(ctx context.Context, t ledger.Task, d Delivery, kind ledger.
 
 // land 做交付方式落地的第一步并落账：有后续步骤进那一步，没有任务完成；落不了交回原执行者。
 func (g *Gate) land(ctx context.Context, t ledger.Task, d Delivery, kind ledger.EventKind, actor, note string) error {
-	l, err := d.land(g, ctx, t)
-	if err != nil {
-		return err
+	var l landed
+	if d.land != nil {
+		var err error
+		if l, err = d.land(g, ctx, t); err != nil {
+			return err
+		}
 	}
 	if l.bounce != "" {
 		_, err := Bounce(ctx, g.DB, t.ID, actor, note+"；落地没成："+l.bounce)
@@ -263,7 +268,7 @@ func (g *Gate) land(ctx context.Context, t ledger.Task, d Delivery, kind ledger.
 	if l.note != "" {
 		note += "；" + l.note
 	}
-	_, err = ledger.Apply(ctx, g.DB, t.ID, ledger.Event{Kind: kind, Land: l.stage}, actor, note)
+	_, err := ledger.Apply(ctx, g.DB, t.ID, ledger.Event{Kind: kind, Land: l.stage}, actor, note)
 	return err
 }
 
@@ -287,7 +292,7 @@ func (g *Gate) awaiting(ctx context.Context, id, actor string) (ledger.Task, err
 	return t, nil
 }
 
-// Accept 是 task accept：验收通过，做交付方式落地的第一步（pr 进合入队列，local 合进本机主分支，choice 登记选项单，dir、message 直接完成）。
+// Accept 是 task accept：验收通过，做交付方式落地的第一步（pr 进合入队列，local 合进本机主分支，choice 登记选项单）。
 func (g *Gate) Accept(ctx context.Context, id, actor string) (ledger.Task, error) {
 	t, err := g.awaiting(ctx, id, actor)
 	if err != nil {

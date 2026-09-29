@@ -332,7 +332,7 @@ func detach(c *cli.Ctx, p config.Paths, endpoint string, batch int) error {
 		return err
 	}
 	if Claim(cur, endpoint, platform.Alive) == "running" {
-		return c.Done(cur, fmt.Sprintf("Atrium bridge 已在跑（pid %d）：要处理的事件以「【Atrium 事件】」消息送进本会话，处理完 atrium events ack <编号>。派活、合入后直接回来，不用 task wait 等结果\n\n%s", cur.PID, brief),
+		return c.Done(cur, fmt.Sprintf("Atrium bridge 已在跑（pid %d）：要处理的事件以「【Atrium 事件】」消息送进本会话，处理完 atrium events ack <编号>。%s\n\n%s", cur.PID, WorkStyle, brief),
 			"atrium secretary bridge --status")
 	}
 	self, err := os.Executable()
@@ -363,12 +363,15 @@ func detach(c *cli.Ctx, p config.Paths, endpoint string, batch int) error {
 		case <-time.After(100 * time.Millisecond):
 		}
 		if r, _ := readRecord(p); r != nil && r.PID == cmd.Process.Pid {
-			return c.Done(r, fmt.Sprintf("Atrium bridge 已在后台运行（pid %d）：秘书要处理的事件会以「【Atrium 事件】」开头的消息送进本会话，处理完用 atrium events ack <编号> 确认。派活、合入后直接回来，不用 task wait 等结果。日志：%s\n\n%s", r.PID, logPath(p), brief),
+			return c.Done(r, fmt.Sprintf("Atrium bridge 已在后台运行（pid %d）：秘书要处理的事件会以「【Atrium 事件】」开头的消息送进本会话，处理完用 atrium events ack <编号> 确认。%s日志：%s\n\n%s", r.PID, WorkStyle, logPath(p), brief),
 				"atrium secretary bridge --status")
 		}
 	}
 	return fmt.Errorf("bridge 10 秒内没登记上；看日志：%s", logPath(p))
 }
+
+// WorkStyle 是秘书会话开头的工作方式：秘书要随时能被用户插话，不在前台干等。
+const WorkStyle = "超过半分钟的命令（构建、渲染、部署、等外部结果）一律放后台跑，完成通知回来再核对；派活、合入后直接回来，结果会作为事件送来。"
 
 // sessionBrief 取全景与秘书备忘，拼成会话开头的一段（SessionStart hook 的输出进会话上下文）。
 func sessionBrief(c *cli.Ctx) (string, error) {

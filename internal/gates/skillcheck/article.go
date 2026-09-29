@@ -137,6 +137,9 @@ func scanSite(dir, site string) (sources []Source, pages []string, err error) {
 	return sources, pages, err
 }
 
+// shotPoll 是看截图写完没有的间隔。
+const shotPoll = 100 * time.Millisecond
+
 // preview 在本机随机端口起静态预览（只听 127.0.0.1）。
 func preview(dir string) (base string, stop func() error, err error) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -160,9 +163,29 @@ func screenshot(ctx context.Context, e Env, browser, url, name, scheme string) (
 	if err := os.Remove(shot); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return "", "", err
 	}
-	if _, err := e.R.Run(ctx, e.Out, browser, "--headless", "--no-first-run", "--hide-scrollbars",
+	// 完整版 Chrome 的无头模式写完截图不一定退出（macOS 上 Chrome 154 实测一直挂着），所以不等它退出：
+	// 截图能完整解码就结束浏览器。
+	bctx, written := context.WithCancel(ctx)
+	defer written()
+	go func() {
+		for bctx.Err() == nil {
+			if _, err := blankFile(shot); err == nil {
+				written()
+				return
+			}
+			select {
+			case <-bctx.Done():
+			case <-time.After(shotPoll):
+			}
+		}
+	}()
+	_, err = e.R.Run(bctx, e.Out, browser, "--headless", "--no-first-run", "--hide-scrollbars",
 		"--user-data-dir="+profile, "--window-size=1280,1600", "--blink-settings=preferredColorScheme="+scheme,
-		"--screenshot="+shot, url); err != nil {
+		"--screenshot="+shot, url)
+	if bctx.Err() != nil && ctx.Err() == nil {
+		err = nil // 截图已写完，是这里结束的浏览器
+	}
+	if err != nil {
 		why, err := failed(ctx, "截图（"+name+"）", err)
 		return "", why, err
 	}

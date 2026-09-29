@@ -173,6 +173,8 @@ type fake struct {
 	frame    image.Image // ffmpeg 导出的第一帧
 	loudness error       // ebur128 的错误
 	hang     bool        // pnpm 一直不返回，直到超时
+	linger   bool        // 浏览器写完截图不退出（完整版 Chrome 的无头模式）
+	noShot   bool        // 浏览器不写截图也不退出
 	calls    []string
 }
 
@@ -202,9 +204,15 @@ func (f *fake) Run(ctx context.Context, dir, name string, args ...string) (strin
 		return "", os.WriteFile(filepath.Join(dir, "dist", "posts", "hello.html"), []byte("<h1>你好</h1>"), 0o600)
 	case name == "chrome":
 		for _, a := range args {
-			if p, ok := strings.CutPrefix(a, "--screenshot="); ok {
-				return "", writePNG(p, textish())
+			if p, ok := strings.CutPrefix(a, "--screenshot="); ok && !f.noShot {
+				if err := writePNG(p, textish()); err != nil || !f.linger {
+					return "", err
+				}
 			}
+		}
+		if f.linger || f.noShot {
+			<-ctx.Done()
+			return "", ctx.Err()
 		}
 	case name == "ffprobe":
 		return `{"streams":[{"codec_type":"video","width":1920,"height":1080},{"codec_type":"audio"}],"format":{"duration":"10"}}`, nil
@@ -252,9 +260,11 @@ func TestArticle(t *testing.T) {
 		{"构建失败交回", &fake{build: exitErr()}, false, "构建编译出错", ""},
 		{"缺 pnpm 是跑不起来", &fake{build: errors.New("在 PATH 里找不到 pnpm")}, false, "", "找不到 pnpm"},
 		{"超时交回", &fake{hang: true}, false, "超时", ""},
+		{"浏览器写完截图不退出也算通过", &fake{linger: true}, true, "posts/hello.html", ""},
+		{"浏览器不写截图就超时交回", &fake{noShot: true}, false, "截图（light）超时", ""},
 	}
 	defer func(d time.Duration) { Timeout = d }(Timeout)
-	Timeout = 50 * time.Millisecond
+	Timeout = time.Second
 	for _, c := range cases {
 		out := t.TempDir()
 		rs, err := Run(context.Background(), Env{Dir: site(t), Out: out, R: c.f, Browser: browser}, []string{"article"})

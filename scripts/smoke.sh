@@ -11,15 +11,25 @@ export ATRIUM_PORT=$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.
 unset ATRIUM_AS
 
 pid=""
+cur="开始前"; where=""
+# 失败（断言不成立，或哪条命令非零退出被 set -e 带走）时说清哪一步、哪一行，附服务日志末尾，现场目录留着。
+trap 'where="第 $LINENO 行：$BASH_COMMAND"' ERR
 cleanup() {
+  local rc=$?
   # 只结束自己起的服务进程（新旧 pid 都记着）。
   for p in $pid; do kill "$p" 2>/dev/null || true; done
-  rm -rf "$work"
+  if [ "$rc" = 0 ]; then rm -rf "$work"; return; fi
+  {
+    echo; echo "冒烟失败：步骤「${cur}」${where:+，$where}"
+    echo "最近一条输出：${out:-（无）}"
+    if [ -f "$ATRIUM_DATA/service.log" ]; then echo "--- 服务日志末尾（$ATRIUM_DATA/service.log）"; tail -40 "$ATRIUM_DATA/service.log"; fi
+    echo "现场留在 $work"
+  } >&2
 }
 trap cleanup EXIT
 
-step() { printf '\n== %s\n' "$*"; }
-fail() { echo "失败：$*" >&2; [ -f "$ATRIUM_DATA/service.log" ] && tail -20 "$ATRIUM_DATA/service.log" >&2; exit 1; }
+step() { cur="$*"; printf '\n== %s\n' "$*"; }
+fail() { where="第 ${BASH_LINENO[${#BASH_LINENO[@]}-2]} 行"; echo "失败：$*" >&2; exit 1; }
 # json <命令…>：跑命令取 --json 输出；jq 断言用 has <jq 表达式>。
 json() { "$bin" "$@" --json; }
 has() { jq -e "$1" >/dev/null <<<"$out" || fail "断言不成立：$1；输出：$out"; }
@@ -396,7 +406,7 @@ echo '{"scripts":{"build":"echo 构建编译出错 >&2; exit 1"}}' >"$artb/packa
 out=$(json task add 文章构建坏了 --dir "$artb" --skill article); ab=$(jq -r .result.id <<<"$out")
 json task run "$ab" --worker fakewrite >/dev/null
 out=$(json task wait "$ab" --timeout 120); has '.result.task.status == "blocked"'
-out=$(json task show "$ab"); has '.result.history|map(select(.kind == "bounce"))|length == 3 and (.[0].body|test("关卡没过：article：构建失败：pnpm run build：exit status 1：构建编译出错"))'
+out=$(json task show "$ab"); has '.result.history as $h | ($h|map(select(.kind == "launch"))|last|.body|fromjson|.n) == 3 and ($h|map(select(.kind == "bounce"))|last|.body|fromjson|.to.status == "blocked" and (.note|test("关卡没过：article：构建失败：pnpm run build：exit status 1：构建编译出错")))'   # 经历只取最近 20 条：看第 3 次拉起后的那次打回
 # 视频小样：out/ 里一段 2 秒带音轨的成片；故意破坏：第一帧纯黑
 mkdir -p "$work/vid/out" "$work/vid-bad/out"; vid=$(cd "$work/vid" && pwd); vidb=$(cd "$work/vid-bad" && pwd)
 ffmpeg -v error -y -f lavfi -i testsrc=duration=2:size=320x240:rate=10 -f lavfi -i sine=duration=2 -c:v libx264 -pix_fmt yuv420p -c:a aac "$vid/out/demo.mp4"

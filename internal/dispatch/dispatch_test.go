@@ -248,6 +248,36 @@ func TestBounceCause(t *testing.T) {
 	}
 }
 
+// 交回的任务（没有队列行）沿用上一轮的执行者与机器：t421 写死在 h3 上干，交回后被自动挑机换到了 h1。
+func TestQueuedBounceKeepsHost(t *testing.T) {
+	ctx := context.Background()
+	db, err := store.Open(filepath.Join(t.TempDir(), "atrium.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	tk, _ := ledger.Add(ctx, db, ledger.NewTask{Title: "在 h3 装工具", Repo: "o/r"}, "u1")
+	for _, k := range []ledger.EventKind{ledger.Enqueue, ledger.Start} {
+		if _, err := ledger.Apply(ctx, db, tk.ID, ledger.Event{Kind: k}, "dispatch", ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ledger.Record(ctx, db, tk.ID, workers.RunKind, "dispatch", `{"n":1,"why":"first","worker":"claude+opus","host":"h3","risk":"medium","secrets":["DEMO_TOKEN"]}`)
+	for _, k := range []ledger.EventKind{ledger.ExitOK, ledger.Bounce} {
+		if _, err := ledger.Apply(ctx, db, tk.ID, ledger.Event{Kind: k}, "gates", "关卡没过"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	items, err := queued(ctx, db)
+	if err != nil || len(items) != 1 {
+		t.Fatalf("队列：%+v %v", items, err)
+	}
+	want := Options{Worker: "claude+opus", Risk: "medium", Host: "h3", Secrets: []string{"DEMO_TOKEN"}}
+	if got := items[0]; got.Row || got.Opts.Host != want.Host || got.Opts.Worker != want.Worker || got.Opts.Risk != want.Risk || !slices.Equal(got.Opts.Secrets, want.Secrets) {
+		t.Fatalf("交回应沿用上一轮：%+v，期望 %+v", got, want)
+	}
+}
+
 func TestRepoGuide(t *testing.T) {
 	dir := t.TempDir()
 	if g, err := repoGuide("/d", "a/b", dir); err != nil || g != "" {

@@ -46,7 +46,7 @@ func (o *Options) check() error {
 	return nil
 }
 
-// item 是派活队列里的一件：状态 queued 的任务，带着入队选项（交回的任务没有队列行，沿用上次拉起的执行者与选项）。
+// item 是派活队列里的一件：状态 queued 的任务，带着入队选项（交回的任务没有队列行，沿用上次拉起的执行者、机器与选项）。
 type item struct {
 	Task ledger.Task
 	Opts Options
@@ -96,8 +96,8 @@ func queued(ctx context.Context, q store.Querier) ([]item, error) {
 		} else if last, err := workers.LastRun(ctx, q, r.id); err != nil {
 			return nil, err
 		} else if last != nil {
-			// 交回原执行者：同一执行者、同样的风险与凭据。
-			it.Opts = Options{Worker: last.Worker, Risk: last.Risk, Secrets: last.Secrets}
+			// 交回原执行者：同一执行者、同一台机器（工作目录在那里，接不了就等或转受阻，不换机）、同样的风险与凭据。
+			it.Opts = Options{Worker: last.Worker, Risk: last.Risk, Host: last.Host, Secrets: last.Secrets}
 		}
 		if it.Opts.Risk == "" {
 			it.Opts.Risk = "low"

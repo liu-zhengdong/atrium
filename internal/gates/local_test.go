@@ -73,7 +73,7 @@ func (e *env) landedOn(repo, wt, id, name, body string) {
 	}
 }
 
-// 关卡在本机查事实：没提交、有未提交改动交回；有提交就过，验收人 auto 当场合进本机主分支。
+// 关卡在本机查事实：有未提交改动交回；有提交就过，验收人 auto 当场合进本机主分支（没有改动见 TestGateNoChanges）。
 func TestLocalGate(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -82,7 +82,6 @@ func TestLocalGate(t *testing.T) {
 		dirty  bool
 		want   string
 	}{
-		{"没有提交", nil, false, false, "没有新提交"},
 		{"有未提交改动", map[string]string{"post.md": "正文\n"}, true, true, "未提交"},
 		{"有提交", map[string]string{"post.md": "正文\n"}, true, false, ""},
 	}

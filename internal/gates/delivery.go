@@ -16,7 +16,7 @@ import (
 )
 
 // Delivery 是一种交付方式：执行者交什么（Rules，附进提示词）、关卡查什么事实（check）、验收后怎么落地（land）。
-// 不存库，按任务已有的事实选（pick）：本机仓库没有 GitHub 远程 → local；其余有仓库 → pr；
+// 不存库，按任务已有的事实选（pick）：有仓库但工作树没改动 → message；本机仓库没有 GitHub 远程 → local；其余有仓库 → pr；
 // 只有工作地点（本机文件夹）→ dir；都没有 → message，工作目录根有 choice.json → choice。
 // 核心（ledger）只认关卡、审阅、验收过没过与落地的步骤名；要新的交付方式在这里加一项。
 type Delivery struct {
@@ -50,7 +50,7 @@ var (
 	// pr：在分支上开 PR；关卡查提交、推送、改动规模与 PR 正文；落地是合入队列（merge）加可选的发版（release）。
 	deliverPR = Delivery{Name: "pr",
 		Rules: []string{
-			"只交 PR：在分支 %s 上提交、推送并开 PR；不要合入、不要改默认分支、不要发版。",
+			"只交 PR：在分支 %s 上提交、推送并开 PR；不要合入、不要改默认分支、不要发版。不用改代码的活不开 PR，结论写在最后的回复里。",
 			"PR 正文写「端到端验证」一节：在隔离实例里跑了什么、输出摘要；会停服务、改机器状态的步骤标注「只在隔离环境」。",
 		},
 		check: (*Gate).checkPR,
@@ -60,7 +60,7 @@ var (
 	// local：本机仓库、不经 GitHub；关卡在本机查提交与改动；落地是合进本机主分支并清理工作树（landLocal）。
 	deliverLocal = Delivery{Name: "local",
 		Rules: []string{
-			"本机交付：在分支 %s 上提交；不要推送、不要合入主分支，验收过后由运行时合进本机主分支。",
+			"本机交付：在分支 %s 上提交；不要推送、不要合入主分支，验收过后由运行时合进本机主分支。不用改代码的活不提交，结论写在最后的回复里。",
 			"给人看的产物（页面、视频）把成品截图或关键帧放进工作树根的 preview/ 目录一并提交；交付说明写在最后的回复里。",
 		},
 		check: (*Gate).checkLocal, land: (*Gate).landLocal}
@@ -72,9 +72,12 @@ var (
 		check: func(*Gate, context.Context, ledger.Task) (checked, error) {
 			return checked{note: "在工作地点原地干，交付说明在最后的回复里"}, nil
 		}}
-	// message：结论写在最后的回复里；关卡只看执行者正常收尾；没有落地。
+	// message：结论写在最后的回复里（没有仓库，或有仓库但没改动）；关卡只看执行者正常收尾；没有落地。
 	deliverMessage = Delivery{Name: "message", Rules: noRepoRules,
-		check: func(*Gate, context.Context, ledger.Task) (checked, error) {
+		check: func(_ *Gate, _ context.Context, t ledger.Task) (checked, error) {
+			if t.Repo != "" {
+				return checked{note: "工作树相对基线没有改动，不要 PR，结论在最后的回复里"}, nil
+			}
 			return checked{note: "没有仓库，结论在最后的回复里"}, nil
 		}}
 	// choice：调研任务在工作目录根写 choice.json；关卡核对格式；落地是登记成选项单（agenda.Settle）。
@@ -82,26 +85,32 @@ var (
 )
 
 // pick 按事实选交付方式（纯函数）：repo 是任务的仓库，dir 是工作地点；origin 是本机仓库 origin 的地址（没有为空，repo 不是本机路径时不看）；
-// choice 是没有仓库也没有工作地点的任务工作目录根有没有 choice.json。本机仓库的 origin 换算不出 GitHub 的 owner/name（与 Slug 同一判定）走 local。
-func pick(repo, dir, origin string, choice bool) Delivery {
+// changed 是有仓库的任务工作树相对基线有没有改动（Facts.Changed），没有就按没有仓库交；
+// choice 是没有仓库也没有工作地点的任务工作目录根有没有 choice.json。
+func pick(repo, dir, origin string, changed, choice bool) Delivery {
 	switch {
 	case repo == "" && dir != "":
 		return deliverDir
 	case repo == "" && choice:
 		return deliverChoice
-	case repo == "":
+	case repo == "" || !changed:
 		return deliverMessage
-	}
-	if _, github := ParseSlug(origin); filepath.IsAbs(repo) && !github {
+	case localRepo(repo, origin):
 		return deliverLocal
 	}
 	return deliverPR
 }
 
-// PromptRules 是派活时提示词里怎么交（dispatch 附进「通用约束」）；origin 见 Origin。choice 与 message 派活时分不出来，
-// 提示词相同；要不要写 choice.json 由任务详述（调研周期任务）说。
+// localRepo：本机仓库的 origin 换算不出 GitHub 的 owner/name（与 Slug 同一判定），交付走 local。
+func localRepo(repo, origin string) bool {
+	_, github := ParseSlug(origin)
+	return filepath.IsAbs(repo) && !github
+}
+
+// PromptRules 是派活时提示词里怎么交（dispatch 附进「通用约束」）；origin 见 Origin。派活时还没有改动，有仓库按要改代码写
+// （规则里说了不用改代码时怎么交）；choice 与 message 派活时分不出来，提示词相同，要不要写 choice.json 由任务详述（调研周期任务）说。
 func PromptRules(repo, dir, origin, branch string) []string {
-	d := pick(repo, dir, origin, false)
+	d := pick(repo, dir, origin, true, false)
 	out := make([]string, len(d.Rules))
 	for i, r := range d.Rules {
 		out[i] = strings.ReplaceAll(r, "%s", branch)
@@ -122,17 +131,40 @@ func Origin(ctx context.Context, r Runner, repo string) (string, error) {
 	return strings.TrimSpace(url), err
 }
 
-// deliveryOf 查齐事实（本机仓库的 origin、工作目录根的 choice.json）后按 pick 选交付方式。
-func (g *Gate) deliveryOf(ctx context.Context, t ledger.Task) (Delivery, error) {
+// deliveryOf 查齐事实（本机仓库的 origin、工作目录根的 choice.json，关卡时再查工作树有没有改动）后按 pick 选交付方式。
+// 过了关卡还在走的（审阅、验收）都有改动：没改动的按 message 交，没有这两步。
+func (g *Gate) deliveryOf(ctx context.Context, t ledger.Task, atGate bool) (Delivery, error) {
 	switch {
 	case t.Repo != "":
 		origin, err := Origin(ctx, g.R, t.Repo)
-		return pick(t.Repo, "", origin, false), err
+		changed := true
+		if err == nil && atGate {
+			changed, err = g.changed(ctx, t, origin)
+		}
+		return pick(t.Repo, "", origin, changed, false), err
 	case t.Dir != "":
-		return pick("", t.Dir, "", false), nil
+		return pick("", t.Dir, "", true, false), nil
 	}
 	raw, err := g.choiceFile(ctx, t)
-	return pick("", "", "", raw != nil), err
+	return pick("", "", "", true, raw != nil), err
+}
+
+// changed 查有仓库的任务工作树相对基线有没有改动：本机交付比本机主分支，其余比 GitHub 默认分支。
+func (g *Gate) changed(ctx context.Context, t ledger.Task, origin string) (bool, error) {
+	w, err := mustWorkspace(ctx, g.DB, t.ID)
+	if err != nil {
+		return false, err
+	}
+	var f Facts
+	if localRepo(t.Repo, origin) {
+		f, err = CollectLocal(ctx, g.R, w.Dir, t.Repo)
+	} else {
+		var repo string
+		if repo, err = Slug(ctx, g.R, t.Repo); err == nil {
+			f, _, err = collectBase(ctx, On(g.R, w), w.Dir, repo)
+		}
+	}
+	return f.Changed(), err
 }
 
 // choiceFile 读没有仓库的任务工作目录根的 choice.json（远程经代理）；没登记工作目录或没有文件为 nil。
@@ -298,7 +330,7 @@ func (g *Gate) Accept(ctx context.Context, id, actor string) (ledger.Task, error
 	if err != nil {
 		return t, err
 	}
-	d, err := g.deliveryOf(ctx, t)
+	d, err := g.deliveryOf(ctx, t, false)
 	if err != nil {
 		return t, err
 	}

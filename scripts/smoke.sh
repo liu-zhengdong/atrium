@@ -367,6 +367,12 @@ grep -q 正文 "$site/post.md" || fail "验收后 main 上应有执行者的提�
 [ -z "$(git -C "$site" branch --list "task-$loc")" ] || fail "任务分支应已删除"
 out=$(json org edit "$acc_org" --accept -); has '.ok'
 
+step "有仓库但没改代码（装工具、调研）：工作树相对基线没有改动 → 按只交结论判，过了关卡直接完成，不按缺提交交回"
+out=$(json task add 装工具 --repo "$site"); nochg=$(jq -r .result.id <<<"$out")
+json task run "$nochg" --worker fakesh >/dev/null
+out=$(json task wait "$nochg" --timeout 30); has '.result.task.status == "done"'
+out=$(json task show "$nochg"); has '(.result.history|map(select(.kind == "gate_pass"))[0].body|contains("没有改动")) and (.result.history|map(.kind)|index("bounce")) == null'
+
 step "工作地点：普通文件夹（不是 git 仓库）→ 假执行者原地写文件 → 关卡 → 完成；不建工作树"
 mkdir -p "$work/notes"; place=$(cd "$work/notes" && pwd)   # 规范路径：TMPDIR 可能带尾部斜杠
 cat >"$work/fakewrite.md" <<'MD'

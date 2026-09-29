@@ -148,6 +148,9 @@ func judgeOne(check string, f Facts) Result {
 	return r
 }
 
+// Changed：工作树相对基线有改动（新提交或未提交的文件）。没有改动的有仓库任务按没有仓库交（结论在最后的回复里）。
+func (f Facts) Changed() bool { return len(f.Dirty) > 0 || f.Ahead > 0 }
+
 // uncommitted 是没提交完的证据：未提交的文件、分支比 base 没有新提交。
 func uncommitted(f Facts, base string) []string {
 	var missing []string

@@ -1,5 +1,6 @@
 // Package watch：持球与期限。一张表（rules.go 的 Rules）、一个巡检循环（一分钟一轮，全局暂停时不做），
-// 到期统一发 events.Overdue。「球在谁手里」的判定 HolderOf 是纯函数，top、statusline、task show 共用。
+// 到期统一发 events.Overdue；每轮顺带数各部门与全局的上限用量，刚到或超了发 events.LimitFull。
+// 「球在谁手里」的判定 HolderOf 是纯函数，top、statusline、task show 共用。
 //
 // 接入（别的包调）：
 //   - dispatch、merge 拉起执行者或检查后，在同一事务里 watch.Track(ctx, tx, 任务, Proc{…}) 登记进程；

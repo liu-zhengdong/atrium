@@ -53,6 +53,7 @@ func TestLevelAndKey(t *testing.T) {
 		{TaskStatus, nil, Info},
 		{Overdue, nil, Act},
 		{OnlineFailed, nil, Act},
+		{LimitFull, map[string]any{"key": "points"}, Act},
 		{LeaderEscalate, map[string]any{"kind": "stuck"}, Act},
 		{LeaderEscalate, map[string]any{"kind": "cross"}, Act},
 		{LeaderEscalate, map[string]any{"kind": "shipped"}, Info},
@@ -68,6 +69,9 @@ func TestLevelAndKey(t *testing.T) {
 	}
 	if k := KeyOf(Event{Kind: Overdue, Task: "t3"}); k != "" {
 		t.Errorf("overdue 缺省不合并，得到 %q", k)
+	}
+	if k := KeyOf(Event{Kind: LimitFull, Dept: "o2", Body: map[string]any{"key": "points"}}); k != "limit:o2:points" {
+		t.Errorf("LimitFull KeyOf = %q", k)
 	}
 }
 
@@ -155,7 +159,14 @@ func TestSummary(t *testing.T) {
 	if s := Summary(Row{Kind: LeaderEscalate, Body: []byte(`{"from":"a1","label":"搞不定","note":"证书要用户签"}`)}); s != "a1 上交（搞不定）：证书要用户签" {
 		t.Errorf("上交 Summary = %q", s)
 	}
-	body, _ := json.Marshal(map[string]any{"from": "running", "to": "blocked", "title": "修登录"})
+	body, _ := json.Marshal(map[string]any{
+		"text": "部门 o2 的每部门要点已 8/7 条（满了找部门负责人）：先合并",
+		"next": "atrium org show o2",
+	})
+	if s := Summary(Row{Kind: LimitFull, Body: body}); s != "部门 o2 的每部门要点已 8/7 条（满了找部门负责人）：先合并 · atrium org show o2" {
+		t.Errorf("上限 Summary = %q", s)
+	}
+	body, _ = json.Marshal(map[string]any{"from": "running", "to": "blocked", "title": "修登录"})
 	if s := Summary(Row{Kind: TaskStatus, Body: body}); s != "running → blocked「修登录」" {
 		t.Errorf("Summary = %q", s)
 	}

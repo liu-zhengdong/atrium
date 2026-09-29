@@ -75,7 +75,8 @@ a.quiet{color:inherit}a.quiet:hover{color:var(--ink)}
 .draft-detail{margin:16px 0 0;font-size:13px;line-height:1.7;white-space:pre-wrap}
 .section{margin-top:40px}
 .section h2{font-size:13px;font-weight:500;color:var(--ink3);margin:0 0 10px;display:flex;align-items:center;gap:8px}
-.section h2 .sort{margin-left:auto;font-size:12px;color:var(--ink3)}
+.section h2 .sort{margin-left:auto;font-size:12px;color:var(--ink3);display:inline-flex;align-items:center;gap:4px}
+.section h2 .sort svg{width:12px;height:12px}
 .section h2 .sort:hover{color:var(--ink)}
 
 .asks{display:flex;flex-direction:column;gap:8px}
@@ -108,9 +109,10 @@ a.quiet{color:inherit}a.quiet:hover{color:var(--ink)}
 .row{padding-left:calc(10px + var(--d,0) * var(--indent,22px))}
 .kfold{width:calc(100% + 20px);text-align:left;color:var(--ink3);font-size:13px;padding-top:6px;padding-bottom:6px}
 .kfold:hover{color:var(--ink2)}
-.kfold .chev{justify-self:center;transition:transform .15s}
+.kfold .chev{justify-self:center}
 .kfold[aria-expanded="true"] .chev{transform:rotate(90deg)}
 .check{color:var(--ok);width:14px;height:14px}
+.chev{width:12px;height:12px;flex:none;transition:transform .15s}
 .more{color:var(--ink3);font-size:13px;padding:8px 0 0}
 
 
@@ -187,7 +189,6 @@ button.lead:hover{background:var(--hover)}
 .grp{display:flex;align-items:center;gap:8px;margin-top:6px;font-size:13px;color:var(--ink3);padding:3px 8px;margin-left:-8px;border-radius:7px;width:max-content;max-width:100%;white-space:nowrap;text-align:left}
 .grp .errn{color:var(--bad)}
 .grp:hover{background:var(--raise);color:var(--ink2)}
-.grp .chev{transition:transform .15s;display:inline-block}
 .grp[aria-expanded="true"] .chev{transform:rotate(90deg)}
 .fold{margin:0 0 14px -8px}
 .pips{display:flex;align-items:center;gap:3px;flex-wrap:wrap;min-width:0}
@@ -199,6 +200,7 @@ button.lead:hover{background:var(--hover)}
 .cmd>button{display:grid;grid-template-columns:1fr auto;gap:8px;align-items:center;width:100%;padding:5px 8px;margin-left:-8px;border-radius:8px;text-align:left}
 .cmd>button:hover{background:var(--raise)}
 .cmd .lbl{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink2);font:12.5px/1.6 var(--mono)}
+.nl{width:1em;height:1em;vertical-align:-.15em;margin:0 .3em;opacity:.6}
 .cmd .lbl,.cmd .detail,.nowrun code{font-variant-ligatures:none} /* 命令是原文：不把 >= == 连写成符号 */
 .cmd .st{font-size:12px;color:var(--ink3)}
 .cmd.err .lbl,.cmd.err .st{color:var(--bad)}
@@ -266,7 +268,8 @@ table.perf{width:100%;border-collapse:collapse;font-size:13px}
 }
 
 /* 只读版补充 */
-.theme{margin-left:auto;color:var(--ink3);width:24px;height:24px;border-radius:7px}
+.theme{margin-left:auto;color:var(--ink3);width:24px;height:24px;border-radius:7px;display:grid;place-items:center}
+.theme svg{width:14px;height:14px}
 .theme:hover{color:var(--ink);background:var(--hover)}
 .intro{display:grid;grid-template-columns:56px 1fr;gap:6px 12px;margin:18px 0 0;font-size:13px;max-width:600px}
 .intro dt{color:var(--ink3)}.intro dd{margin:0;color:var(--ink2);white-space:pre-line}

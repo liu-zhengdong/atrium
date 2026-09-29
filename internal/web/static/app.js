@@ -12,6 +12,9 @@ const icon = {
   check: '<svg class="check" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 8.5 6.5 12 13 4.5"/></svg>',
   repeat: '<svg class="rep" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12.5 6.5A4.8 4.8 0 0 0 3.6 5.2M3.5 9.5a4.8 4.8 0 0 0 8.9 1.3"/><path d="M3.3 2.6v2.8h2.8M12.7 13.4v-2.8H9.9"/></svg>',
   refresh: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M13 8a5 5 0 1 1-1.6-3.7"/><path d="M13 2.5v2.8h-2.8"/></svg>',
+  chev: '<svg class="chev" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M6 3.5 10.5 8 6 12.5"/></svg>',
+  sort: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M5 13V3M2.5 5.5 5 3l2.5 2.5M11 3v10M8.5 10.5 11 13l2.5-2.5"/></svg>',
+  newline: '<svg class="nl" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12.5 3.5v4a2 2 0 0 1-2 2h-7M6 7 3.5 9.5 6 12"/></svg>',
   x: '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 4l8 8M12 4l-8 8"/></svg>',
 };
 
@@ -116,7 +119,7 @@ function kidRows(kids, depth, key, rowFn) {
   const done = kids.filter(ended), rest = kids.filter(k => !ended(k));
   const fold = done.length > 1, open = openKids.has(key);
   return rest.map(k => rowFn(k, depth)).join("") + (fold
-    ? `<button class="row kfold" data-kids="${esc(key)}" aria-expanded="${open}" style="--d:${Math.min(depth, 4)}"><span class="chev">›</span><div class="title">已结束 ${done.length} 件</div></button>`
+    ? `<button class="row kfold" data-kids="${esc(key)}" aria-expanded="${open}" style="--d:${Math.min(depth, 4)}">${icon.chev}<div class="title">已结束 ${done.length} 件</div></button>`
     : "") + (!fold || open ? done.map(k => rowFn(k, depth)).join("") : "");
 }
 function treeRow(r, depth = 0) {
@@ -162,7 +165,7 @@ function renderToday(d) {
     <h1 class="hello">${d.paused.includes("all") ? "已全部暂停" : d.asks.length ? `${d.asks.length} 件事等你` : d.paused.length ? `部分暂停：${esc(d.paused.join("、"))}` : "军团在自己运转"}</h1>
     <p class="pulse-line"><span class="dot ${d.running.length ? "run" : "idle"}"></span>&nbsp; ${d.running.length} 件在做 · ${d.queued} 件排队 · 今天上线 ${d.shipped.length} 件${draftsLink(d.drafts)}</p>
     <section class="section"><h2>等你</h2>${asks}</section>
-    <section class="section"><h2>在做${d.running.length > 1 ? `<button class="sort" id="sort">按${sortMode} ▾</button>` : ""}</h2><div class="rows">${live}</div></section>
+    <section class="section"><h2>在做${d.running.length > 1 ? `<button class="sort" id="sort">按${sortMode}${icon.sort}</button>` : ""}</h2><div class="rows">${live}</div></section>
     <section class="section"><h2>接下来 7 天</h2>${soonHTML(d.soon)}</section>
     ${d.shipped.length ? `<section class="section"><h2>今天上线</h2><div class="rows">${shippedRows(d.shipped)}</div></section>` : ""}
     <section class="section"><h2>三个目标</h2><dl class="facts"><dt>近 7 天</dt><dd>${esc(d.goals.week.text)}</dd><dt>累计</dt><dd>${esc(d.goals.all.text)}</dd></dl></section>`;
@@ -173,7 +176,7 @@ const shipFold = 5;
 function shippedRows(rows) {
   const open = openKids.has("shipped"), rest = rows.length - shipFold;
   return rows.slice(0, rest > 1 && !open ? shipFold : rows.length).map(r => taskRow(r, clock)).join("")
-    + (rest > 1 ? `<button class="row kfold" data-kids="shipped" aria-expanded="${open}"><span class="chev">›</span><div class="title">${open ? "收起" : `还有 ${rest} 件`}</div></button>` : "");
+    + (rest > 1 ? `<button class="row kfold" data-kids="shipped" aria-expanded="${open}">${icon.chev}<div class="title">${open ? "收起" : `还有 ${rest} 件`}</div></button>` : "");
 }
 
 /* 接下来 7 天：按一级部门分组，组内按下一轮先后；不在一级部门本身的，行尾带部门名 */
@@ -212,7 +215,7 @@ function renderDept(d, id, tab) {
   let body = "";
   if (tab === "tasks") body = d.tasks.length ? taskGroups(d.tasks) : `<div class="empty">这个部门现在没有任务</div>`;
   if (tab === "rules") {
-    const rule = (r, i) => `<div class="rule ${i === null ? "inh" : ""}"><span class="i">${i === null ? "·" : i + 1}</span>
+    const rule = (r, i) => `<div class="rule ${i === null ? "inh" : ""}"><span class="i">${i === null ? "" : i + 1}</span>
       <span class="t">${esc(r.text)}${r.why ? `<span class="why">${esc(r.why)}</span>` : ""}</span>
       <span class="w">${esc(i === null ? r.dept_name : r.by)}</span></div>`;
     body = (d.rules.length ? d.rules.map((r, i) => rule(r, i)).join("") : `<div class="empty">本部门没有自己的规矩</div>`) +
@@ -228,7 +231,7 @@ function renderDept(d, id, tab) {
     ${deptHead(id)}
     ${dept.what ? `<p class="dept-what">${esc(dept.what)}</p>` : ""}
     ${intro.length ? `<dl class="intro">${intro.map(x => `<dt>${x[0]}</dt><dd>${esc(x[1])}</dd>`).join("")}</dl>` : ""}
-    ${d.leader ? `<button class="lead" data-open="${esc(d.leader.id)}"><b>${esc([...d.leader.name][0] || "负")}</b>${esc(d.leader.name)}${d.leader.inherited ? "（上级）" : ""}<span class="chev">›</span></button>` : `<div class="lead"><b>你</b>你直接管<span>秘书帮你盯着</span></div>`}
+    ${d.leader ? `<button class="lead" data-open="${esc(d.leader.id)}"><b>${esc([...d.leader.name][0] || "负")}</b>${esc(d.leader.name)}${d.leader.inherited ? "（上级）" : ""}${icon.chev}</button>` : `<div class="lead"><b>你</b>你直接管<span>秘书帮你盯着</span></div>`}
     ${sched}
     ${d.subs.length ? `<section class="section"><h2>下属部门</h2><div class="subs">${subCards}</div></section>` : ""}
     <section class="section">
@@ -286,7 +289,8 @@ const unfolded = new Set();
 const md = s => esc(s).replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noreferrer">$1</a>')
   .replace(/`([^`]+)`/g, "<code>$1</code>").replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>");
 const firstPara = s => s.trim().split(/\n\s*\n/)[0];
-const oneLine = s => s.trim().replace(/\s*\n\s*/g, " ↵ ");
+// 多行命令压成一行（已转义的 HTML），换行处画换行图标；max 按字符截断。
+const oneLine = (s, max) => esc(s.trim().replace(/\s*\n\s*/g, "\n").slice(0, max)).replaceAll("\n", icon.newline);
 const cmdNote = { run: "在跑", err: "出错", none: "没搜到", ok: "" };
 const cmdsOf = segs => segs.flatMap(s => s.cmds || []);
 const maxPips = 20; // 每段最多画这么多点，多的写「+N」
@@ -306,13 +310,13 @@ function segHTML(tid, s, i, running) {
   const last = cmds[cmds.length - 1];
   const list = exp ? `<div class="cmds">${cmds.map((c, j) => {
     const k = key + ":" + j, o = unfolded.has(k);
-    return `<div class="cmd ${c.state}"><button data-c="${k}" aria-expanded="${o}"><span class="lbl">${esc(oneLine(c.cmd))}</span><span class="st">${cmdNote[c.state]}</span></button>
+    return `<div class="cmd ${c.state}"><button data-c="${k}" aria-expanded="${o}"><span class="lbl">${oneLine(c.cmd)}</span><span class="st">${cmdNote[c.state]}</span></button>
       ${o ? `<div class="detail"><div class="c">$ ${esc(c.cmd)}</div>${c.state === "run" ? "" : `<div class="o">${esc(c.out) || "（没有输出）"}</div>`}</div>` : ""}</div>`;
   }).join("")}</div>` : "";
   return `<div class="phase ${running ? "run" : ""}"><span class="pd"></span><div>
     ${s.say ? `<div class="say">${md(s.say)}</div>` : `<div class="say quiet">先看代码</div>`}
-    ${cmds.length ? `<button class="grp" data-g="${key}" aria-expanded="${exp}"><span class="chev">›</span>${cmds.length} 条命令${pips(cmds)}</button>` : ""}
-    ${running && !exp && last?.state === "run" ? `<div class="nowrun">正在跑：<code>${esc(oneLine(last.cmd).slice(0, 60))}</code></div>` : ""}${list}</div></div>`;
+    ${cmds.length ? `<button class="grp" data-g="${key}" aria-expanded="${exp}">${icon.chev}${cmds.length} 条命令${pips(cmds)}</button>` : ""}
+    ${running && !exp && last?.state === "run" ? `<div class="nowrun">正在跑：<code>${oneLine(last.cmd, 60)}</code></div>` : ""}${list}</div></div>`;
 }
 function traceHTML(d) {
   const tr = d.trace;
@@ -320,7 +324,7 @@ function traceHTML(d) {
   const tid = d.task.id, segs = tr.segments, n = cmdsOf(segs).length;
   const lines = (tr.unknown ? `<div class="jh"><b>没认出</b><span>${tr.unknown} 行事件，工具的日志格式可能变了</span></div>` : "")
     + (tr.lines?.length ? `<div class="log">${esc(tr.lines.join("\n"))}</div>` : "");
-  const fold = (key, label, open) => `<button class="grp fold" data-g="${tid}:${key}" aria-expanded="${open}"><span class="chev">›</span><span>${label}</span></button>`;
+  const fold = (key, label, open) => `<button class="grp fold" data-g="${tid}:${key}" aria-expanded="${open}">${icon.chev}<span>${label}</span></button>`;
   if (!segs.length && !tr.ended) return lines ? `<div class="jh"><b>日志</b></div>${lines}` : "";
   if (d.live) { // 进行中：只留最近两段，当前段展开，更早的折起
     const older = segs.slice(0, Math.max(0, segs.length - 2)), showOld = unfolded.has(tid + ":old");

@@ -101,8 +101,8 @@ func HolderOf(f Facts) Holder {
 			return Holder{Kind: "deps", Text: "等 " + strings.Join(f.WaitingOn, "、") + " 完成"}
 		}
 		if f.OpenChildren > 0 {
-			// 拆开在做的目标：子任务各自计时，全部结束后负责人收到结果再来收尾。
-			return Holder{Kind: "children", Text: fmt.Sprintf("拆成的子任务在做（还剩 %d 件）", f.OpenChildren)}
+			// 拆开在做的父任务：子任务各自计时，全部结束后负责人收到结果再来收尾。
+			return Holder{Kind: "children", Text: fmt.Sprintf("子任务在做（%d/%d 结束）", f.Children-f.OpenChildren, f.Children)}
 		}
 		owner.Text, owner.Next = "待派活", "atrium task run "+t.ID
 		if f.Children > 0 {

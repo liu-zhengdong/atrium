@@ -236,7 +236,7 @@ func TestAssignee(t *testing.T) {
 		actor string
 		want  string
 	}{
-		"秘书交目标给负责人":  {NewTask{Owner: "a1"}, "secretary", "a1"},
+		"秘书交给负责人去拆":  {NewTask{Owner: "a1"}, "secretary", "a1"},
 		"负责人给自己建":    {NewTask{Owner: "a1"}, "a1", ""},
 		"交给上一层负责人":   {NewTask{Owner: "a1"}, "a2", "a1"},
 		"有仓库是具体的活":   {NewTask{Owner: "a1", Repo: "/r"}, "secretary", ""},
@@ -251,7 +251,7 @@ func TestAssignee(t *testing.T) {
 	}
 }
 
-// 交给负责人的目标：没写部门落到它负责的那个部门，并给它发一条要处理的 task.assigned。
+// 交给负责人去拆的任务：没写部门落到它负责的那个部门，并给它发一条要处理的 task.assigned。
 func TestAddAssigned(t *testing.T) {
 	db, ctx := openDB(t), context.Background()
 	for _, q := range []string{
@@ -263,7 +263,7 @@ func TestAddAssigned(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	goal, err := Add(ctx, db, NewTask{Title: "接目标", Owner: "a1"}, "secretary")
+	goal, err := Add(ctx, db, NewTask{Title: "接活", Owner: "a1"}, "secretary")
 	if err != nil || goal.Org != "o1" {
 		t.Fatalf("应落到 o1：%+v %v", goal, err)
 	}

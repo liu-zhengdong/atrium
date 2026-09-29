@@ -25,7 +25,7 @@ func Commands(t *cli.Table) {
 			{Name: "priority", Value: "级别", Help: "urgent 紧急 / fix 修复 / normal 普通（缺省）/ idle 闲时"},
 			{Name: "repo", Value: "仓库", Help: "在哪个仓库干活，如 owner/name（建工作树，交 PR 或本机合入）"},
 			{Name: "dir", Value: "路径", Help: "工作地点：本机文件夹的绝对路径，不必是 git 仓库；执行者在原地干，交付说明写在最后的回复里（与 --repo 只给一个）"},
-			{Name: "owner", Value: "身份", Help: "处理人：结果（合入、上线、失败、卡住）要处理地投给他——u1、secretary 或 aN（缺省派活的人）；aN 且不写仓库与工作地点 = 交给这位负责人去拆，建好就唤醒它"},
+			{Name: "owner", Value: "身份", Help: "处理人：结果（合入、上线、失败、卡住）要处理地投给他——u1、secretary 或 aN（缺省派活的人）；aN 且不写仓库与工作地点 = 交给这位负责人去拆，建好就唤醒它；--detail 写清服务三个目标里的哪一个，长期方向写进部门介绍，不建成做不完的任务"},
 			{Name: "draft", Bool: true, Help: "建成草稿：还没想清楚、条件还不够，不派活、不计时；想清楚了 task set tN --status todo"},
 		},
 		Run: func(c *cli.Ctx) error {
@@ -48,7 +48,7 @@ func Commands(t *cli.Table) {
 			case task.Status == Draft:
 				next = "atrium task set " + task.ID + " --status todo"
 			case Assignee(in, "") != "":
-				// 交给负责人的目标由它拆、派、收尾，建的人不派它。
+				// 交给负责人的任务由它拆、派、收尾，建的人不派它。
 				if text, next, err = events.AsyncNext(c, text+"，已交给 "+in.Owner+" 去拆", "atrium task wait "+task.ID); err != nil {
 					return err
 				}
@@ -166,7 +166,7 @@ func Commands(t *cli.Table) {
 			case t.Status == Draft:
 				next = "atrium task set " + t.ID + " --status todo"
 			case t.Status == Todo && d.Children != nil && d.Children.Open() > 0:
-				next = "atrium task tree " + t.ID // 拆开在做的目标：看子任务，不派它自己
+				next = "atrium task tree " + t.ID // 拆开在做的父任务：看子任务，不派它自己
 			case t.Status == Todo && d.Children != nil && d.Children.Total > 0:
 				next = "atrium task set " + t.ID + " --status done" // 子任务都结束了：收尾
 			case t.Status == Todo && d.Ready:

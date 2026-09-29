@@ -409,7 +409,8 @@ out=$(json task add 视频第一帧黑 --dir "$vidb" --skill video); vb=$(jq -r 
 json task run "$vb" --worker fakewrite >/dev/null
 out=$(json task wait "$vb" --timeout 120); has '.result.task.status == "blocked"'
 out=$(json task show "$vb"); has '.result.history|map(select(.kind == "bounce"))[0].body|test("video：out/demo.mp4 的第一帧是空白")'
-step "交目标给负责人 → 拆成有依赖的两件 → 前一件完成后自动派下一件；依赖失败转受阻（假执行者 fakesh）"
+
+step "交给负责人去拆 → 拆成有依赖的两件 → 前一件完成后自动派下一件；依赖失败转受阻（假执行者 fakesh）"
 out=$(json task add 性能治理 --owner a1); goal=$(jq -r .result.id <<<"$out")
 has '.result.org == "o2" and .next == "atrium task wait '"$goal"'"'   # 不写仓库 = 交给 a1 去拆：落到它负责的部门，建的人不派它
 out=$(json events wait --as a1 --timeout 5); has '(.result|map(select(.task == "'"$goal"'" and .kind == "task.assigned" and .level == "act"))|length) == 1'
@@ -417,10 +418,10 @@ json events ack $(jq -r '.result|map(.id|tostring)|join(" ")' <<<"$out") >/dev/n
 out=$(json task add 采集瓶颈 --parent "$goal"); sub1=$(jq -r .result.id <<<"$out")
 out=$(json task add 修热点 --parent "$goal" --after "$sub1"); sub2=$(jq -r .result.id <<<"$out")
 out=$(json task run "$sub2" --worker fakesh); has '.result.task.status == "queued" and .result.waiting == ["'"$sub1"'"] and .next == "atrium task wait '"$sub1"'"'
-out=$(json task show "$goal"); has '(.result.holder|startswith("拆成的子任务在做")) and .next == "atrium task tree '"$goal"'"'   # 子任务没结束：目标不计时、不派它自己
+out=$(json task show "$goal"); has '.result.holder == "子任务在做（0/2 结束）" and .next == "atrium task tree '"$goal"'"'   # 子任务没结束：父任务不计时、不派它自己
 json task run "$sub1" --worker fakesh >/dev/null
 out=$(json task wait "$sub2" --timeout 30); has '.result.task.status == "done"'
-out=$(json task show "$goal"); has '.next == "atrium task set '"$goal"' --status done"'   # 子任务都完成：等负责人收尾
+out=$(json task show "$goal"); has '.next == "atrium task set '"$goal"' --status done"'   # 子任务都完成：等负责人收尾父任务
 out=$(json task set "$goal" --status done); has '.result.status == "done"'
 out=$(json task add 前序); pre=$(jq -r .result.id <<<"$out")
 out=$(json task add 后续 --after "$pre"); post=$(jq -r .result.id <<<"$out")

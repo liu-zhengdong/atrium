@@ -239,14 +239,14 @@ func Add(ctx context.Context, db *store.DB, in NewTask, actor string) (Task, err
 		}
 		assignee := Assignee(in, actor)
 		if assignee != "" && in.Org == "" {
-			// 交给负责人的目标落到它负责的部门，它才动得了；负责多个部门时要写明哪个。
+			// 交给负责人的任务落到它负责的部门，它才动得了；负责多个部门时要写明哪个。
 			lm, err := org.LeaderMap(ctx, tx)
 			if err != nil {
 				return err
 			}
 			led := org.Led(lm, assignee)
 			if len(led) != 1 {
-				return api.Usage("--org: 交给 %s 的目标要写归属部门（它负责 %d 个部门：%s）", assignee, len(led), strings.Join(led, "、"))
+				return api.Usage("--org: 交给 %s 去拆的任务要写归属部门（它负责 %d 个部门：%s）", assignee, len(led), strings.Join(led, "、"))
 			}
 			in.Org = led[0]
 		}
@@ -713,7 +713,7 @@ func Deps(ctx context.Context, q store.Querier, id string) ([]DepState, error) {
 	return out, rows.Err()
 }
 
-// Children 数一件任务的直接子任务：还没结束的与全部（拆开在做的目标靠它判断在做还是等收尾）。
+// Children 数一件任务的直接子任务：还没结束的与全部（拆开在做的父任务靠它判断在做还是等收尾）。
 func Children(ctx context.Context, q store.Querier, id string) (open, total int, err error) {
 	err = q.QueryRowContext(ctx, `SELECT COALESCE(sum(status NOT IN ('done', 'failed', 'cancelled')), 0), count(*)
 		FROM tasks WHERE parent = ?`, id).Scan(&open, &total)

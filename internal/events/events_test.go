@@ -72,7 +72,7 @@ func TestLevelAndKey(t *testing.T) {
 		{"负责人上交·卡住", LeaderEscalate, map[string]any{"kind": "stuck"}, Act},
 		{"负责人上交·跨部门", LeaderEscalate, map[string]any{"kind": "cross"}, Act},
 		{"负责人上交·已上线", LeaderEscalate, map[string]any{"kind": "shipped"}, Info},
-		{"交给负责人的目标", TaskAssigned, map[string]any{"title": "目标"}, Act},
+		{"交给负责人去拆", TaskAssigned, map[string]any{"title": "任务"}, Act},
 		{"未知种类", "other", map[string]any{"to": "failed"}, Info},
 	}
 	for _, c := range cases {
@@ -205,7 +205,7 @@ func TestSummary(t *testing.T) {
 	if s := Summary(Row{Kind: Overdue, Body: body}); s != "到期：卡住，等处理（已 31 分钟） · atrium task show t1" {
 		t.Errorf("Summary = %q", s)
 	}
-	if s := Summary(Row{Kind: TaskAssigned, Body: []byte(`{"title":"拆活派活"}`)}); s != "交给你的目标「拆活派活」：拆活、派活、收尾" {
+	if s := Summary(Row{Kind: TaskAssigned, Body: []byte(`{"title":"拆活派活"}`)}); s != "交给你去拆「拆活派活」：拆子任务、派活、收尾" {
 		t.Errorf("TaskAssigned Summary = %q", s)
 	}
 	if l := Line(Row{ID: 7, Task: "t2", Kind: "x", Count: 3}); l != "#7 t2 x （合并 3 次）" {

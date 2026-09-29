@@ -290,31 +290,33 @@ func TestDeptRepo(t *testing.T) {
 	one := []string{"o/r"}
 	cases := []struct {
 		name  string
-		in    NewTask
+		t     Task
 		repos []string
 		want  string
 	}{
-		{"部门一个仓库：沿用", NewTask{}, one, "o/r"},
-		{"草稿也沿用", NewTask{Draft: true}, one, "o/r"},
-		{"写了仓库：照写的", NewTask{Repo: "x/y"}, one, "x/y"},
-		{"写了工作地点：不沿用", NewTask{Dir: "/w"}, one, ""},
-		{"部门没有仓库", NewTask{}, nil, ""},
-		{"部门多个仓库：分不出，不沿用", NewTask{}, []string{"o/a", "o/b"}, ""},
-		{"交给别的负责人去拆：不沿用", NewTask{Owner: "a2"}, one, ""},
-		{"交给负责人的草稿也不沿用", NewTask{Owner: "a2", Draft: true}, one, ""},
-		{"负责人建给自己：沿用", NewTask{Owner: "a1"}, one, "o/r"},
-		{"处理人是秘书：沿用", NewTask{Owner: "secretary"}, one, "o/r"},
+		{"部门一个仓库：补上", Task{Status: Todo}, one, "o/r"},
+		{"草稿直接派也补", Task{Status: Draft}, one, "o/r"},
+		{"失败后重派也补", Task{Status: Failed}, one, "o/r"},
+		{"有仓库：不补", Task{Status: Todo, Repo: "x/y"}, one, ""},
+		{"有工作地点：不补", Task{Status: Todo, Dir: "/w"}, one, ""},
+		{"部门没有仓库", Task{Status: Todo}, nil, ""},
+		{"部门多个仓库：分不出，不补", Task{Status: Todo}, []string{"o/a", "o/b"}, ""},
+		{"在跑的不动", Task{Status: Running}, one, ""},
+		{"在交付的不动", Task{Status: Running, Stage: StageGate}, one, ""},
 	}
 	for _, c := range cases {
-		if got := DeptRepo(c.in, "a1", c.repos); got != c.want {
+		if got := DeptRepo(c.t, c.repos); got != c.want {
 			t.Errorf("%s：得到 %q，应为 %q", c.name, got, c.want)
 		}
 	}
 }
 
-// task add 入口补部门的仓库：部门缺省沿用父任务的；Add 本身（运行时建的审阅、周期任务）不沿用。
-func TestWithDeptRepo(t *testing.T) {
+// 派活入口补部门的仓库：建任务时不补（运行时建的审阅、周期任务也不补），UseDeptRepo 才写上并记经历。
+func TestUseDeptRepo(t *testing.T) {
 	db, ctx := openDB(t), context.Background()
+	if _, err := db.Exec(`INSERT INTO identities (id, kind, name, created_at) VALUES ('a1', 'leader', '甲', 0)`); err != nil {
+		t.Fatal(err)
+	}
 	d1, err := org.Add(ctx, db, org.NewDept{Name: "有仓库", Repos: []string{"o/r"}})
 	if err != nil {
 		t.Fatal(err)
@@ -323,33 +325,30 @@ func TestWithDeptRepo(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	parent, err := Add(ctx, db, NewTask{Title: "父", Org: d1.ID}, "u1")
-	if err != nil || parent.Repo != "" {
-		t.Fatalf("Add 本身不沿用部门仓库：%+v %v", parent, err)
-	}
 	cases := []struct {
 		name string
 		in   NewTask
 		want string
 	}{
-		{"写部门", NewTask{Org: d1.ID}, "o/r"},
-		{"沿用父任务的部门", NewTask{Parent: parent.ID}, "o/r"},
+		{"草稿", NewTask{Org: d1.ID, Draft: true}, "o/r"},
+		{"交给负责人的草稿", NewTask{Org: d1.ID, Owner: "a1", Draft: true}, "o/r"},
 		{"部门多个仓库", NewTask{Org: d2.ID}, ""},
 		{"没部门", NewTask{}, ""},
 	}
 	for _, c := range cases {
 		c.in.Title = c.name
-		in, err := withDeptRepo(ctx, db, c.in, "u1")
-		if err != nil {
+		task, err := Add(ctx, db, c.in, "u1")
+		if err != nil || task.Repo != "" {
+			t.Fatalf("%s：建任务时不补仓库：%+v %v", c.name, task, err)
+		}
+		if err := UseDeptRepo(ctx, db, task.ID, "secretary"); err != nil {
 			t.Fatalf("%s：%v", c.name, err)
 		}
-		if in.Repo != c.want {
-			t.Errorf("%s：仓库 %q，应为 %q", c.name, in.Repo, c.want)
+		if task, _ = Get(ctx, db, task.ID); task.Repo != c.want {
+			t.Errorf("%s：仓库 %q，应为 %q", c.name, task.Repo, c.want)
 		}
 	}
-	for _, in := range []NewTask{{Parent: "t99"}, {Parent: "x"}, {Org: "o99"}} {
-		if _, err := withDeptRepo(ctx, db, in, "u1"); code(err) == "" {
-			t.Errorf("%+v 应报错，得到 %v", in, err)
-		}
+	if err := UseDeptRepo(ctx, db, "t99", "u1"); code(err) == "" {
+		t.Errorf("不存在的任务应报错，得到 %v", err)
 	}
 }

@@ -104,19 +104,8 @@ func ViewPR(ctx context.Context, r Runner, repo, ref string) (PRInfo, error) {
 
 // Collect 在执行者的工作树里查事实：分支、提交、推送、改动规模、PR 与正文「端到端验证」一节。
 func Collect(ctx context.Context, r Runner, dir, repo string) (Facts, error) {
-	f := Facts{Dir: dir}
-	git := func(args ...string) (string, error) {
-		out, err := r.Run(ctx, dir, "git", append([]string{"--no-optional-locks"}, args...)...)
-		return strings.TrimSpace(out), err
-	}
-	var err error
-	if f.Branch, err = git("rev-parse", "--abbrev-ref", "HEAD"); err != nil {
-		return f, err
-	}
-	if f.Branch == "HEAD" {
-		return f, fmt.Errorf("工作树 %s 不在分支上（detached HEAD）", dir)
-	}
-	if f.Head, err = git("rev-parse", "HEAD"); err != nil {
+	f, git, err := branchFacts(ctx, r, dir)
+	if err != nil {
 		return f, err
 	}
 	if f.Base, err = DefaultBranch(ctx, r, repo); err != nil {
@@ -130,26 +119,9 @@ func Collect(ctx context.Context, r Runner, dir, repo string) (Facts, error) {
 		return f, err
 	}
 	f.Pushed = remote != "" && strings.Fields(remote)[0] == f.Head
-	status, err := git("status", "--porcelain")
-	if err != nil {
+	if err := f.compare(git, "origin/"+f.Base); err != nil {
 		return f, err
 	}
-	for _, line := range strings.Split(status, "\n") {
-		if len(line) > 3 {
-			f.Dirty = append(f.Dirty, strings.TrimSpace(line[3:]))
-		}
-	}
-	count, err := git("rev-list", "--count", "origin/"+f.Base+"..HEAD")
-	if err != nil {
-		return f, err
-	}
-	f.Ahead, _ = strconv.Atoi(count)
-	numstat, err := git("diff", "--numstat", "origin/"+f.Base+"...HEAD")
-	if err != nil {
-		return f, err
-	}
-	f.Numstat = ParseNumstat(numstat)
-	f.Diff = DiffText(f.Numstat)
 	out, err := r.Run(ctx, "", "gh", "pr", "list", "-R", repo, "--head", f.Branch, "--state", "all",
 		"--json", PRFields, "--limit", "5")
 	if err != nil {
@@ -169,4 +141,70 @@ func Collect(ctx context.Context, r Runner, dir, repo string) (Facts, error) {
 		f.E2E = Section(f.PR.Body, "端到端验证")
 	}
 	return f, nil
+}
+
+// CollectLocal 查本机交付的事实：分支、未提交的改动、比本机主分支（LocalBase）多几个提交、改动规模；不碰远端。
+func CollectLocal(ctx context.Context, r Runner, dir, repo string) (Facts, error) {
+	f, git, err := branchFacts(ctx, r, dir)
+	if err != nil {
+		return f, err
+	}
+	if f.Base, err = LocalBase(ctx, r, repo); err != nil {
+		return f, err
+	}
+	return f, f.compare(git, f.Base)
+}
+
+// LocalBase 是本机仓库的主分支：主工作树当前所在的分支。
+func LocalBase(ctx context.Context, r Runner, repo string) (string, error) {
+	out, err := r.Run(ctx, repo, "git", "symbolic-ref", "--quiet", "--short", "HEAD")
+	if err != nil {
+		return "", fmt.Errorf("本机仓库 %s 的主工作树不在分支上：%w", repo, err)
+	}
+	return strings.TrimSpace(out), nil
+}
+
+type gitFunc func(args ...string) (string, error)
+
+// branchFacts 读工作树所在的分支与头提交；返回在这个工作树里跑 git 的函数。
+func branchFacts(ctx context.Context, r Runner, dir string) (Facts, gitFunc, error) {
+	f := Facts{Dir: dir}
+	git := func(args ...string) (string, error) {
+		out, err := r.Run(ctx, dir, "git", append([]string{"--no-optional-locks"}, args...)...)
+		return strings.TrimSpace(out), err
+	}
+	var err error
+	if f.Branch, err = git("rev-parse", "--abbrev-ref", "HEAD"); err != nil {
+		return f, git, err
+	}
+	if f.Branch == "HEAD" {
+		return f, git, fmt.Errorf("工作树 %s 不在分支上（detached HEAD）", dir)
+	}
+	f.Head, err = git("rev-parse", "HEAD")
+	return f, git, err
+}
+
+// compare 查工作树相对 base 的事实：未提交的文件、新提交数、改动规模。
+func (f *Facts) compare(git gitFunc, base string) error {
+	status, err := git("status", "--porcelain")
+	if err != nil {
+		return err
+	}
+	for _, line := range strings.Split(status, "\n") {
+		if len(line) > 3 {
+			f.Dirty = append(f.Dirty, strings.TrimSpace(line[3:]))
+		}
+	}
+	count, err := git("rev-list", "--count", base+"..HEAD")
+	if err != nil {
+		return err
+	}
+	f.Ahead, _ = strconv.Atoi(count)
+	numstat, err := git("diff", "--numstat", base+"...HEAD")
+	if err != nil {
+		return err
+	}
+	f.Numstat = ParseNumstat(numstat)
+	f.Diff = DiffText(f.Numstat)
+	return nil
 }

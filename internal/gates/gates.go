@@ -2,7 +2,7 @@
 // 按档案 checks 判过或不过，不采信执行者自述；高风险或低信任的交付先另派不同工具、不同模型的审阅者；
 // 部门的验收人是 leader、user 时停在等验收，由 task accept / task reject 判。
 //
-// 交付方式（pr、choice、message：怎么交、查什么、怎么落地）在 delivery.go；判定在 judge.go（纯函数）；
+// 交付方式（pr、local、choice、message：怎么交、查什么、怎么落地）在 delivery.go（local 的关卡与落地在 local.go）；判定在 judge.go（纯函数）；
 // 查事实在 facts.go；与 dispatch 的约定在 records.go。
 // 结论经 ledger.Apply(GatePass / ReviewPass / Accept / Bounce / Block) 落账，理由用 ledger.Record 记进经历。
 // merge、release 也用本包的 Runner、ViewPR、Bounce、Paused。
@@ -42,7 +42,7 @@ func Module() app.Module {
 }
 
 func Commands(t *cli.Table) {
-	t.Add(cli.Command{Path: "task accept", Args: "<tN>", Summary: "验收通过：等验收的交付落地（有仓库进合入队列，调研登记选项单，其余直接完成）",
+	t.Add(cli.Command{Path: "task accept", Args: "<tN>", Summary: "验收通过：等验收的交付落地（有 GitHub 仓库进合入队列，本机仓库合进本机主分支，调研登记选项单，其余直接完成）",
 		Run: func(c *cli.Ctx) error {
 			id, err := c.Arg(0, "<tN>")
 			if err != nil {
@@ -55,8 +55,11 @@ func Commands(t *cli.Table) {
 			if err := c.Call("POST", "/api/tasks/"+url.PathEscape(id)+"/accept", struct{}{}, &t); err != nil {
 				return err
 			}
-			if t.Status == ledger.Done {
+			switch t.Status {
+			case ledger.Done:
 				return c.Done(t, fmt.Sprintf("%s「%s」验收通过，已完成", t.ID, t.Title), "atrium task show "+t.ID)
+			case ledger.Queued, ledger.Blocked:
+				return c.Done(t, fmt.Sprintf("%s「%s」验收通过但落地没成，已交回（%s）", t.ID, t.Title, t.Status), "atrium task show "+t.ID)
 			}
 			text, next, err := events.AsyncNext(c, fmt.Sprintf("%s「%s」验收通过，落地中（%s）", t.ID, t.Title, t.Stage), "atrium task wait "+t.ID)
 			if err != nil {

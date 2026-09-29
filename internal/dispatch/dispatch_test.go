@@ -1,13 +1,20 @@
 package dispatch
 
 import (
+	"context"
+	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 
+	"github.com/liu-zhengdong/atrium/internal/app"
+	"github.com/liu-zhengdong/atrium/internal/config"
 	"github.com/liu-zhengdong/atrium/internal/ledger"
+	"github.com/liu-zhengdong/atrium/internal/pause"
+	"github.com/liu-zhengdong/atrium/internal/store"
 	"github.com/liu-zhengdong/atrium/internal/workers"
 )
 
@@ -281,5 +288,57 @@ func TestDepGate(t *testing.T) {
 		if !slices.Equal(waiting, c.waiting) || got != c.broken {
 			t.Errorf("%s：waiting=%v broken=%q，应为 %v %q", name, waiting, got, c.waiting, c.broken)
 		}
+	}
+}
+
+// 隔离实例自动挑人不挑内置工具（冒烟、测试不拉起本机真实执行者）；通用命令行执行者照挑；用户的服务照常挑内置工具。
+func TestViewIsolated(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	db, err := store.Open(filepath.Join(dir, "data", "atrium.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	env := &app.Env{DB: db, Paths: config.Paths{Data: filepath.Join(dir, "data")}, Log: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Pause: &pause.Store{DB: db}}
+	oldSpares := spares
+	spares = func(context.Context, *app.Env) (map[string]Spare, error) { return map[string]Spare{}, nil }
+	t.Cleanup(func() { spares = oldSpares })
+	src := "---\nprotocol: cli\ncommand: go\nargs: [\"{prompt}\"]\n---\n"
+	if _, err := workers.SaveProfile(ctx, db, "harness/fake", workers.Edit{Source: &src}, "u1"); err != nil {
+		t.Fatal(err)
+	}
+	tk, _ := ledger.Add(ctx, db, ledger.NewTask{Title: "巡检"}, "u1")
+	d := get(env)
+	refused := func(v PickView, id string) bool {
+		for _, c := range v.Candidates {
+			if strings.HasPrefix(c.ID, id) {
+				return strings.Contains(strings.Join(c.Refusals, "、"), "隔离实例")
+			}
+		}
+		t.Fatalf("候选里没有 %s：%+v", id, v.Candidates)
+		return false
+	}
+	if !env.Paths.Isolated() {
+		t.Fatal("临时目录应算隔离实例")
+	}
+	v, err := d.view(ctx, tk, "low", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tool := range workers.Tools {
+		if !refused(v, tool) {
+			t.Errorf("隔离实例不该自动挑 %s：%+v", tool, v.Candidates)
+		}
+	}
+	if refused(v, "fake") || v.Recommended != "fake" {
+		t.Errorf("通用命令行执行者应照挑：%+v", v)
+	}
+	oldIsolated := isolated
+	isolated = func(*app.Env) bool { return false }
+	t.Cleanup(func() { isolated = oldIsolated })
+	if v, err = d.view(ctx, tk, "low", nil); err != nil || refused(v, "claude") {
+		t.Errorf("用户的服务照常挑内置工具：%+v %v", v, err)
 	}
 }

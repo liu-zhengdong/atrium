@@ -8,6 +8,7 @@ work=$(mktemp -d "${TMPDIR:-/tmp}/atrium-smoke.XXXXXX")
 bin="$work/atrium"
 export ATRIUM_DATA="$work/data"
 export ATRIUM_PORT=$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1])')
+export ATRIUM_QUOTA_READERS=off   # 不读本机真实额度（登录、钥匙串）
 unset ATRIUM_AS
 
 pid=""
@@ -259,7 +260,7 @@ out=$(json host add 远程一号 --repo liu-zhengdong/atrium --max 2); has '.res
 code=$(jq -r .result.code <<<"$out")
 out=$(json host ls); has '.result[0].id == "h1" and .result[0].kind == "local" and .result[1].conn == "pending"'
 out=$(json host add 坏 --repo bad || true); has '.ok == false and .error.code == "usage"'
-HOME="$work/agenthome" ATRIUM_QUOTA_READERS=off "$bin" agent --data "$work/agent" --server "http://127.0.0.1:$ATRIUM_PORT" --token "$code" >"$work/agent.out" 2>&1 &
+HOME="$work/agenthome" "$bin" agent --data "$work/agent" --server "http://127.0.0.1:$ATRIUM_PORT" --token "$code" >"$work/agent.out" 2>&1 &
 agentpid=$!; pid="$pid $agentpid"
 for _ in $(seq 50); do out=$(json host ls h2); jq -e '.result.conn == "online"' >/dev/null <<<"$out" && break; sleep 0.2; done
 has '.result.conn == "online" and .result.info.cpus > 0 and .result.max == 2'
@@ -325,7 +326,7 @@ for i in 1 2; do
 done
 out=$(json task reject "$acc" --reason "第 3 次"); has '.result.status == "blocked" and .result.stage == "accept"'
 out=$(json task accept "$acc" || true); has '.ok == false and .error.code == "conflict"'
-json task run "$acc" --worker fakesh >/dev/null   # 固定假执行者：不挑本机真实工具
+json task run "$acc" --worker fakesh >/dev/null
 until_accept
 out=$(json task accept "$acc"); has '.result.status == "done"'
 out=$(json org edit o1 --accept -); has '.ok'
@@ -442,7 +443,7 @@ out=$(json workers harness/fakemodel --file "$work/fakemodel.md"); has '.ok'
 out=$(json org add 可用性演练 --parent o1); av_org=$(jq -r .result.id <<<"$out")
 out=$(json task add 模型名无效 --org "$av_org"); av=$(jq -r .result.id <<<"$out")
 json task run "$av" --worker fakemodel >/dev/null
-out=$(json pause --org "$av_org"); has '.ok'   # 重新排队后不再拉起：自动挑人可能挑到本机真实工具
+out=$(json pause --org "$av_org"); has '.ok'   # 重新排队后不再拉起，好断言停在 queued
 for _ in $(seq 50); do out=$(json workers fakemodel); jq -e '(.result.marks // [])|length == 1' >/dev/null <<<"$out" && break; sleep 0.2; done
 has '.result.marks[0].host == "h1" and .result.marks[0].kind == "model" and .result.marks[0].until == 0'
 out=$(json task show "$av"); has '.result.task.status == "queued" and (.result.history|map(.body // "")|join(" ")|contains("已标记 fakemodel@h1 不可用"))'

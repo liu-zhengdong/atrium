@@ -83,8 +83,7 @@ func Guarded(getenv func(string) string) bool {
 		return false
 	}
 	p, err := config.Resolve(getenv)
-	def, derr := config.Resolve(func(string) string { return "" })
-	return err != nil || derr != nil || p == def
+	return err != nil || !p.Isolated()
 }
 
 // WorkerDenied 是执行者被拒的错误（自己判读写的命令也用它）。

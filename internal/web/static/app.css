@@ -98,6 +98,7 @@ a.quiet{color:inherit}a.quiet:hover{color:var(--ink)}
 .dept-h a:hover{color:var(--ink)}
 .row{display:grid;grid-template-columns:16px minmax(0,1fr) auto auto;align-items:center;gap:12px;padding:9px 10px;margin:0 -10px;border-radius:8px;cursor:pointer}
 .row:hover{background:var(--raise)}
+.row.still{cursor:default}.row.still:hover{background:none} /* 资料行点不开，不装成能点 */
 .row .title{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .row .title .id{margin-right:8px}
 .row .who{color:var(--ink2);font-size:13px;white-space:nowrap}
@@ -122,10 +123,7 @@ a.quiet{color:inherit}a.quiet:hover{color:var(--ink)}
 .lead b{width:24px;height:24px;border-radius:50%;background:var(--accent-soft);color:var(--accent);display:grid;place-items:center;font-weight:600;font-size:11px}
 .lead span{color:var(--ink2)}
 button.lead:hover{background:var(--hover)}
-.lead .chev{color:var(--ink3);transition:transform .15s}
-.lead[aria-expanded="true"] .chev{transform:rotate(90deg)}
-.lead+.intro{margin-top:12px}
-.intro .none{color:var(--ink3)}.intro a{color:var(--accent)}
+.lead .chev{color:var(--ink3)}
 .subs{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:10px}
 .sub{padding:14px 16px;border-radius:12px;background:var(--raise);text-align:left;display:flex;flex-direction:column;gap:6px;min-height:92px}
 .sub:hover{background:var(--hover)}
@@ -298,3 +296,9 @@ details.full summary{color:var(--ink3);font-size:13px;cursor:pointer;list-style:
 details.full summary::-webkit-details-marker{display:none}
 details.full summary:hover{color:var(--ink2)}
 details.full .result{margin-top:8px;font-size:13px;color:var(--ink2)}
+
+/* 负责人抽屉的备忘：一行一段，段间留白；行首话题加重 */
+.memo{font-size:13px;line-height:1.75;color:var(--ink2);word-break:break-word}
+.memo p{margin:0 0 10px}
+.memo b{font-weight:500;color:var(--ink)}
+.memo code{font:12px var(--mono);background:var(--raise);padding:1px 5px;border-radius:5px}

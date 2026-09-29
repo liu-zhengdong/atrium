@@ -226,3 +226,14 @@ func TestCorrectionRecorded(t *testing.T) {
 		t.Fatalf("取消草稿不该再记：%+v", n)
 	}
 }
+
+func TestSourceBy(t *testing.T) {
+	for _, c := range []struct {
+		src        Source
+		name, want string
+	}{{SourceOrg, "Atrium 负责人", "组织发现 · Atrium 负责人"}, {SourceUser, "用户", "用户纠正 · 用户"}, {SourceOrg, "", "组织发现"}, {"", "秘书", ""}} {
+		if got := c.src.By(c.name); got != c.want {
+			t.Errorf("%q %q：%q，应为 %q", c.src, c.name, got, c.want)
+		}
+	}
+}

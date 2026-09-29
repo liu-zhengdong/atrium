@@ -799,6 +799,9 @@ type TaskDetail struct {
 	// 由哪条周期任务生成（sN），它交出的或它选自的选项单（cN）；没有为空。
 	Schedule string `json:"schedule,omitempty"`
 	Choice   string `json:"choice,omitempty"`
+	// 带来源的：派活人（记录人）的名字，是负责人时给他负责的第一个部门（点名字到部门页看负责人详情）。
+	ByName string `json:"by_name,omitempty"`
+	ByDept string `json:"by_dept,omitempty"`
 }
 
 func loadTask(ctx context.Context, q store.Querier, id string) (TaskDetail, error) {
@@ -818,6 +821,11 @@ func loadTask(ctx context.Context, q store.Querier, id string) (TaskDetail, erro
 	}
 	if out.Choice, err = agenda.ChoiceOf(ctx, q, id); err != nil {
 		return out, err
+	}
+	if t.Source != "" {
+		if err := recorder(ctx, q, &out); err != nil {
+			return out, err
+		}
 	}
 	if t.Org != "" {
 		if err := q.QueryRowContext(ctx, `SELECT name FROM departments WHERE id = ?`, t.Org).Scan(&out.DeptName); err != nil {
@@ -846,6 +854,25 @@ func loadTask(ctx context.Context, q store.Querier, id string) (TaskDetail, erro
 	tr, err := workers.ReadTrace(run.Worker, run.Log)
 	out.Trace, out.RunAt, out.Live = &tr, run.At, t.Status == ledger.Running && t.Stage == ledger.StageNone
 	return out, err
+}
+
+// recorder 填来源一行的记录人：派活人的名字（org.NameOf），负责人另给他负责的第一个部门。
+func recorder(ctx context.Context, q store.Querier, d *TaskDetail) error {
+	p, err := ledger.PartiesOf(ctx, q, d.Task.ID)
+	if err != nil || p.By == "" {
+		return err
+	}
+	if d.ByName, err = org.NameOf(ctx, q, p.By); err != nil {
+		return err
+	}
+	leaders, err := org.LeaderMap(ctx, q)
+	if err != nil {
+		return err
+	}
+	if led := org.Led(leaders, p.By); len(led) > 0 {
+		d.ByDept = led[0]
+	}
+	return nil
 }
 
 // relations 填任务抽屉里的上级、子任务、它要等的、在等它的。

@@ -345,6 +345,16 @@ func TestRoutes(t *testing.T) {
 		!reflect.DeepEqual(page.Leader.Depts, []Pair{{sub.ID, sub.Name}}) || page.Leader.Memo != "" {
 		t.Errorf("负责人（没写备忘时为空串）：%+v", page.Leader)
 	}
+	// 来源一行的记录人：负责人记的给名字和他负责的部门（点开负责人详情），秘书记的只给名字，没来源的不给。
+	for _, c := range []struct{ by, name, dept, src string }{{a.ID, "运行时负责人", sub.ID, "org"}, {org.Secretary, "秘书", "", "org"}, {a.ID, "", "", ""}} {
+		dr, err := ledger.Add(ctx, db, ledger.NewTask{Title: "发现", Org: sub.ID, Draft: true, Source: ledger.Source(c.src)}, c.by)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if d, err := loadTask(ctx, db, dr.ID); err != nil || d.ByName != c.name || d.ByDept != c.dept {
+			t.Errorf("%s 记的草稿：%q %q %v", c.by, d.ByName, d.ByDept, err)
+		}
+	}
 	// 自己没有负责人：显示往上最近一级的，标成继承；点开看到的负责部门与备忘和本人的一样。上面一路都没有就是空（你直接管）。
 	leaf, _ := org.Add(ctx, db, org.NewDept{Name: "网页", Parent: sub.ID})
 	other, _ := org.Add(ctx, db, org.NewDept{Name: "发版", Parent: root.ID})

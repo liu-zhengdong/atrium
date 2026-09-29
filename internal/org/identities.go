@@ -241,13 +241,14 @@ func LeaderMap(ctx context.Context, q store.Querier) (map[string]string, error) 
 }
 
 // Nearest 纯判定：从 dept 往上找最近的负责人，跳过 skip（上交时跳过自己）；都没有返回秘书。
-func Nearest(parents, leaders map[string]string, dept, skip string) string {
+// from 是登记这位负责人的部门（秘书时为空）。
+func Nearest(parents, leaders map[string]string, dept, skip string) (who, from string) {
 	for cur, n := dept, 0; cur != "" && n <= MaxDepth; cur, n = parents[cur], n+1 {
 		if l := leaders[cur]; l != "" && l != skip {
-			return l
+			return l, cur
 		}
 	}
-	return Secretary
+	return Secretary, ""
 }
 
 // Recipient 是事件的投递对象：部门往上最近的负责人，没有（或没给部门）投秘书。
@@ -264,7 +265,8 @@ func Recipient(ctx context.Context, q store.Querier, dept string) (string, error
 	if err != nil {
 		return "", err
 	}
-	return Nearest(ps, leaders, dept, ""), nil
+	who, _ := Nearest(ps, leaders, dept, "")
+	return who, nil
 }
 
 // Led 纯函数：who 直接负责的部门（按短号数字排序）。
@@ -272,6 +274,18 @@ func Led(leaders map[string]string, who string) []string {
 	out := []string{}
 	for d, l := range leaders {
 		if l == who {
+			out = append(out, d)
+		}
+	}
+	slices.SortFunc(out, compareRef)
+	return out
+}
+
+// Covered 纯判定：dept 的下属里没登记负责人、因而归 dept 的负责人管的部门（按短号数字排序）。
+func Covered(parents, leaders map[string]string, dept string) []string {
+	out := []string{}
+	for d := range parents {
+		if _, from := Nearest(parents, leaders, d, ""); from == dept && d != dept {
 			out = append(out, d)
 		}
 	}

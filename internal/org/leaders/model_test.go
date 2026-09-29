@@ -185,14 +185,14 @@ func TestPrompt(t *testing.T) {
 		Leader: org.Identity{ID: "a2", Name: "运行时"},
 		Depts: []DeptBrief{{Dept: org.Dept{ID: "o3", Name: "服务", What: "单实例后台服务", Now: "在迁 Go"},
 			Path: []string{"o1", "o2", "o3"}, Chain: []org.Point{{ID: "k1", Org: "o1", Text: "简洁优先", Why: "长期成本"}},
-			Materials: "总览正文"}},
+			Materials: "总览正文", Covered: []org.Dept{{ID: "o22", Name: "网页"}, {ID: "o23", Name: "导入"}}}},
 		Memo:     "等 t5 合入",
 		Events:   []Event{{ID: 11, Kind: "task.status", Task: "t5", Dept: "o3", Body: `{"to":"blocked"}`}, {ID: 12, Kind: "overdue"}},
 		Upstream: "a1",
 	}
 	p := Prompt(in)
 	for _, want := range []string{"负责人 a2（运行时）", "o3 服务（o1 / o2 / o3）", "是什么：单实例后台服务", "k1（o1）简洁优先——长期成本",
-		"总览正文", "等 t5 合入", "#11", "t5（o3）", "atrium events ack 11 12", "投给 a1", "--kind shipped", "--kind stuck", "权限边界"} {
+		"总览正文", "也归你管的下属部门：o22 网页、o23 导入", "等 t5 合入", "#11", "t5（o3）", "atrium events ack 11 12", "投给 a1", "--kind shipped", "--kind stuck", "权限边界"} {
 		if !strings.Contains(p, want) {
 			t.Errorf("提示词缺 %q", want)
 		}

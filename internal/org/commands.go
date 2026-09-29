@@ -62,19 +62,13 @@ func Commands(t *cli.Table) {
 			var b strings.Builder
 			fmt.Fprintf(&b, "%s %s（%s）\n", d.ID, d.Name, strings.Join(s.Path, " / "))
 			for _, kv := range [][2]string{{"是什么", d.What}, {"怎么用", d.Uses}, {"现状", d.Now}, {"下一步", d.Next},
-				{"负责人", d.Leader}, {"仓库", strings.Join(d.Repos, "、")}} {
+				{"仓库", strings.Join(d.Repos, "、")}} {
 				if kv[1] != "" {
 					fmt.Fprintf(&b, "%s：%s\n", kv[0], kv[1])
 				}
 			}
-			switch s.AcceptFrom {
-			case "":
-				fmt.Fprintf(&b, "验收人：%s（缺省）\n", s.Accept)
-			case d.ID:
-				fmt.Fprintf(&b, "验收人：%s\n", s.Accept)
-			default:
-				fmt.Fprintf(&b, "验收人：%s（继承自 %s）\n", s.Accept, s.AcceptFrom)
-			}
+			inherited(&b, "负责人", s.Leader, s.LeaderFrom, d.ID, "整棵树都没有负责人")
+			inherited(&b, "验收人", s.Accept, s.AcceptFrom, d.ID, "缺省")
 			if len(s.Children) > 0 {
 				b.WriteString("\n下属：\n")
 				for _, ch := range s.Children {
@@ -220,4 +214,16 @@ func Commands(t *cli.Table) {
 			return c.Done(pt, msg, "atrium org show "+pt.Org)
 		}})
 	identityCommands(t)
+}
+
+// inherited 印沿树继承的一行（负责人、验收人）：本部门设的照写，继承的注明来源部门，都没设的注明 none。
+func inherited(b *strings.Builder, label, who, from, self, none string) {
+	switch from {
+	case "":
+		fmt.Fprintf(b, "%s：%s（%s）\n", label, who, none)
+	case self:
+		fmt.Fprintf(b, "%s：%s\n", label, who)
+	default:
+		fmt.Fprintf(b, "%s：%s（继承自 %s）\n", label, who, from)
+	}
 }

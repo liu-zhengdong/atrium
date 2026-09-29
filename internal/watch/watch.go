@@ -157,8 +157,8 @@ func upOf(ctx context.Context, q store.Querier, dept string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	owner := org.Nearest(ps, lm, dept, "")
-	if up := org.Nearest(ps, lm, dept, owner); up != owner {
+	owner, _ := org.Nearest(ps, lm, dept, "")
+	if up, _ := org.Nearest(ps, lm, dept, owner); up != owner {
 		return up, nil
 	}
 	return "", nil

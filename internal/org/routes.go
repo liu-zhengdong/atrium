@@ -21,6 +21,10 @@ type Show struct {
 	// Accept 是验收人（沿树继承）；AcceptFrom 是设它的部门，没设过（缺省 auto）为空。
 	Accept     string `json:"accept"`
 	AcceptFrom string `json:"accept_from,omitempty"`
+	// Leader 是管这个部门的负责人（和事件投递同一个判定，Nearest），整棵树都没有为秘书；
+	// LeaderFrom 是登记它的部门（秘书时为空）。
+	Leader     string `json:"leader"`
+	LeaderFrom string `json:"leader_from,omitempty"`
 }
 
 func Routes(r *api.Router, env *app.Env) {
@@ -50,6 +54,15 @@ func Routes(r *api.Router, env *app.Env) {
 		if s.Accept, s.AcceptFrom, err = Acceptor(q.Context(), db, id); err != nil {
 			return nil, err
 		}
+		ps, err := parents(q.Context(), db)
+		if err != nil {
+			return nil, err
+		}
+		lm, err := LeaderMap(q.Context(), db)
+		if err != nil {
+			return nil, err
+		}
+		s.Leader, s.LeaderFrom = Nearest(ps, lm, id, "")
 		chain, err := Chain(q.Context(), db, id)
 		if err != nil {
 			return nil, err

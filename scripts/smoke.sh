@@ -60,7 +60,7 @@ out=$(json org add 运行时 --parent o1); has '.result.id == "o2" and .result.p
 out=$(json point add o1 "简洁优先" --why "整体更简单"); has '.result.id == "k1" and .result.pos == 1 and .result.by == "u1"'
 out=$(json point add o2 "单实例"); has '.result.id == "k2"'
 out=$(json point add o1 "事实为准" --pos 1); has '.result.pos == 1'
-out=$(json org show o2); has '.result.path == ["o1","o2"] and (.result.inherited|map(.text)) == ["事实为准","简洁优先"] and .result.room == 6'
+out=$(json org show o2); has '.result.path == ["o1","o2"] and (.result.inherited|map(.text)) == ["事实为准","简洁优先"] and .result.room == 6 and .result.leader == "secretary" and .result.leader_from == null'
 for i in 1 2 3 4 5; do json point add o1 "p$i" >/dev/null; done
 out=$(json point add o1 "第八条" || true); has '.ok == false and .error.code == "limit" and (.error.next|length) > 0'
 
@@ -106,6 +106,7 @@ step "负责人、备忘、上交（org/leaders）"
 out=$(json leader add 运行时负责人 --workers claude,codex); has '.result.id == "a1" and .result.workers == ["claude","codex"] and .next == "atrium org edit <oN> --leader a1"'
 out=$(json leader add 没组合 || true); has '.error.code == "usage"'
 out=$(json org edit o2 --leader a1); has '.result.leader == "a1"'
+out=$(json org show o2); has '.result.leader == "a1" and .result.leader_from == "o2"'
 out=$(json leader ls); has '.result[0].depts == ["o2"]'
 out=$(json leader edit a1 --workers codex); has '.result.workers == ["codex"]'
 out=$(json memo edit "下次先看 t1" --as a1); has '.result.owner == "a1"'

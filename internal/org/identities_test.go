@@ -17,18 +17,26 @@ var tps = map[string]string{"o1": "", "o2": "o1", "o3": "o2", "o4": ""}
 var tls = map[string]string{"o1": "a1", "o3": "a2"}
 
 func TestNearest(t *testing.T) {
-	cases := []struct{ dept, skip, want string }{
-		{"o3", "", "a2"},
-		{"o2", "", "a1"},        // 本部门没有，往上找
-		{"o3", "a2", "a1"},      // 上交跳过自己
-		{"o1", "a1", Secretary}, // 顶层还是自己：投秘书
-		{"o4", "", Secretary},
-		{"", "", Secretary},
-		{"o9", "", Secretary}, // 不存在的部门
+	cases := []struct{ dept, skip, want, from string }{
+		{"o3", "", "a2", "o3"},
+		{"o2", "", "a1", "o1"},      // 本部门没有，往上找
+		{"o3", "a2", "a1", "o1"},    // 上交跳过自己
+		{"o1", "a1", Secretary, ""}, // 顶层还是自己：投秘书
+		{"o4", "", Secretary, ""},
+		{"", "", Secretary, ""},
+		{"o9", "", Secretary, ""}, // 不存在的部门
 	}
 	for _, c := range cases {
-		if got := Nearest(tps, tls, c.dept, c.skip); got != c.want {
-			t.Errorf("Nearest(%s, skip %s) = %s，应为 %s", c.dept, c.skip, got, c.want)
+		if got, from := Nearest(tps, tls, c.dept, c.skip); got != c.want || from != c.from {
+			t.Errorf("Nearest(%s, skip %s) = %s（%s），应为 %s（%s）", c.dept, c.skip, got, from, c.want, c.from)
+		}
+	}
+}
+
+func TestCovered(t *testing.T) {
+	for dept, want := range map[string][]string{"o1": {"o2"}, "o3": {}, "o4": {}} {
+		if got := Covered(tps, tls, dept); !reflect.DeepEqual(got, want) {
+			t.Errorf("Covered(%s) = %v，应为 %v", dept, got, want)
 		}
 	}
 }
@@ -145,5 +153,20 @@ func TestIdentityStore(t *testing.T) {
 	}
 	if _, err := SetMemo(ctx, db, "a9", "x", "u1"); err == nil {
 		t.Fatal("不存在的身份应拒绝")
+	}
+}
+
+func TestInheritedLine(t *testing.T) {
+	cases := []struct{ who, from, want string }{
+		{"a1", "o3", "负责人：a1\n"},
+		{"a1", "o1", "负责人：a1（继承自 o1）\n"},
+		{Secretary, "", "负责人：secretary（归秘书）\n"},
+	}
+	for _, c := range cases {
+		var b strings.Builder
+		inherited(&b, "负责人", c.who, c.from, "o3", "归秘书")
+		if b.String() != c.want {
+			t.Errorf("inherited(%s, %s) = %q，应为 %q", c.who, c.from, b.String(), c.want)
+		}
 	}
 }

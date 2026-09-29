@@ -221,6 +221,7 @@ func claudeAdapter() *Driver {
 }
 
 // codex exec：--json 逐行输出事件；-C 工作目录、-s 沙箱、-m 模型、强度走 -c model_reasoning_effort；PROMPT 写 - 从标准输入读。
+// --skip-git-repo-check：没有仓库的任务（work/、工作地点、审阅）目录不是 git 仓库，不带 codex 直接拒绝启动。
 // 续上：codex exec resume --json <会话> -（没有 -C、-s，沙箱走配置覆盖）；会话 id 是 thread.started 的 thread_id。
 func codexAdapter() *Driver {
 	a := &Driver{Tool: "codex", Exe: "codex", DefaultModel: "gpt-6-sol", Efforts: []string{"minimal", "low", "medium", "high", "xhigh"},
@@ -228,9 +229,9 @@ func codexAdapter() *Driver {
 	a.build = func(in Request) (Launch, error) {
 		var args []string
 		if in.Session != "" {
-			args = []string{"exec", "resume", "--json", "-c", `sandbox_mode="danger-full-access"`}
+			args = []string{"exec", "resume", "--json", "--skip-git-repo-check", "-c", `sandbox_mode="danger-full-access"`}
 		} else {
-			args = []string{"exec", "--json", "-C", in.Dir, "-s", "danger-full-access"}
+			args = []string{"exec", "--json", "--skip-git-repo-check", "-C", in.Dir, "-s", "danger-full-access"}
 		}
 		if in.Model != "" {
 			args = append(args, "-m", in.Model)

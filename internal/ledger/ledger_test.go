@@ -101,8 +101,12 @@ func TestLedgerLifecycle(t *testing.T) {
 		t.Fatalf("c 应就绪：%v", deps)
 	}
 	sub, _ := Subtree(ctx, db, a.ID)
-	if tree := BuildTree(sub); tree.Summary.Total != 2 || tree.Summary.Counts[Done] != 1 {
-		t.Fatalf("汇总 %+v", tree.Summary)
+	sd, err := SubtreeDeps(ctx, db, a.ID)
+	if err != nil || len(sd) != 1 || len(sd[c.ID]) != 1 || sd[c.ID][0] != (DepState{ID: b.ID, Status: Done}) {
+		t.Fatalf("树内依赖 %+v %v", sd, err)
+	}
+	if tree := BuildTree(sub, sd); tree.Summary.Total != 2 || tree.Summary.Counts[Done] != 1 || !tree.Children[1].Ready {
+		t.Fatalf("汇总 %+v，c 应能派", tree)
 	}
 	if err := Note(ctx, db, c.ID, "u1", "记一笔"); err != nil {
 		t.Fatal(err)

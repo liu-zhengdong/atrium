@@ -144,35 +144,6 @@ func TestRollup(t *testing.T) {
 	}
 }
 
-func TestPlan(t *testing.T) {
-	in := []PlanInput{
-		{ID: "t2", Status: Todo},
-		{ID: "t3", Status: Todo, Deps: []string{"t2"}},
-		{ID: "t4", Status: Todo, Deps: []string{"t3", "t2"}},
-		{ID: "t5", Status: Done},
-		{ID: "t6", Status: Todo, Deps: []string{"t5", "t9"}}, // t9 在集合外、已完成
-		{ID: "t7", Status: Todo, Deps: []string{"t8"}},       // t8 在集合外、没完成
-	}
-	rows := Plan(in, map[string]Status{"t9": Done, "t8": Running})
-	type r struct {
-		id    string
-		step  int
-		ready bool
-		wait  []string
-	}
-	want := []r{{"t5", 0, false, nil}, {"t2", 1, true, nil}, {"t6", 1, true, nil}, {"t7", 1, false, []string{"t8"}},
-		{"t3", 2, false, []string{"t2"}}, {"t4", 3, false, []string{"t3", "t2"}}}
-	if len(rows) != len(want) {
-		t.Fatalf("got %d rows", len(rows))
-	}
-	for i, w := range want {
-		g := rows[i]
-		if g.ID != w.id || g.Step != w.step || g.Ready != w.ready || !reflect.DeepEqual(g.WaitingOn, w.wait) {
-			t.Errorf("row %d: got %+v want %+v", i, g, w)
-		}
-	}
-}
-
 func TestFindCycle(t *testing.T) {
 	if c := FindCycle(map[string][]string{"a": {"b"}, "b": {"c"}}); c != nil {
 		t.Errorf("无环 got %v", c)
@@ -199,7 +170,7 @@ func TestBuildTree(t *testing.T) {
 	root := BuildTree([]Task{
 		{ID: "t1", Status: Running}, {ID: "t2", Parent: "t1", Status: Done},
 		{ID: "t3", Parent: "t1", Status: Running}, {ID: "t4", Parent: "t3", Status: Blocked},
-	})
+	}, nil)
 	if len(root.Children) != 2 || root.Summary.Total != 3 || root.Summary.Rollup() != Running {
 		t.Fatalf("root %+v", root)
 	}
@@ -208,5 +179,43 @@ func TestBuildTree(t *testing.T) {
 	}
 	if root.Children[0].Summary != nil {
 		t.Error("叶子不该有汇总")
+	}
+}
+
+// 树里每件标出能派还是在等谁：依赖可在树外；有子任务的不派它自己；只有 todo、排队中的标在等谁。
+func TestBuildTreeReady(t *testing.T) {
+	root := BuildTree([]Task{
+		{ID: "t1", Status: Todo},
+		{ID: "t2", Parent: "t1", Status: Todo},
+		{ID: "t3", Parent: "t1", Status: Todo},
+		{ID: "t4", Parent: "t1", Status: Todo},
+		{ID: "t5", Parent: "t1", Status: Queued},
+		{ID: "t6", Parent: "t1", Status: Blocked},
+		{ID: "t7", Parent: "t2", Status: Draft},
+	}, map[string][]DepState{
+		"t3": {{ID: "t2", Status: Todo}},
+		"t4": {{ID: "t9", Status: Done}},    // 树外、已完成
+		"t5": {{ID: "t8", Status: Running}}, // 树外、没完成
+		"t6": {{ID: "t2", Status: Todo}},
+	})
+	type r struct {
+		ready bool
+		wait  []string
+	}
+	want := map[string]r{"t1": {}, "t2": {}, "t3": {false, []string{"t2"}}, "t4": {true, nil},
+		"t5": {false, []string{"t8"}}, "t6": {}, "t7": {}}
+	var walk func(n *TreeNode)
+	walk = func(n *TreeNode) {
+		if w := want[n.ID]; n.Ready != w.ready || !reflect.DeepEqual(n.WaitingOn, w.wait) {
+			t.Errorf("%s: ready=%v waiting=%v，want %+v", n.ID, n.Ready, n.WaitingOn, w)
+		}
+		delete(want, n.ID)
+		for _, c := range n.Children {
+			walk(c)
+		}
+	}
+	walk(root)
+	if len(want) != 0 {
+		t.Errorf("没走到：%v", want)
 	}
 }

@@ -816,27 +816,25 @@ func Subtree(ctx context.Context, q store.Querier, root string) ([]Task, error) 
 	return out, err
 }
 
-// DepsOf 取一组任务的全部依赖边与集合外依赖的状态。
-func DepsOf(ctx context.Context, q store.Querier, ids []string) (map[string][]string, map[string]Status, error) {
-	edges := map[string][]string{}
-	outside := map[string]Status{}
-	in := map[string]bool{}
-	for _, id := range ids {
-		in[id] = true
+// SubtreeDeps 取 root 及全部子孙的依赖：任务 → 它依赖的任务与状态（依赖可以在树外）。
+func SubtreeDeps(ctx context.Context, q store.Querier, root string) (map[string][]DepState, error) {
+	rows, err := q.QueryContext(ctx, `WITH RECURSIVE r(id) AS (SELECT ? UNION ALL SELECT t.id FROM tasks t JOIN r ON t.parent = r.id)
+		SELECT d.task, t.id, t.status FROM r JOIN task_deps d ON d.task = r.id JOIN tasks t ON t.id = d.depends_on
+		ORDER BY t.created_at LIMIT ?`, root, maxSubtree*maxDeps)
+	if err != nil {
+		return nil, err
 	}
-	for _, id := range ids {
-		deps, err := Deps(ctx, q, id)
-		if err != nil {
-			return nil, nil, err
+	defer rows.Close()
+	out := map[string][]DepState{}
+	for rows.Next() {
+		var task string
+		var d DepState
+		if err := rows.Scan(&task, &d.ID, &d.Status); err != nil {
+			return nil, err
 		}
-		for _, d := range deps {
-			edges[id] = append(edges[id], d.ID)
-			if !in[d.ID] {
-				outside[d.ID] = d.Status
-			}
-		}
+		out[task] = append(out[task], d)
 	}
-	return edges, outside, nil
+	return out, rows.Err()
 }
 
 func prefixed(p, cols string) string {

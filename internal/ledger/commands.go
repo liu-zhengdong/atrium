@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
-	"strconv"
 	"strings"
 	"time"
 
@@ -271,7 +270,7 @@ func Commands(t *cli.Table) {
 			}
 			return c.Done(t, fmt.Sprintf("已停下 %s「%s」：%s；在跑的执行者由派活循环结束", t.ID, t.Title, stateLabel(t)), "atrium task run "+t.ID)
 		}})
-	t.Add(cli.Command{Path: "task tree", Read: true, Args: "[tN]", Summary: "看任务树与各层汇总（不给 tN 看全部顶层没结束的）",
+	t.Add(cli.Command{Path: "task tree", Read: true, Args: "[tN]", Summary: "看任务树、各层汇总与每件能派还是在等谁（不给 tN 看全部顶层没结束的）",
 		Run: func(c *cli.Ctx) error {
 			path := "/api/tree"
 			if len(c.Args) > 0 {
@@ -285,9 +284,20 @@ func Commands(t *cli.Table) {
 				return c.Done(roots, "没有没结束的顶层任务", "atrium task add <标题>")
 			}
 			var b strings.Builder
+			next := "atrium task show " + roots[0].ID
 			var walk func(n *TreeNode, depth int)
 			walk = func(n *TreeNode, depth int) {
-				fmt.Fprintf(&b, "%s%s  %s  %s", strings.Repeat("  ", depth), n.ID, stateLabel(n.Task), n.Title)
+				fmt.Fprintf(&b, "%s%s  %s", strings.Repeat("  ", depth), n.ID, stateLabel(n.Task))
+				switch {
+				case n.Ready:
+					b.WriteString("  可派")
+					if !strings.HasPrefix(next, "atrium task run") {
+						next = "atrium task run " + n.ID
+					}
+				case len(n.WaitingOn) > 0:
+					b.WriteString("  等 " + strings.Join(n.WaitingOn, "、"))
+				}
+				b.WriteString("  " + n.Title)
 				if n.Summary != nil {
 					fmt.Fprintf(&b, "（%s）", n.Summary)
 				}
@@ -299,38 +309,7 @@ func Commands(t *cli.Table) {
 			for _, r := range roots {
 				walk(r, 0)
 			}
-			return c.Done(roots, b.String(), "atrium task plan "+roots[0].ID)
-		}})
-	t.Add(cli.Command{Path: "task plan", Read: true, Args: "<tN>", Summary: "排子任务的先后：哪些现在能派、哪些在等谁",
-		Run: func(c *cli.Ctx) error {
-			id, err := c.Arg(0, "<tN>")
-			if err != nil {
-				return err
-			}
-			var rows []PlanRow
-			if err := c.Call("GET", "/api/tasks/"+url.PathEscape(id)+"/plan", nil, &rows); err != nil {
-				return err
-			}
-			var b strings.Builder
-			next := "atrium task wait " + id
-			for _, r := range rows {
-				state := string(r.Status)
-				switch {
-				case r.Ready:
-					state = "可派"
-					if strings.HasPrefix(next, "atrium task wait") {
-						next = "atrium task run " + r.ID
-					}
-				case len(r.WaitingOn) > 0 && (r.Status == Todo || r.Status == Queued):
-					state = "等 " + strings.Join(r.WaitingOn, "、")
-				}
-				step := "已结束"
-				if r.Step > 0 {
-					step = "第 " + strconv.Itoa(r.Step) + " 步"
-				}
-				fmt.Fprintf(&b, "%s  %s  %s  %s\n", step, r.ID, state, r.Title)
-			}
-			return c.Done(rows, b.String(), next)
+			return c.Done(roots, b.String(), next)
 		}})
 	t.Add(cli.Command{Path: "task note", Args: "<tN> <文字>", Summary: "给任务加一条备注（记进经历，执行者看不到；要捎给它用 task tell）",
 		Run: func(c *cli.Ctx) error {

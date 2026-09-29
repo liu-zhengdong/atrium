@@ -48,13 +48,16 @@ func (e *CmdError) Error() string {
 	return fmt.Sprintf("%s：%v：%s", e.Cmd, e.Err, msg)
 }
 
+func (e *CmdError) Unwrap() error { return e.Err }
+
 func (x *Exec) Run(ctx context.Context, dir, name string, args ...string) (string, error) {
 	path, err := platform.LookPath(name, x.Env)
 	if err != nil {
 		return "", err
 	}
 	var out, errb bytes.Buffer
-	cmd, err := platform.Start(platform.Spec{Path: path, Args: args, Dir: dir, Env: x.Env, Stdout: &out, Stderr: &errb})
+	// Detached：超时时连子进程一起结束（pnpm 拉起的 node、浏览器的子进程还占着输出管道，只结束父进程 Wait 会一直等）。
+	cmd, err := platform.Start(platform.Spec{Path: path, Args: args, Dir: dir, Env: x.Env, Stdout: &out, Stderr: &errb, Detached: true})
 	if err != nil {
 		return "", err
 	}
@@ -63,16 +66,12 @@ func (x *Exec) Run(ctx context.Context, dir, name string, args ...string) (strin
 	select {
 	case err = <-done:
 	case <-ctx.Done():
-		cmd.Process.Kill()
+		platform.KillTree(cmd.Process.Pid)
 		<-done
 		return "", ctx.Err()
 	}
 	if err != nil {
 		return out.String(), &CmdError{Cmd: name + " " + strings.Join(firstN(args, 3), " "), Stderr: errb.String(), Err: err}
-	}
-	base := filepath.Base(name)
-	if (base == "ffmpeg" || strings.HasPrefix(base, "ffmpeg")) && out.Len() == 0 && errb.Len() > 0 {
-		return errb.String(), nil
 	}
 	return out.String(), nil
 }

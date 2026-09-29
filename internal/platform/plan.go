@@ -243,3 +243,17 @@ func set(names ...string) map[string]bool {
 	}
 	return m
 }
+
+// Browsers 是找无头浏览器的顺序：先 PATH 里的名字（专做截图的 chrome-headless-shell 在前），再各平台的固定安装位置。
+func Browsers(goos string) []string {
+	names := []string{"chrome-headless-shell", "chromium", "chromium-browser", "google-chrome", "google-chrome-stable", "chrome", "msedge"}
+	switch goos {
+	case "darwin":
+		return append(names, "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+			"/Applications/Chromium.app/Contents/MacOS/Chromium", "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge")
+	case "windows":
+		return append(names, `C:\Program Files\Google\Chrome\Application\chrome.exe`,
+			`C:\Program Files (x86)\Google\Chrome\Application\chrome.exe`, `C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe`)
+	}
+	return names
+}

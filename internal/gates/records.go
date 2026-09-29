@@ -30,8 +30,10 @@ const (
 	KindMerge    = "merge"     // 合入队列的经过：冲突文件、检查没过的摘要、跳过检查
 	// KindMergeCommit 是合入后 merge 记的 {"pr","commit"}；release 据此等含它的版本。
 	KindMergeCommit = "merge_commit"
-	// KindArtifacts 是技能检查生成的产物路径（截图、联系表等），供负责人审和 task show 给出。
-	KindArtifacts = "artifacts"
+	// KindSkillCheck 是一项技能检查的结论（一行人话）；KindArtifact 是它生成的一个产物（截图、联系表）的绝对路径，
+	// 一条一个，task show 里负责人能看全、直接打开。
+	KindSkillCheck = "skill_check"
+	KindArtifact   = "artifact"
 )
 
 // Last 取一件任务某类经历的最近一条正文；没有时 found=false。

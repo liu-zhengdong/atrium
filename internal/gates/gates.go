@@ -15,7 +15,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -25,6 +24,7 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/app"
 	"github.com/liu-zhengdong/atrium/internal/cli"
 	"github.com/liu-zhengdong/atrium/internal/events"
+	"github.com/liu-zhengdong/atrium/internal/gates/skillcheck"
 	"github.com/liu-zhengdong/atrium/internal/ledger"
 	"github.com/liu-zhengdong/atrium/internal/org"
 	"github.com/liu-zhengdong/atrium/internal/pause"
@@ -124,7 +124,7 @@ func Routes(r *api.Router, env *app.Env) {
 // Gate 推进 stage 为 gate、review 的任务。
 type Gate struct {
 	DB    *store.DB
-	Data  string // 数据目录（用于计算 tasks/tN 产物目录）
+	Data  string // 数据目录：读技能、技能检查的产物放 tasks/<任务>/
 	Pause *pause.Store
 	R     Runner
 	Log   *slog.Logger
@@ -258,25 +258,17 @@ func (g *Gate) gate(ctx context.Context, t ledger.Task) error {
 		return err
 	}
 
-	// 跑任务挂载技能声明的交付检查项
-	if t.Skill != "" {
-		sc, err := g.runSkillChecks(ctx, t)
-		if err != nil {
-			return err
-		}
-		if len(sc.reasons) > 0 {
-			_, err := Bounce(ctx, g.DB, t.ID, Actor, "关卡没过："+strings.Join(sc.reasons, "；"))
-			return err
-		}
-		if sc.note != "" {
-			if c.note != "" {
-				c.note += "；" + sc.note
-			} else {
-				c.note = sc.note
-			}
-		}
+	sc, err := g.skillChecks(ctx, t)
+	if err != nil {
+		return err
 	}
-
+	if len(sc.reasons) > 0 {
+		_, err := Bounce(ctx, g.DB, t.ID, Actor, "关卡没过："+strings.Join(sc.reasons, "；"))
+		return err
+	}
+	if sc.note != "" {
+		c.note = strings.TrimPrefix(c.note+"；"+sc.note, "；")
+	}
 	if c.review != "" {
 		_, err := ledger.Apply(ctx, g.DB, t.ID, ledger.Event{Kind: ledger.GatePass, NeedReview: true}, Actor, c.note+"；落地前审阅："+c.review)
 		return err
@@ -284,73 +276,45 @@ func (g *Gate) gate(ctx context.Context, t ledger.Task) error {
 	return g.pass(ctx, t, d, ledger.GatePass, c.note)
 }
 
-func (g *Gate) taskDir(taskID string) string {
-	if g.Data != "" {
-		return filepath.Join(g.Data, "tasks", taskID)
-	}
-	return filepath.Join(os.TempDir(), "atrium-tasks", taskID)
-}
-
-func (g *Gate) runSkillChecks(ctx context.Context, t ledger.Task) (checked, error) {
+// skillChecks 跑任务所挂技能声明的交付检查（skillcheck），每项结论与产物路径记进经历；没挂技能或技能没声明时为空。
+// 检查只在本机跑：工作目录在远程机器上时出错（转受阻），不交回执行者。
+func (g *Gate) skillChecks(ctx context.Context, t ledger.Task) (checked, error) {
 	if t.Skill == "" {
 		return checked{}, nil
 	}
 	s, err := org.GetSkill(ctx, g.DB, g.Data, t.Skill)
+	if err != nil || len(s.Checks) == 0 {
+		return checked{}, err
+	}
+	w, err := mustWorkspace(ctx, g.DB, t.ID)
 	if err != nil {
 		return checked{}, err
 	}
-	if len(s.Checks) == 0 {
-		return checked{}, nil
+	if w.Remote() {
+		return checked{}, fmt.Errorf("技能 %s 的交付检查暂只支持本机，工作目录在 %s 上", s.Name, w.Host)
 	}
-
-	w, _, err := Workspace(ctx, g.DB, t.ID)
+	rs, err := skillcheck.Run(ctx, skillcheck.Env{Dir: w.Dir, Out: filepath.Join(g.Data, "tasks", t.ID), R: g.R}, s.Checks)
 	if err != nil {
-		return checked{}, err
+		return checked{}, fmt.Errorf("技能 %s：%w", s.Name, err)
 	}
-	workDir := w.Dir
-	if workDir == "" {
-		if t.Dir != "" {
-			workDir = t.Dir
-		} else {
-			workDir = filepath.Join(g.taskDir(t.ID), "work")
-		}
-	}
-	taskDir := g.taskDir(t.ID)
-	if err := os.MkdirAll(taskDir, 0o700); err != nil {
-		return checked{}, err
-	}
-
-	cctx := CheckContext{
-		Context: ctx,
-		Task:    t,
-		WorkDir: workDir,
-		TaskDir: taskDir,
-		Runner:  On(g.R, w),
-		DB:      g.DB,
-		Data:    g.Data,
-		Log:     g.Log,
-	}
-
-	_, allPassed, reasons, allArtifacts, err := RunSkillChecks(cctx, s.Checks)
-	if err != nil {
-		return checked{}, err
-	}
-
-	// 产物路径逐条记进任务经历，供负责人审和 task show 给出
-	for _, a := range allArtifacts {
-		if err := ledger.Record(ctx, g.DB, t.ID, KindArtifacts, Actor, a); err != nil {
+	var c checked
+	for _, r := range rs {
+		if err := ledger.Record(ctx, g.DB, t.ID, KindSkillCheck, Actor, r.String()); err != nil {
 			return checked{}, err
 		}
+		for _, a := range r.Artifacts {
+			if err := ledger.Record(ctx, g.DB, t.ID, KindArtifact, Actor, a); err != nil {
+				return checked{}, err
+			}
+		}
+		if !r.OK {
+			c.reasons = append(c.reasons, r.Check+"："+r.Evidence)
+		}
 	}
-
-	if !allPassed {
-		return checked{reasons: reasons}, nil
+	if len(c.reasons) == 0 {
+		c.note = "技能检查通过：" + strings.Join(s.Checks, "、")
 	}
-	note := "技能检查通过（" + strings.Join(s.Checks, "、") + "）"
-	if len(allArtifacts) > 0 {
-		note += "；产物：" + strings.Join(allArtifacts, "、")
-	}
-	return checked{note: note}, nil
+	return c, nil
 }
 
 // mustWorkspace 取有仓库的任务的工作树登记，没有就报错。

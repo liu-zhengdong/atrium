@@ -16,6 +16,7 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/api"
 	"github.com/liu-zhengdong/atrium/internal/app"
 	"github.com/liu-zhengdong/atrium/internal/cli"
+	"github.com/liu-zhengdong/atrium/internal/gates/skillcheck"
 	"github.com/liu-zhengdong/atrium/internal/store"
 )
 
@@ -107,6 +108,14 @@ func checkTokens(field string, list []string, check func(string) error) error {
 		if err := check(v); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// checkName：技能的 checks 只能写 skillcheck 认得的检查名，写错当场报，不拖到关卡。
+func checkName(v string) error {
+	if err := skillcheck.Validate(v); err != nil {
+		return api.Usage("--checks: %v", err)
 	}
 	return nil
 }
@@ -242,7 +251,7 @@ func SaveSkill(ctx context.Context, db *store.DB, data string, in SkillInput, ac
 		name string
 		v    *[]string
 		ok   func(string) error
-	}{{"workers", in.Workers, tokenCheck("workers")}, {"checks", in.Checks, tokenCheck("checks")}, {"secrets", in.Secrets, CheckSecretName}} {
+	}{{"workers", in.Workers, tokenCheck("workers")}, {"checks", in.Checks, checkName}, {"secrets", in.Secrets, CheckSecretName}} {
 		if f.v != nil {
 			if err := checkTokens(f.name, *f.v, f.ok); err != nil {
 				return Skill{}, err
@@ -411,7 +420,7 @@ func skillCommands(t *cli.Table) {
 		Summary: "建技能或改出新一版（不给文件就沿用上一版的文件）",
 		Flags: []cli.Flag{
 			{Name: "workers", Value: "执行者", Multi: true, Help: "优先的执行者，写法同 task run --worker（给空串清掉）"},
-			{Name: "checks", Value: "检查", Multi: true, Help: "交付要查什么，如 pr_exists,local_check（给空串清掉）"},
+			{Name: "checks", Value: "检查", Multi: true, Help: "交付时运行时自己跑的检查：" + strings.Join(skillcheck.Known(), "、") + "（给空串清掉）"},
 			{Name: "secrets", Value: "名称", Multi: true, Help: "这类活要的凭据名，派活时按任务部门往上找（给空串清掉）"},
 		},
 		Run: func(c *cli.Ctx) error {

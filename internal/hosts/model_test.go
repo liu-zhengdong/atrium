@@ -369,3 +369,14 @@ func TestEditPlan(t *testing.T) {
 		}
 	}
 }
+
+// 缺省 ~/.atrium-agent 是正式代理（读本机额度）；别的目录（测试、冒烟）算隔离。
+func TestAgentIsolated(t *testing.T) {
+	def, err := AgentDir(func(string) string { return "" })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if AgentIsolated(def) || AgentIsolated(def+string(filepath.Separator)) || !AgentIsolated(t.TempDir()) {
+		t.Error("缺省目录应算正式，临时目录应算隔离")
+	}
+}

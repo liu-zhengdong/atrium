@@ -13,6 +13,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/liu-zhengdong/atrium/internal/app"
+	"github.com/liu-zhengdong/atrium/internal/config"
 	"github.com/liu-zhengdong/atrium/internal/store"
 )
 
@@ -362,8 +364,9 @@ func TestRecordAndRead(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	localFn = func() *Local { return nil }
-	openquotaFn = func(context.Context) ([]Pace, error) { return nil, nil }
+	// 隔离实例：本机登录与 OpenQuota 都不该去读。
+	localFn = func() *Local { t.Error("隔离实例不该读本机登录"); return nil }
+	openquotaFn = func(context.Context) ([]Pace, error) { t.Error("隔离实例不该读 OpenQuota"); return nil, nil }
 	ctx := context.Background()
 	now := store.Now()
 	w := []Window{{ID: "weekly", Used: 40, Period: week}}
@@ -393,7 +396,8 @@ func TestRecordAndRead(t *testing.T) {
 		t.Errorf("换账号后应只剩 1 行，得 %d", n)
 	}
 	db.Exec(`INSERT INTO quota_settings (name, value) VALUES ('reserve_percent', 50)`)
-	ov, err := Read(ctx, db)
+	env := &app.Env{DB: db, Paths: config.Paths{Data: t.TempDir()}}
+	ov, err := Read(ctx, env)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -401,15 +405,14 @@ func TestRecordAndRead(t *testing.T) {
 	for _, l := range ov.Lines {
 		spares[l.Account] = SpareOf(l, ov.Reserve)
 	}
-	if ov.Reserve != 50 || spares["claude"].Stop != "" || spares["claude"].Stale {
+	if ov.Reserve != 50 || spares["claude"].Stop != "" || spares["claude"].Stale || len(ov.Notes) != 1 {
 		t.Fatalf("%+v %+v", ov, spares)
 	}
 	if !strings.Contains(Format(ov), "claude") {
 		t.Error("Format")
 	}
-	// Last 只摆存下的读数，不去读 OpenQuota。
-	openquotaFn = func(context.Context) ([]Pace, error) { t.Error("Last 不该去读"); return nil, nil }
-	last, err := Last(ctx, db)
+	// Last 只摆存下的读数。
+	last, err := Last(ctx, env)
 	used := func(ov Overview) any {
 		for _, l := range ov.Lines {
 			if l.Account == "claude" && l.UsedPercent != nil {

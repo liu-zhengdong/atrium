@@ -279,7 +279,7 @@ func runAgent(c *cli.Ctx) error {
 	}
 	defer unlock()
 	a := NewAgent(dir, cfg, slog.New(slog.NewTextHandler(c.Env.Stderr, nil)))
-	if quota.Enabled(a.Env) {
+	if !AgentIsolated(dir) {
 		home, _ := os.UserHomeDir()
 		a.Quota = quota.NewLocal(quota.LocalDeps(runtime.GOOS, home, a.Env))
 	}

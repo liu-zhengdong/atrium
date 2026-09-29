@@ -8,7 +8,6 @@ work=$(mktemp -d "${TMPDIR:-/tmp}/atrium-smoke.XXXXXX")
 bin="$work/atrium"
 export ATRIUM_DATA="$work/data"
 export ATRIUM_PORT=$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1])')
-export ATRIUM_QUOTA_READERS=off   # 不读本机真实额度（登录、钥匙串）
 unset ATRIUM_AS
 
 pid=""

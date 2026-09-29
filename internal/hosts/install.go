@@ -35,7 +35,7 @@ const (
 // carried 是装成服务时要带上的环境：出得了网、找得到编码 CLI、守同样的并发上限。
 var carried = map[string]bool{"PATH": true, "LANG": true, "TZ": true, "HTTP_PROXY": true, "HTTPS_PROXY": true, "NO_PROXY": true,
 	"ALL_PROXY": true, "http_proxy": true, "https_proxy": true, "no_proxy": true, "all_proxy": true, "SSL_CERT_FILE": true,
-	"ATRIUM_MAX_WORKERS": true, "ATRIUM_QUOTA_READERS": true}
+	"ATRIUM_MAX_WORKERS": true}
 
 // CarriedEnv 取白名单里的环境（Windows 上变量名按大写）。
 func CarriedEnv(goos string, env map[string]string) map[string]string {

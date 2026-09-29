@@ -53,6 +53,7 @@ type View struct {
 	Depts     []DeptRow     `json:"depts"`
 	Queued    int           `json:"queued"`
 	Drafts    int           `json:"drafts"` // 草稿只给数：不计时、不等人
+	Goals     ledger.Goals  `json:"goals"`  // 三个目标的数：纠正、认可、复发
 	Secretary SecretaryView `json:"secretary"`
 	Paused    []string      `json:"paused"`
 }
@@ -120,6 +121,9 @@ func BuildView(ctx context.Context, env *app.Env) (View, error) {
 	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM tasks WHERE status = 'draft'`).Scan(&v.Drafts); err != nil {
 		return v, err
 	}
+	if v.Goals, err = ledger.ReadGoals(ctx, db, now); err != nil {
+		return v, err
+	}
 	backlogs, err := events.Backlogs(ctx, db)
 	if err != nil {
 		return v, err
@@ -163,7 +167,7 @@ func Routes(r *api.Router, env *app.Env) {
 }
 
 func Commands(t *cli.Table) {
-	t.Add(cli.Command{Path: "top", Summary: "全景：谁在干活、等你拍板的、各部门在跑与卡住、排队；缺省每 3 秒刷新",
+	t.Add(cli.Command{Path: "top", Summary: "全景：谁在干活、等你拍板的、各部门在跑与卡住、排队、三个目标的数；缺省每 3 秒刷新",
 		Flags: []cli.Flag{{Name: "once", Bool: true, Help: "只看一次（--json 时总是一次）"}},
 		Run: func(c *cli.Ctx) error {
 			if err := c.MaxArgs(0); err != nil {
@@ -246,6 +250,7 @@ func Render(v View) string {
 		fmt.Fprintf(&b, " · 草稿 %s", org.Tally("drafts", v.Drafts))
 	}
 	fmt.Fprintf(&b, " · 秘书%s", listenText(v.Secretary))
+	fmt.Fprintf(&b, "\n三个目标  %s", v.Goals.Line())
 	return b.String()
 }
 

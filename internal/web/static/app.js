@@ -115,7 +115,8 @@ async function renderToday() {
     <section class="section"><h2>等你</h2>${asks}</section>
     <section class="section"><h2>在做${d.running.length > 1 ? `<button class="sort" id="sort">按${sortMode} ▾</button>` : ""}</h2><div class="rows">${live}</div>
       ${d.shipped.length ? `<div class="dept-h" style="padding-top:18px">今天上线</div><div class="rows">${d.shipped.map(r => taskRow(r, clock)).join("")}</div>` : ""}
-    </section>`;
+    </section>
+    <section class="section"><h2>三个目标</h2><dl class="facts"><dt>近 7 天</dt><dd>${esc(d.goals.week.text)}</dd><dt>累计</dt><dd>${esc(d.goals.all.text)}</dd></dl></section>`;
   const sort = $("#sort");
   if (sort) sort.onclick = () => { sortMode = sortMode === "部门" ? "用时" : "部门"; renderToday().catch(fail); };
 }
@@ -262,6 +263,7 @@ function relHTML(d) {
 }
 
 /* 抽屉 */
+const sourceLabel = { user: "用户纠正", org: "组织发现" };
 let drawerTask = null, liveTimer = null;
 async function openTask(id) {
   const d = await api("task/" + id);
@@ -285,6 +287,7 @@ function renderTask(d) {
       ${draft ? "" : `<div class="steps">${d.steps.map((s, i) => `<div class="step ${i < d.step ? "past" : i === d.step ? "now" + (stuck ? " stuck" : "") : ""}"><i></i>${s}</div>`).join("")}</div>`}
       <div class="holder"><b>${label}</b>　${esc(draft ? "还没想清楚，不派活、不计时" : d.holder)} · ${esc(ago(t.updated_at))}</div>
       ${draft ? `<p class="draft-detail">${t.detail ? esc(t.detail) : "没有详述"}</p>` : `<dl class="facts"><dt>执行者</dt><dd>${esc(t.worker || "还没派")}</dd><dt>机器</dt><dd>${t.host ? esc(t.host + (d.host_name ? " " + d.host_name : "")) : "还没派"}</dd><dt>PR</dt><dd>${pr}</dd></dl>`}
+      ${t.source || t.class ? `<dl class="facts"><dt>来源</dt><dd>${esc(sourceLabel[t.source] || "没写")}</dd><dt>类</dt><dd>${esc(t.class || "没归类")}</dd></dl>` : ""}
       ${relHTML(d)}
       ${traceHTML(d)}
     </div>`;

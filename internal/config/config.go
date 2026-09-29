@@ -39,6 +39,13 @@ func Resolve(getenv func(string) string) (Paths, error) {
 	return Paths{Data: abs}, nil
 }
 
+// Isolated：数据目录不是缺省的那个（ATRIUM_DATA 指向别处，测试、开发起的隔离实例）；缺省目录就是用户的服务。
+// 隔离实例不自己拉起本机真实的模型进程：不唤醒负责人、自动挑执行者不挑内置工具。
+func (p Paths) Isolated() bool {
+	def, err := Resolve(func(string) string { return "" })
+	return err != nil || filepath.Clean(def.Data) != filepath.Clean(p.Data)
+}
+
 // Port 读 ATRIUM_PORT（缺省 4320）。
 func Port(getenv func(string) string) (int, error) {
 	raw := strings.TrimSpace(getenv("ATRIUM_PORT"))

@@ -340,6 +340,7 @@ func (d *dispatcher) view(ctx context.Context, t ledger.Task, risk string, exclu
 	}
 	var facts []Fact
 	seen := map[string]bool{}
+	iso := isolated(d.env)
 	for i, id := range append(slices.Clone(preferred), catalog...) {
 		r, err := workers.Resolve(ctx, db, id)
 		if err != nil {
@@ -359,7 +360,9 @@ func (d *dispatcher) view(ctx context.Context, t ledger.Task, risk string, exclu
 		f := Fact{ID: r.ID, Tool: r.Spec.Tool, Model: r.Spec.Model, Account: accountOf(r.Spec.Tool), Trust: r.Rules.EffectiveTrust(),
 			MaxRisk: r.Rules.EffectiveMaxRisk(), Refusal: r.Rules.Refusal(risk), Installed: workers.Installed(r.Adapter),
 			Exclusive: r.Adapter.Exclusive, Fails: workers.Fails(stats[workers.Combo(r.ID)], ShakyWindow)}
-		if m, ok := workers.Blocked(marks, r.Spec.Tool, r.Spec.Model, LocalHost); ok {
+		if _, builtin := workers.Builtin(r.Spec.Tool); iso && builtin {
+			f.Unavailable = "隔离实例（ATRIUM_DATA 不是缺省目录）不自动挑内置工具"
+		} else if m, ok := workers.Blocked(marks, r.Spec.Tool, r.Spec.Model, LocalHost); ok {
 			f.Unavailable = "本机不可用：" + m.Text()
 		} else if loggedOut[r.Spec.Tool] {
 			f.Unavailable = "没登录：本机的 " + r.Spec.Tool + " 没登录（atrium host ls " + LocalHost + "）"

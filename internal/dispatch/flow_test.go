@@ -68,12 +68,14 @@ func setup(t *testing.T) (*app.Env, *dispatcher) {
 	env := &app.Env{DB: db, Paths: config.Paths{Data: filepath.Join(dir, "data")}, Log: slog.New(slog.NewTextHandler(io.Discard, nil)),
 		Pause: &pause.Store{DB: db}}
 	// 不读开发者本机的额度与机器：只用本机、没有额度数据。
-	oldPick, oldSpares := pickHost, spares
+	// 假的内置工具在 PATH 上：自动挑人时当用户的服务挑它们（换人重派要用）。
+	oldPick, oldSpares, oldIsolated := pickHost, spares, isolated
 	pickHost = func(context.Context, *app.Env, HostNeed, string) (HostChoice, error) {
 		return HostChoice{Kind: "run", Host: LocalHost}, nil
 	}
 	spares = func(context.Context, *app.Env) (map[string]Spare, error) { return map[string]Spare{}, nil }
-	t.Cleanup(func() { pickHost, spares = oldPick, oldSpares })
+	isolated = func(*app.Env) bool { return false }
+	t.Cleanup(func() { pickHost, spares, isolated = oldPick, oldSpares, oldIsolated })
 	d := get(env)
 	t.Cleanup(func() {
 		d.mu.Lock()

@@ -108,8 +108,7 @@ func wakeEnabled(data string, getenv func(string) string) bool {
 	if getenv("ATRIUM_LEADER_WAKE") == "1" {
 		return true
 	}
-	def, err := config.Resolve(func(string) string { return "" })
-	return err == nil && filepath.Clean(def.Data) == filepath.Clean(data)
+	return !config.Paths{Data: data}.Isolated()
 }
 
 func (h *hub) run(ctx context.Context, env *app.Env) error {

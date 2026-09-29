@@ -43,7 +43,7 @@ func MemoOwner(actor api.Actor, as string) (string, error) {
 func CheckMemo(owner, body string) error {
 	if n := utf8.RuneCountInString(body); n > MaxMemo {
 		return api.Limit("atrium memo show --as "+owner,
-			"备忘最多 %d 字，这次 %d 字：删掉已经过时的、合并重复的，只留下次醒来必须知道的", MaxMemo, n)
+			"备忘最多 %d 字，这次 %d 字：不记进展（看 atrium top），删掉已经过时的、合并重复的，只留账本里没有、下次醒来必须知道的", MaxMemo, n)
 	}
 	return nil
 }

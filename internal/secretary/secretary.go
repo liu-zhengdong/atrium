@@ -7,6 +7,7 @@
 // statusline 给 Claude Code 状态栏一行字；服务不在只显示「未运行」，不拉起。
 // --install-hook 同时在项目设置 env 里写 ATRIUM_AS=secretary：秘书会话发的命令署名秘书（权限同用户）。
 // 执行者的工作树顺着读到秘书目录的项目设置，SessionStart hook 也会在执行者会话里跑：那里 --detach 静默退出。
+// --detach 起好后再输出此刻全景与秘书备忘（Brief）：hook 的输出进会话上下文，进展以账本为准，备忘不记进展。
 // 判定在 plan.go、statusline.go（纯函数）。
 package secretary
 
@@ -42,7 +43,7 @@ func Commands(t *cli.Table) {
 	t.Add(cli.Command{Path: "secretary bridge",
 		Summary: "在 Claude Code 秘书会话里常驻，把要处理的事件注入会话；--install-hook 让它随会话自动起",
 		Flags: []cli.Flag{
-			{Name: "detach", Bool: true, Help: "后台起（SessionStart hook 用），起好就返回"},
+			{Name: "detach", Bool: true, Help: "后台起（SessionStart hook 用），起好后输出此刻全景与秘书备忘就返回"},
 			{Name: "install-hook", Bool: true, Help: "在秘书目录的 .claude/settings.local.json 加 SessionStart hook 与 env ATRIUM_AS=secretary（命令署名秘书）"},
 			{Name: "dir", Value: "目录", Help: "--install-hook 的秘书目录（缺省当前目录）"},
 			{Name: "status", Bool: true, Help: "看 bridge 在不在跑、秘书在不在听"},
@@ -326,8 +327,12 @@ func detach(c *cli.Ctx, p config.Paths, endpoint string, batch int) error {
 	if err != nil {
 		return err
 	}
+	brief, err := sessionBrief(c)
+	if err != nil {
+		return err
+	}
 	if Claim(cur, endpoint, platform.Alive) == "running" {
-		return c.Done(cur, fmt.Sprintf("Atrium bridge 已在跑（pid %d）：要处理的事件以「【Atrium 事件】」消息送进本会话，处理完 atrium events ack <编号>", cur.PID),
+		return c.Done(cur, fmt.Sprintf("Atrium bridge 已在跑（pid %d）：要处理的事件以「【Atrium 事件】」消息送进本会话，处理完 atrium events ack <编号>\n\n%s", cur.PID, brief),
 			"atrium secretary bridge --status")
 	}
 	self, err := os.Executable()
@@ -358,11 +363,26 @@ func detach(c *cli.Ctx, p config.Paths, endpoint string, batch int) error {
 		case <-time.After(100 * time.Millisecond):
 		}
 		if r, _ := readRecord(p); r != nil && r.PID == cmd.Process.Pid {
-			return c.Done(r, fmt.Sprintf("Atrium bridge 已在后台运行（pid %d）：秘书要处理的事件会以「【Atrium 事件】」开头的消息送进本会话，处理完用 atrium events ack <编号> 确认。日志：%s", r.PID, logPath(p)),
+			return c.Done(r, fmt.Sprintf("Atrium bridge 已在后台运行（pid %d）：秘书要处理的事件会以「【Atrium 事件】」开头的消息送进本会话，处理完用 atrium events ack <编号> 确认。日志：%s\n\n%s", r.PID, logPath(p), brief),
 				"atrium secretary bridge --status")
 		}
 	}
 	return fmt.Errorf("bridge 10 秒内没登记上；看日志：%s", logPath(p))
+}
+
+// sessionBrief 取全景与秘书备忘，拼成会话开头的一段（SessionStart hook 的输出进会话上下文）。
+func sessionBrief(c *cli.Ctx) (string, error) {
+	var v watch.View
+	if err := c.Call("GET", "/api/top", nil, &v); err != nil {
+		return "", err
+	}
+	var m struct {
+		Body string `json:"body"`
+	}
+	if err := c.Call("GET", "/api/memo?as="+events.Secretary, nil, &m); err != nil {
+		return "", err
+	}
+	return Brief(v, m.Body), nil
 }
 
 // ---- --status 与 --install-hook ----

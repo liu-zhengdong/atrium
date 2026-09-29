@@ -73,6 +73,18 @@ type Row struct {
 // Emit 在调用方的事务里落一条事件：与引起它的状态变化同生同死。
 // 同一投递对象同一去重键还有没取走、没确认的，就合并进那一条（正文换成最新的、count 加一、级别取高）。
 func Emit(ctx context.Context, q store.Querier, e Event) error {
+	if e.By != "" {
+		if m, ok := e.Body.(map[string]any); ok {
+			if _, has := m["by"]; !has {
+				cp := make(map[string]any, len(m)+1)
+				for k, v := range m {
+					cp[k] = v
+				}
+				cp["by"] = e.By
+				e.Body = cp
+			}
+		}
+	}
 	body := ""
 	if e.Body != nil {
 		raw, err := json.Marshal(e.Body)
@@ -129,6 +141,18 @@ func EmitTask(ctx context.Context, q store.Querier, owner string, e Event) error
 	}
 	if leader == Secretary {
 		leader = ""
+	}
+	if e.By != "" {
+		if m, ok := e.Body.(map[string]any); ok {
+			if _, has := m["by"]; !has {
+				cp := make(map[string]any, len(m)+1)
+				for k, v := range m {
+					cp[k] = v
+				}
+				cp["by"] = e.By
+				e.Body = cp
+			}
+		}
 	}
 	for _, d := range Route(owner, leader, e.Kind, e.Body) {
 		e.Target, e.Level = d.Target, d.Level

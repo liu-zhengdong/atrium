@@ -116,8 +116,8 @@ type Module struct {
 ### 事件（`internal/events`）
 
 - `events.Emit(ctx, q, events.Event{Kind, Task, Dept, Target, Body, By})`：在引起它的写事务里调用。`By` 是引起它的身份：投递对象就是它时不投（自己做的事不再告诉自己；ledger 的任务事件填操作人）。种类常量写在 `events.go`。
-- 级别与去重键缺省按种类取（`events/model.go`）：任务转 failed、blocked、`overdue` 与 `limit.full` 要处理，其余知会；同一任务的 `task.status` 合并成最新一条。`Target` 留空时 events 包调 `org.Recipient(ctx, q, dept)` 取投递对象（部门往上最近负责人，没有投 `secretary`）。上限提醒的「同一件事只提醒一次」（ack 之后、重启之后、超限期间都不重发）不靠事件去重，见 `limit_notices`。
-- 任务事件：ledger 在状态变化、落地推进一步（`Land`，如已合入等发版）与转入等验收时经 `events.EmitTask(ctx, q, owner, e)` 发 `task.status`，按处理人分发（纯函数 `events.Route`）。派活人是 `task add` 时的身份（周期任务记建周期任务的人），处理人是 `task add --owner`、缺省派活人，两者记在 `created` 经历里（`ledger.PartiesOf`，`task show` 显示）。结果（完成、已合入、上线、失败、受阻）要处理地投处理人：u1 与秘书投 `secretary`，aN 投自己；运行时建的（审阅任务）投部门负责人、没有投秘书，只有失败、受阻要处理。负责人不是收结果的那位时另收知会；过程（入队、拉起、交回一次、取消）只知会负责人。等验收（正文带 `accept_by`）要处理地投验收人：`user` 投秘书，`leader` 投部门负责人（没有投秘书）。
+- 级别与去重键缺省按种类取（`events/model.go`）：任务失败、受阻、完成、等验收、自升级上线失败、`overdue` 与 `limit.full` 要处理；落地中间步骤（如已合入等发版）与用户本人（u1）亲手操作只知会；同一任务的 `task.status` 合并成最新一条。`Target` 留空时 events 包调 `org.Recipient(ctx, q, dept)` 取投递对象（部门往上最近负责人，没有投 `secretary`）。上限提醒的「同一件事只提醒一次」（ack 之后、重启之后、超限期间都不重发）不靠事件去重，见 `limit_notices`。
+- 任务事件：ledger 在状态变化、落地推进一步（`Land`，如已合入等发版）与转入等验收时经 `events.EmitTask(ctx, q, owner, e)` 发 `task.status`，按处理人分发（纯函数 `events.Route`）。派活人是 `task add` 时的身份（周期任务记建周期任务的人），处理人是 `task add --owner`、缺省派活人，两者记在 `created` 经历里（`ledger.PartiesOf`，`task show` 显示）。结果投处理人：u1 与秘书投 `secretary`，aN 投自己；落地中间步骤（如已合入等发版）与用户本人（u1）亲手操作只知会，完成、失败、受阻要处理；运行时建的（审阅任务）投部门负责人、没有投秘书，成功由运行时自己接着走，只有失败、受阻要处理。负责人不是收结果的那位时另收知会；过程（入队、拉起、交回一次、取消）只知会负责人。等验收（正文带 `accept_by`）投验收人（要处理）：`user` 投秘书，`leader` 投部门负责人（没有投秘书）。
 
 ### 一键停机（`internal/pause`）
 

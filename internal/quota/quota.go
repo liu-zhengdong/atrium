@@ -41,24 +41,11 @@ type Local struct {
 
 func NewLocal(d Deps) *Local { return &Local{deps: d, next: map[string]time.Time{}} }
 
-// Enabled：ATRIUM_QUOTA_READERS=off 关掉自带读取（测试与冒烟用，免得读开发者本机登录）。
-func Enabled(env map[string]string) bool {
-	switch strings.ToLower(strings.TrimSpace(env["ATRIUM_QUOTA_READERS"])) {
-	case "off", "0", "false":
-		return false
-	}
-	return true
-}
-
-// Default 是这个进程的本机读取（按当前环境）；自带读取关掉时为 nil。
+// Default 是这个进程的本机读取（按当前环境）。
 func Default() *Local {
 	defaultOnce.Do(func() {
-		env := platform.EnvMap(os.Environ())
-		if !Enabled(env) {
-			return
-		}
 		home, _ := os.UserHomeDir()
-		defaultLocal = NewLocal(LocalDeps(runtime.GOOS, home, env))
+		defaultLocal = NewLocal(LocalDeps(runtime.GOOS, home, platform.EnvMap(os.Environ())))
 	})
 	return defaultLocal
 }
@@ -223,29 +210,33 @@ type Overview struct {
 }
 
 // Read 刷新本机到期的读数，合并各台与 OpenQuota，得出一览。到期时要真去读，可能要几秒。
-func Read(ctx context.Context, db *store.DB) (Overview, error) {
+// 隔离实例（config.Paths.Isolated）不读本机：不碰开发者的登录、钥匙串与 OpenQuota，只摆存下的读数。
+func Read(ctx context.Context, env *app.Env) (Overview, error) {
+	if env.Paths.Isolated() {
+		return overview(ctx, env, nil, nil)
+	}
 	if r := localFn().Due(ctx); len(r) > 0 {
-		if err := Record(ctx, db, LocalHost, r); err != nil {
+		if err := Record(ctx, env.DB, LocalHost, r); err != nil {
 			return Overview{}, err
 		}
 	}
 	oq, err := openquotaFn(ctx)
-	return overview(ctx, db, oq, err)
+	return overview(ctx, env, oq, err)
 }
 
 // Last 是上次读数的一览：不去读，马上返回（网页先摆上次读数，现读交给 Read）。
-func Last(ctx context.Context, db *store.DB) (Overview, error) {
+func Last(ctx context.Context, env *app.Env) (Overview, error) {
 	oq, _, err := openquotaLast()
-	return overview(ctx, db, oq, err)
+	return overview(ctx, env, oq, err)
 }
 
 // overview 把存下的各台读数与 OpenQuota 的一份合成一览。
-func overview(ctx context.Context, db *store.DB, oq []Pace, oqErr error) (Overview, error) {
-	all, err := stored(ctx, db)
+func overview(ctx context.Context, env *app.Env, oq []Pace, oqErr error) (Overview, error) {
+	all, err := stored(ctx, env.DB)
 	if err != nil {
 		return Overview{}, err
 	}
-	reserve, err := Reserve(ctx, db)
+	reserve, err := Reserve(ctx, env.DB)
 	if err != nil {
 		return Overview{}, err
 	}
@@ -253,8 +244,8 @@ func overview(ctx context.Context, db *store.DB, oq []Pace, oqErr error) (Overvi
 	if oqErr != nil {
 		ov.Notes = append(ov.Notes, oqErr.Error())
 	}
-	if localFn() == nil {
-		ov.Notes = append(ov.Notes, "自带读取已关（ATRIUM_QUOTA_READERS=off）")
+	if env.Paths.Isolated() {
+		ov.Notes = append(ov.Notes, "隔离实例不读本机额度（自带读取与 OpenQuota）")
 	}
 	ov.Lines = Lines(mergeHosts(all, LocalHost, store.Now()), oq)
 	return ov, nil
@@ -262,7 +253,7 @@ func overview(ctx context.Context, db *store.DB, oq []Pace, oqErr error) (Overvi
 
 // Spares 给派活：每个账号的富余（已扣给用户留的份额）。
 func Spares(ctx context.Context, env *app.Env) (map[string]Spare, error) {
-	ov, err := Read(ctx, env.DB)
+	ov, err := Read(ctx, env)
 	if err != nil {
 		return nil, err
 	}
@@ -282,7 +273,7 @@ type setBody struct {
 }
 
 func Routes(r *api.Router, env *app.Env) {
-	r.Handle("GET /api/quota", func(q *api.Req) (any, error) { return Read(q.Context(), env.DB) })
+	r.Handle("GET /api/quota", func(q *api.Req) (any, error) { return Read(q.Context(), env) })
 	r.Handle("POST /api/quota", func(q *api.Req) (any, error) {
 		if q.Actor.Kind != "user" {
 			return nil, api.Forbidden("只有用户能改额度设置")
@@ -301,7 +292,7 @@ func Routes(r *api.Router, env *app.Env) {
 				return nil, err
 			}
 		}
-		return Read(ctx, env.DB)
+		return Read(ctx, env)
 	})
 }
 

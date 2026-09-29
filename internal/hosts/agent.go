@@ -55,6 +55,13 @@ func AgentDir(getenv func(string) string) (string, error) {
 	return filepath.Join(home, ".atrium-agent"), nil
 }
 
+// AgentIsolated：数据目录不是缺省的 ~/.atrium-agent（测试、冒烟起的代理），与服务的 config.Paths.Isolated 同一条规则；
+// 隔离的代理不读本机额度。装成服务的代理跑的是 --data 缺省目录，算正式。
+func AgentIsolated(dir string) bool {
+	def, err := AgentDir(func(string) string { return "" })
+	return err != nil || filepath.Clean(def) != filepath.Clean(dir)
+}
+
 func writeSecret(path string, v any) error {
 	raw, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {

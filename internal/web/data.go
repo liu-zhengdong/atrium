@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/liu-zhengdong/atrium/internal/app"
 	"github.com/liu-zhengdong/atrium/internal/events"
 	"github.com/liu-zhengdong/atrium/internal/hosts"
 	"github.com/liu-zhengdong/atrium/internal/ledger"
@@ -723,9 +724,10 @@ type Perf struct {
 	Marks    []workers.Mark `json:"marks"`
 }
 
-func loadLegion(ctx context.Context, db *store.DB, now int64) (Legion, error) {
+func loadLegion(ctx context.Context, env *app.Env, now int64) (Legion, error) {
+	db := env.DB
 	out := Legion{Quota: quotaOf(quota.Overview{}), Hosts: []Host{}, Perf: []Perf{}, Window: workers.StatWindow}
-	ov, err := quota.Last(ctx, db)
+	ov, err := quota.Last(ctx, env)
 	if err != nil {
 		return out, err
 	}
@@ -760,8 +762,8 @@ func loadLegion(ctx context.Context, db *store.DB, now int64) (Legion, error) {
 }
 
 // loadQuota 现读额度（到期的账号真去读，可能要几秒）；执行者页先摆 Legion 里的上次读数，读到再换。
-func loadQuota(ctx context.Context, db *store.DB) (Quota, error) {
-	ov, err := quota.Read(ctx, db)
+func loadQuota(ctx context.Context, env *app.Env) (Quota, error) {
+	ov, err := quota.Read(ctx, env)
 	return quotaOf(ov), err
 }
 

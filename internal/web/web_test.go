@@ -19,6 +19,7 @@ import (
 
 	"github.com/liu-zhengdong/atrium/internal/api"
 	"github.com/liu-zhengdong/atrium/internal/app"
+	"github.com/liu-zhengdong/atrium/internal/config"
 	"github.com/liu-zhengdong/atrium/internal/events"
 	"github.com/liu-zhengdong/atrium/internal/hosts"
 	"github.com/liu-zhengdong/atrium/internal/ledger"
@@ -207,11 +208,10 @@ func TestBrowserInvocation(t *testing.T) {
 
 // 整条路径：不登录直接读接口；外来 Host 一律 403，不带 CORS 头。
 func TestRoutes(t *testing.T) {
-	// 额度读取不碰开发者本机的登录与 OpenQuota。
-	t.Setenv("ATRIUM_QUOTA_READERS", "off")
-	t.Setenv("ATRIUM_OPENQUOTA_BIN", filepath.Join(t.TempDir(), "no-openquota"))
+	// 数据目录是临时的（隔离实例）：额度不碰开发者本机的登录与 OpenQuota。
 	ctx := context.Background()
-	db, err := store.Open(filepath.Join(t.TempDir(), "atrium.db"))
+	data := t.TempDir()
+	db, err := store.Open(filepath.Join(data, "atrium.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -233,7 +233,7 @@ func TestRoutes(t *testing.T) {
 	defer srv.Close()
 	port, _ := strconv.Atoi(srv.URL[strings.LastIndex(srv.URL, ":")+1:])
 	m := Module()
-	m.Routes(r, &app.Env{DB: db, Port: port, Log: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	m.Routes(r, &app.Env{DB: db, Paths: config.Paths{Data: data}, Port: port, Log: slog.New(slog.NewTextHandler(io.Discard, nil))})
 
 	get := func(path, host string) *http.Response {
 		req, _ := http.NewRequest("GET", srv.URL+path, nil)

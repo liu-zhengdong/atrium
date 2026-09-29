@@ -234,8 +234,19 @@ func TestRoutes(t *testing.T) {
 		t.Errorf("上交应进等你：%+v", today.Asks)
 	}
 	read("dept/"+sub.ID, &page)
-	if page.Leader == nil || page.Leader.Name != "运行时负责人" {
+	if page.Leader == nil || page.Leader.Name != "运行时负责人" || page.Leader.Inherited {
 		t.Errorf("负责人：%+v", page.Leader)
+	}
+	// 自己没有负责人：显示往上最近一级的，标成继承；上面一路都没有就是空（你直接管）。
+	leaf, _ := org.Add(ctx, db, org.NewDept{Name: "网页", Parent: sub.ID})
+	read("dept/"+leaf.ID, &page)
+	if page.Leader == nil || page.Leader.ID != a.ID || !page.Leader.Inherited {
+		t.Errorf("继承的负责人：%+v", page.Leader)
+	}
+	page = DeptPage{}
+	read("dept/"+root.ID, &page)
+	if page.Leader != nil {
+		t.Errorf("上面没有负责人时应为空：%+v", page.Leader)
 	}
 	if res := get("/", ""); res.StatusCode != 200 || !strings.Contains(res.Header.Get("Content-Security-Policy"), "script-src") && !strings.Contains(res.Header.Get("Content-Security-Policy"), "default-src 'self'") {
 		t.Errorf("首页：%d", res.StatusCode)

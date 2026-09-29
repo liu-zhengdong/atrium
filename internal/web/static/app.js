@@ -119,7 +119,7 @@ async function renderDept(id, tab) {
     <h1 class="dept-title">${esc(dept.name)}</h1>
     ${dept.what ? `<p class="dept-what">${esc(dept.what)}</p>` : ""}
     ${intro.length ? `<dl class="intro">${intro.map(x => `<dt>${x[0]}</dt><dd>${esc(x[1])}</dd>`).join("")}</dl>` : ""}
-    ${d.leader ? `<div class="lead"><b>${esc([...d.leader.name][0] || "负")}</b>${esc(d.leader.name)}<span>${esc(d.leader.workers)}</span></div>`
+    ${d.leader ? `<div class="lead"><b>${esc([...d.leader.name][0] || "负")}</b>${esc(d.leader.name)}${d.leader.inherited ? "（上级）" : ""}<span>${esc(d.leader.workers)}</span></div>`
       : `<div class="lead"><b>你</b>你直接管<span>秘书帮你盯着</span></div>`}
     ${d.subs.length ? `<section class="section"><h2>下属部门</h2><div class="subs">${subCards}</div></section>` : ""}
     <section class="section">
@@ -174,7 +174,13 @@ const firstPara = s => s.trim().split(/\n\s*\n/)[0];
 const oneLine = s => s.trim().replace(/\s*\n\s*/g, " ↵ ");
 const cmdNote = { run: "在跑", err: "出错", none: "没搜到", ok: "" };
 const cmdsOf = segs => segs.flatMap(s => s.cmds || []);
-const pips = cmds => `<span class="pips">${cmds.map(c => `<i class="${c.state}"></i>`).join("")}</span>`;
+const maxPips = 20; // 每段最多画这么多点，多的写「+N」
+const pips = cmds => `<span class="pips">${cmds.slice(0, maxPips).map(c => `<i class="${c.state}"></i>`).join("")}${cmds.length > maxPips ? `<b>+${cmds.length - maxPips}</b>` : ""}</span>`;
+// 折叠行只写数：几段、几条命令、几条出错（没有不写）。
+function tally(segs) {
+  const cmds = cmdsOf(segs), errs = cmds.filter(c => c.state === "err").length;
+  return `${segs.length} 段 · ${cmds.length} 条命令${errs ? ` · <span class="errn">${errs} 条出错</span>` : ""}`;
+}
 function since(ms) {
   const m = Math.max(1, Math.round((Date.now() - ms) / 60e3));
   return m < 60 ? m + " 分钟" : Math.floor(m / 60) + " 小时 " + (m % 60) + " 分钟";
@@ -198,12 +204,12 @@ function traceHTML(d) {
   if (!tr) return "";
   const tid = d.task.id, segs = tr.segments, n = cmdsOf(segs).length;
   const lines = tr.lines?.length ? `<div class="log">${esc(tr.lines.join("\n"))}</div>` : "";
-  const fold = (key, label, open) => `<button class="grp fold" data-g="${tid}:${key}" aria-expanded="${open}"><span class="chev">›</span>${label}</button>`;
+  const fold = (key, label, open) => `<button class="grp fold" data-g="${tid}:${key}" aria-expanded="${open}"><span class="chev">›</span><span>${label}</span></button>`;
   if (!segs.length && !tr.ended) return lines ? `<div class="jh"><b>日志</b></div>${lines}` : "";
   if (d.live) { // 进行中：只留最近两段，当前段展开，更早的折起
     const older = segs.slice(0, Math.max(0, segs.length - 2)), showOld = unfolded.has(tid + ":old");
     return `<div class="jh"><b>经过</b><span>${n} 条命令 · 已跑 ${since(d.run_at)}</span></div>`
-      + (older.length ? fold("old", `前面还有 ${older.length} 段 · ${cmdsOf(older).length} 条命令`, showOld) : "")
+      + (older.length ? fold("old", `前面还有 ${tally(older)}`, showOld) : "")
       + (showOld ? older.map((s, i) => segHTML(tid, s, i, false)).join("") : "")
       + segs.slice(older.length).map((s, k) => segHTML(tid, s, older.length + k, older.length + k === segs.length - 1)).join("") + lines;
   }
@@ -215,7 +221,7 @@ function traceHTML(d) {
   }
   if (segs.length) {
     const showAll = unfolded.has(tid + ":all");
-    out += `<div class="jh"><b>经过</b></div>` + fold("all", `${segs.length} 段 · ${n} 条命令${pips(cmdsOf(segs))}`, showAll)
+    out += `<div class="jh"><b>经过</b></div>` + fold("all", tally(segs), showAll)
       + (showAll ? segs.map((s, i) => segHTML(tid, s, i, false)).join("") : "");
   }
   return out + lines;

@@ -5,6 +5,7 @@
 // 任务事件经 EmitTask 按处理人分发（Route）：结果投处理人（缺省派活的人），负责人另收知会。
 // 同一投递对象同一去重键、还没取走也没确认的事件合并成一条（count 加一），免得刷屏。
 // 一次操作引出的事件不投给做这次操作的身份本人（Event.By 与投递对象相同就不投）。
+// 事件是投递队列，不是任务经历：服务每小时删掉超过保留期的已确认事件与知会级事件（Prune），要处理且没确认的不删。
 // 判定（级别、去重键、投递对象）是纯函数，在 model.go；本文件是落库与等待。
 package events
 
@@ -12,11 +13,14 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/liu-zhengdong/atrium/internal/app"
 	"github.com/liu-zhengdong/atrium/internal/org"
+	"github.com/liu-zhengdong/atrium/internal/pause"
 	"github.com/liu-zhengdong/atrium/internal/store"
 )
 
@@ -141,6 +145,7 @@ func EmitTask(ctx context.Context, q store.Querier, owner string, e Event) error
 }
 
 // Seen 判断某投递对象是否收到过（含已确认的）这个去重键的事件：watch 用它保证同一次到期只发一回。
+// 已确认的留到保留期满才删，所以同一次到期（键带持球起点与级别）一周内不重发。
 func Seen(ctx context.Context, q store.Querier, target, key string) (bool, error) {
 	var one int
 	err := q.QueryRowContext(ctx, `SELECT 1 FROM events WHERE key = ? AND target = ? LIMIT 1`, key, target).Scan(&one)
@@ -342,6 +347,44 @@ func Backlogs(ctx context.Context, q store.Querier) ([]Backlog, error) {
 		out = append(out, b)
 	}
 	return out, rows.Err()
+}
+
+// Retention 是已确认事件与知会级事件的保留期（按最后更新算）。
+const Retention = 7 * 24 * time.Hour
+
+// Prune 删掉最后更新早于 before 的已确认事件与知会级事件；要处理且没确认的留着等人处理。返回删了几条。
+func Prune(ctx context.Context, q store.Querier, before int64) (int64, error) {
+	res, err := q.ExecContext(ctx, `DELETE FROM events WHERE updated_at < ? AND (acked_at IS NOT NULL OR level = 'info')`, before)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
+// run 是清理循环：启动时清一次，之后每小时一次；全局暂停时不清。
+func run(ctx context.Context, env *app.Env) error {
+	t := time.NewTicker(time.Hour)
+	defer t.Stop()
+	for {
+		paused, err := env.Pause.Paused(ctx, pause.Scope{})
+		if err != nil {
+			return err
+		}
+		if !paused {
+			n, err := Prune(ctx, env.DB, store.Now()-Retention.Milliseconds())
+			if err != nil {
+				return fmt.Errorf("清理事件：%w", err)
+			}
+			if n > 0 {
+				env.Log.Info("清理事件", "deleted", n)
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-t.C:
+		}
+	}
 }
 
 // ---- 本进程内的「有新事件」通知 ----

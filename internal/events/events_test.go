@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -329,5 +330,55 @@ func TestSubscriber(t *testing.T) {
 		if got != c.want || code != c.code {
 			t.Errorf("%+v as=%q：得到 %q %q，应为 %q %q", c.actor, c.as, got, code, c.want, c.code)
 		}
+	}
+}
+
+func TestPrune(t *testing.T) {
+	db := openDB(t)
+	ctx := context.Background()
+	const before = 1_000_000
+	cases := []struct {
+		name    string
+		level   string
+		updated int64
+		acked   bool
+		gone    bool
+	}{
+		{"已确认·过期", Act, before - 1, true, true},
+		{"已确认·正好到点", Act, before, true, false},
+		{"已确认·没过期", Act, before + 1, true, false},
+		{"知会·没确认·过期", Info, before - 1, false, true},
+		{"知会·已确认·过期", Info, before - 1, true, true},
+		{"知会·没确认·没过期", Info, before + 1, false, false},
+		{"要处理·没确认·过期", Act, before - 1, false, false},
+		{"要处理·没确认·没过期", Act, before + 1, false, false},
+	}
+	for i, c := range cases {
+		var acked any
+		if c.acked {
+			acked = c.updated
+		}
+		exec(t, db, `INSERT INTO events (id, at, updated_at, kind, level, key, target, acked_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			i+1, c.updated, c.updated, Overdue, c.level, "k"+strconv.Itoa(i+1), "a1", acked)
+	}
+	n, err := Prune(ctx, db, before)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := 0
+	for i, c := range cases {
+		if c.gone {
+			want++
+		}
+		seen, err := Seen(ctx, db, "a1", "k"+strconv.Itoa(i+1))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if seen == c.gone {
+			t.Errorf("%s: 删了=%v，应为 %v", c.name, !seen, c.gone)
+		}
+	}
+	if n != int64(want) {
+		t.Errorf("删了 %d 条，应为 %d", n, want)
 	}
 }

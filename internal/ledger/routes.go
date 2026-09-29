@@ -8,6 +8,7 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/api"
 	"github.com/liu-zhengdong/atrium/internal/app"
 	"github.com/liu-zhengdong/atrium/internal/org"
+	"github.com/liu-zhengdong/atrium/internal/store"
 )
 
 // Module 是账本的接入点。
@@ -15,15 +16,18 @@ func Module() app.Module {
 	return app.Module{Name: "ledger", Commands: Commands, Routes: Routes}
 }
 
-// TreeNode 是任务树的一个节点；Summary 汇总全部子孙。
+// TreeNode 是任务树的一个节点；Summary 汇总全部子孙。Ready：没有子任务、自己 todo、依赖都完成，现在能派；
+// WaitingOn：todo 或排队中的任务还没完成的依赖。
 type TreeNode struct {
 	Task
-	Summary  *Summary    `json:"summary,omitempty"`
-	Children []*TreeNode `json:"children,omitempty"`
+	Summary   *Summary    `json:"summary,omitempty"`
+	Ready     bool        `json:"ready,omitempty"`
+	WaitingOn []string    `json:"waiting_on,omitempty"`
+	Children  []*TreeNode `json:"children,omitempty"`
 }
 
-// BuildTree 把 Subtree 的结果（root 在第一个，父先于子）搭成树。纯函数。
-func BuildTree(tasks []Task) *TreeNode {
+// BuildTree 把 Subtree 的结果（root 在第一个，父先于子）与 SubtreeDeps 的依赖搭成树。纯函数。
+func BuildTree(tasks []Task, deps map[string][]DepState) *TreeNode {
 	nodes := map[string]*TreeNode{}
 	var root *TreeNode
 	for i, t := range tasks {
@@ -37,6 +41,11 @@ func BuildTree(tasks []Task) *TreeNode {
 	}
 	var fill func(n *TreeNode) []Status
 	fill = func(n *TreeNode) []Status {
+		ready, waiting := Ready(n.Status, deps[n.ID])
+		n.Ready = ready && len(n.Children) == 0 // 有子任务的由子任务汇总，不派它自己
+		if n.Status == Todo || n.Status == Queued {
+			n.WaitingOn = waiting
+		}
 		var all []Status
 		for _, c := range n.Children {
 			all = append(all, c.Status)
@@ -83,6 +92,19 @@ type WaitResult struct {
 var DefaultUntil = []Status{Done, Failed, Blocked, Cancelled}
 
 const maxWait = time.Hour
+
+// tree 读出 id 这棵任务树，带汇总与每件的能派／在等谁。
+func tree(q *api.Req, db store.Querier, id string) (*TreeNode, error) {
+	sub, err := Subtree(q.Context(), db, id)
+	if err != nil {
+		return nil, err
+	}
+	deps, err := SubtreeDeps(q.Context(), db, id)
+	if err != nil {
+		return nil, err
+	}
+	return BuildTree(sub, deps), nil
+}
 
 func Routes(r *api.Router, env *app.Env) {
 	db := env.DB
@@ -136,7 +158,7 @@ func Routes(r *api.Router, env *app.Env) {
 		if err != nil {
 			return nil, err
 		}
-		d.Children = BuildTree(sub).Summary
+		d.Children = BuildTree(sub, nil).Summary
 		d.History, err = History(q.Context(), db, id, 20)
 		return d, err
 	})
@@ -177,11 +199,11 @@ func Routes(r *api.Router, env *app.Env) {
 		}
 		out := []*TreeNode{}
 		for _, t := range roots {
-			sub, err := Subtree(q.Context(), db, t.ID)
+			n, err := tree(q, db, t.ID)
 			if err != nil {
 				return nil, err
 			}
-			out = append(out, BuildTree(sub))
+			out = append(out, n)
 		}
 		return out, nil
 	})
@@ -190,37 +212,11 @@ func Routes(r *api.Router, env *app.Env) {
 		if err != nil {
 			return nil, err
 		}
-		sub, err := Subtree(q.Context(), db, id)
+		n, err := tree(q, db, id)
 		if err != nil {
 			return nil, err
 		}
-		return []*TreeNode{BuildTree(sub)}, nil
-	})
-	r.Handle("GET /api/tasks/{id}/plan", func(q *api.Req) (any, error) {
-		id, err := q.Ref("id", "t")
-		if err != nil {
-			return nil, err
-		}
-		sub, err := Subtree(q.Context(), db, id)
-		if err != nil {
-			return nil, err
-		}
-		if len(sub) > 1 {
-			sub = sub[1:] // 有子任务时排子孙；没有时排它自己
-		}
-		ids := make([]string, len(sub))
-		for i, t := range sub {
-			ids[i] = t.ID
-		}
-		edges, outside, err := DepsOf(q.Context(), db, ids)
-		if err != nil {
-			return nil, err
-		}
-		in := make([]PlanInput, len(sub))
-		for i, t := range sub {
-			in[i] = PlanInput{ID: t.ID, Title: t.Title, Status: t.Status, Deps: edges[t.ID]}
-		}
-		return Plan(in, outside), nil
+		return []*TreeNode{n}, nil
 	})
 	r.Handle("POST /api/tasks/{id}/notes", func(q *api.Req) (any, error) {
 		id, err := q.Ref("id", "t")

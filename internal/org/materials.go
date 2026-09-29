@@ -327,7 +327,7 @@ func ArchiveMaterial(ctx context.Context, db *store.DB, data, id string, undo bo
 	return GetMaterial(ctx, db, data, id, 0)
 }
 
-// MaterialContent 是 material get 的结果。
+// MaterialContent 是 material ls mN 的结果。
 type MaterialContent struct {
 	Material
 	Content []byte `json:"content"`
@@ -473,45 +473,20 @@ func materialCommands(t *cli.Table) {
 			}
 			return c.Done(list, b.String(), "atrium material ls --node "+dept)
 		}})
-	t.Add(cli.Command{Path: "material get", Read: true, Args: "<mN>", Summary: "取一份资料的内容",
-		Flags: []cli.Flag{
-			{Name: "rev", Value: "N", Help: "取第几版（缺省最新）"},
-			{Name: "out", Value: "文件", Help: "写到文件（二进制资料必须给）"},
-		},
-		Run: func(c *cli.Ctx) error {
-			id, err := c.Arg(0, "<mN>")
-			if err != nil {
-				return err
-			}
-			rev, err := c.Int("rev", 0)
-			if err != nil {
-				return err
-			}
-			var m MaterialContent
-			q := ""
-			if rev > 0 {
-				q = "?rev=" + strconv.Itoa(rev)
-			}
-			if err := c.Call("GET", "/api/materials/"+url.PathEscape(id)+q, nil, &m); err != nil {
-				return err
-			}
-			if out := c.Str("out"); out != "" {
-				if err := os.WriteFile(out, m.Content, 0o600); err != nil {
-					return err
-				}
-				return c.Done(m.Material, fmt.Sprintf("已写到 %s（%s 第 %d 版，%d 字节）", out, m.ID, m.Rev, m.Size), "")
-			}
-			if m.Binary && !c.JSON {
-				return api.Usage("%s 是二进制资料：用 --out <文件> 写到文件", id)
-			}
-			return c.Done(m, string(m.Content), "")
-		}})
-	t.Add(cli.Command{Path: "material ls", Read: true, Summary: "列资料与部门用量",
+	t.Add(cli.Command{Path: "material ls", Read: true, Args: "[mN]", Summary: "列资料与部门用量；给 mN 取这一份的内容",
 		Flags: []cli.Flag{
 			{Name: "node", Value: "oN", Help: "只看这个部门的"},
 			{Name: "archived", Bool: true, Help: "只看已归档的"},
+			{Name: "rev", Value: "N", Help: "给 mN 时取第几版（缺省最新）"},
+			{Name: "out", Value: "文件", Help: "给 mN 时写到文件（二进制资料必须给）"},
 		},
 		Run: func(c *cli.Ctx) error {
+			if err := c.MaxArgs(1); err != nil {
+				return err
+			}
+			if len(c.Args) == 1 {
+				return getMaterial(c, c.Args[0])
+			}
 			v := url.Values{}
 			if n := c.Str("node"); n != "" {
 				v.Set("node", n)
@@ -541,7 +516,7 @@ func materialCommands(t *cli.Table) {
 				b.WriteString("没有资料\n")
 				return c.Done(list, b.String(), "atrium material add <oN> <文件或目录> --note <是什么>")
 			}
-			return c.Done(list, b.String(), "atrium material get "+list[0].ID)
+			return c.Done(list, b.String(), "atrium material ls "+list[0].ID)
 		}})
 	t.Add(cli.Command{Path: "material archive", Args: "<mN>", Summary: "归档资料（不算用量、不再附给负责人；文件留着）",
 		Flags: []cli.Flag{{Name: "undo", Bool: true, Help: "撤销归档"}},
@@ -564,4 +539,30 @@ func materialCommands(t *cli.Table) {
 			}
 			return c.Done(m, verb+materialLine(m), "atrium material ls --node "+m.Org)
 		}})
+}
+
+// getMaterial 是 material ls mN：取一份资料的内容，文本直接输出原文。
+func getMaterial(c *cli.Ctx, id string) error {
+	rev, err := c.Int("rev", 0)
+	if err != nil {
+		return err
+	}
+	var m MaterialContent
+	q := ""
+	if rev > 0 {
+		q = "?rev=" + strconv.Itoa(rev)
+	}
+	if err := c.Call("GET", "/api/materials/"+url.PathEscape(id)+q, nil, &m); err != nil {
+		return err
+	}
+	if out := c.Str("out"); out != "" {
+		if err := os.WriteFile(out, m.Content, 0o600); err != nil {
+			return err
+		}
+		return c.Done(m.Material, fmt.Sprintf("已写到 %s（%s 第 %d 版，%d 字节）", out, m.ID, m.Rev, m.Size), "")
+	}
+	if m.Binary && !c.JSON {
+		return api.Usage("%s 是二进制资料：用 --out <文件> 写到文件", id)
+	}
+	return c.Done(m, string(m.Content), "")
 }

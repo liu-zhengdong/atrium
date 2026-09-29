@@ -64,12 +64,12 @@ out=$(json org show o2); has '.result.path == ["o1","o2"] and (.result.inherited
 for i in 1 2 3 4 5; do json point add o1 "p$i" >/dev/null; done
 out=$(json point add o1 "第八条" || true); has '.ok == false and .error.code == "limit" and (.error.next|length) > 0'
 
-step "task add / ls / show / set / tree / plan / note"
+step "task add / ls / show / set / tree / note"
 out=$(json task add 根任务 --org o2); has '.result.id == "t1" and .result.status == "todo" and .next == "atrium task run t1"'
 out=$(json task add 子一 --parent t1); has '.result.org == "o2"'
 out=$(json task add 子二 --parent t1 --after t2 --priority urgent); has '.result.priority == "urgent"'
 out=$(json task ls); has '(.result|length) == 3'
-out=$(json task plan t1); has '.result[0].id == "t2" and .result[0].ready and .result[1].waiting_on == ["t2"]'
+out=$(json task tree t1); has '(.result[0].ready|not) and .result[0].children[0].ready and .result[0].children[1].waiting_on == ["t2"] and .next == "atrium task run t2"'
 out=$(json task set t2 --after t3 || true); has '.ok == false and .error.code == "usage"'   # 成环
 out=$(json task note t1 "记一笔"); has '.ok'
 out=$(json task show t1); has '.result.children.total == 2 and (.result.history|map(.kind)) == ["created","note"]'
@@ -181,8 +181,8 @@ printf '部门是什么' >"$work/overview.md"; printf 'abc' >"$work/detail.md"
 out=$(json material add o2 "$work/overview.md" --overview --note 总览); has '.result[0].id == "m1" and .result[0].kind == "overview"'
 out=$(json material add o2 "$work/detail.md" --note 细节); has '.result[0].id == "m2"'
 out=$(json material add o2 "$work/detail.md" --note 改了); has '.result[0].id == "m2" and .result[0].rev == 2'
-out=$(json material get m1); has '(.result.content|@base64d) == "部门是什么"'
-[ "$("$bin" material get m2)" = abc ] || fail "material get 应输出原文"
+out=$(json material ls m1); has '(.result.content|@base64d) == "部门是什么"'
+[ "$("$bin" material ls m2)" = abc ] || fail "material ls mN 应输出原文"
 out=$(json material archive m2); has '.result.archived_at != null'
 out=$(json material ls --node o2); has '(.result|length) == 1'
 out=$(json org show o2); has '(.result.limits|map(select(.key == "overview"))[0].used) == 5'

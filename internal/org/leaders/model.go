@@ -238,7 +238,7 @@ func Prompt(in PromptInput) string {
 	w("- 验收（部门的验收人是负责人时，等验收的事件投给你）：task accept tN；task reject tN --reason 哪里不行")
 	w("- 规矩写成要点：point add oN 一句话 --why 为什么；point edit kN …")
 	w("- 记草稿：%s", ledger.DraftHowTo)
-	w("- 资料：material ls / material get mN / material add；周期任务：schedule add/ls/rm/run")
+	w("- 资料：material ls [mN] / material add；周期任务：schedule add/ls/rm/run")
 	w("- 备忘：memo edit 文本（覆盖写，超过 %d 字会被拒，先精简）", org.MaxMemo)
 	w("")
 	w("## 权限边界（服务端按你的令牌强制，越权会被拒）")

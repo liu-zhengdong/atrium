@@ -9,7 +9,7 @@ import (
 
 func TestWatchSignal(t *testing.T) {
 	// t685 第 2 次拉起（trae@h1）日志的最后 16KB（资料 m111）：最后一行是 trae 读 signals.go 的工具结果，内容里有 "rate limit exceeded"。
-	b, err := os.ReadFile("testdata/trae-t685-run2-tail.log")
+	b, err := os.ReadFile("testdata/trae-t685-run2-tail.txt")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -180,11 +180,11 @@ func Requeue(ctx context.Context, env *app.Env, id string, why watch.Why) error 
 		}
 	}
 	if why.Signal == watch.SigQuota && run != nil {
-		tail, err := workers.Tail(run.Log, workers.TailBytes)
+		log, err := workers.Tail(run.Log, workers.TailBytes)
 		if err != nil && !os.IsNotExist(err) {
 			return err
 		}
-		marked, err := markUnavailable(ctx, env.DB, *run, workers.Classify(1, run.Worker, tail, time.Now()))
+		marked, err := markUnavailable(ctx, env.DB, *run, workers.Classify(1, run.Worker, log, time.Now()))
 		if err != nil {
 			return err
 		}

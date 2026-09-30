@@ -215,7 +215,7 @@ func TestDecide(t *testing.T) {
 		{"启动卡住第一次重试", worker(RoleWorkerStart, now-4*minute), Obs{Alive: true}, Retry},
 		{"启动再卡转失败", worker(RoleWorkerStart, now-4*minute), Obs{Alive: true, StartStucks: 1}, Fail},
 		{"运行卡住转受阻", worker(RoleWorker, now-21*minute), Obs{Alive: true}, BlockIt},
-		{"临时错误重试", worker(RoleWorker, now-minute), Obs{Alive: true, Signal: SigTransient}, Retry},
+		{"在跑时报错收尾等退出后由拉起者判", worker(RoleWorker, now-minute), Obs{Alive: true, Signal: SigError}, Keep},
 		{"额度用尽重试", worker(RoleWorker, now-minute), Obs{Alive: true, Signal: SigQuota}, Retry},
 		{"刚退出先等拉起者收尾", worker(RoleWorker, now-minute), Obs{DeadTicks: 1}, Keep},
 		{"没人收尾且没报错进入交付检查", worker(RoleWorker, now-minute), Obs{DeadTicks: 2}, ExitOK},

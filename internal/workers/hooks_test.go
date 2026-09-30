@@ -38,7 +38,7 @@ func TestWatchSignal(t *testing.T) {
 		{"claude 报错收尾且是额度", claude, `{"type":"result","is_error":true,"result":"Claude AI usage limit reached|resets 3pm (UTC)"}`, watch.SigQuota},
 		{"claude 报错收尾：之前的额度字样不算", claude,
 			"x rate limit exceeded: " + "\n" + `{"type":"result","is_error":true}`, watch.SigError},
-		{"codex 临时错误收尾", codex, `{"type":"turn.failed","error":{"message":"stream disconnected before completion"}}`, watch.SigTransient},
+		{"codex 临时错误收尾只算 error，重试由拉起者判", codex, `{"type":"turn.failed","error":{"message":"stream disconnected before completion"}}`, watch.SigError},
 	}
 	for _, c := range cases {
 		if got := WatchSignal(c.a, c.tail); got != c.want {

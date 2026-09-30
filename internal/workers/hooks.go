@@ -15,11 +15,11 @@ import (
 )
 
 // WatchSignal 把日志尾巴翻成 watch 的信号（纯函数）。进程还活着时也会被问，所以只认收尾事件：
-// 正常收尾是 done；报错收尾只拿那一行收尾事件分额度用尽、临时错误，不扫它前面的日志——
-// 那里有工具读到的文件、命令输出，尾巴开头还可能是被截断的半行；思考耗尽单独认。
+// 正常收尾是 done；报错收尾只拿那一行收尾事件认额度用尽，不扫它前面的日志——
+// 那里有工具读到的文件、命令输出；思考耗尽单独认。其余报错收尾都是 error：重试与换人由 dispatch 在进程退出后按次数判。
 // 通用命令行没见到结束行（没有收尾事件可看）只算 error：巡检只在进程退出后采用它。
 func WatchSignal(a *Driver, tail string) watch.Signal {
-	if s := Classify(0, a.Tool, tail, timeNow()); s.Kind == SignalThinking {
+	if _, ok := thinkingExhausted(tail); ok {
 		return watch.SigThinking
 	}
 	e := a.Ended(tail)
@@ -29,11 +29,8 @@ func WatchSignal(a *Driver, tail string) watch.Signal {
 	case e.OK:
 		return watch.SigDone
 	}
-	switch Classify(1, a.Tool, e.Line, timeNow()).Kind {
-	case SignalQuota:
+	if _, ok := quotaSignal(errorReport(e.Line), timeNow()); ok {
 		return watch.SigQuota
-	case SignalTransient:
-		return watch.SigTransient
 	}
 	return watch.SigError
 }

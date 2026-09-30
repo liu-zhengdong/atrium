@@ -1,11 +1,13 @@
 package web
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -13,6 +15,7 @@ import (
 
 	"github.com/liu-zhengdong/atrium/internal/api"
 	"github.com/liu-zhengdong/atrium/internal/app"
+	"github.com/liu-zhengdong/atrium/internal/cli"
 	"github.com/liu-zhengdong/atrium/internal/config"
 	"github.com/liu-zhengdong/atrium/internal/org"
 	"github.com/liu-zhengdong/atrium/internal/store"
@@ -28,7 +31,7 @@ func TestMaterialType(t *testing.T) {
 		{"report.md", false, "text/plain; charset=utf-8", "sandbox;", false},
 		{"data.CSV", false, "text/plain; charset=utf-8", "sandbox;", false},
 		{"page.html", false, "text/html; charset=utf-8", "sandbox allow-scripts", true},
-		{"logo.svg", false, "image/svg+xml", "sandbox;", false}, // svg 能带脚本：新窗口打开也在沙箱里
+		{"logo.svg", true, "image/svg+xml", "sandbox;", false}, // svg 能带脚本：新窗口打开也在沙箱里
 		{"a.PNG", true, "image/png", "sandbox;", false},
 		{"报告.pdf", true, "application/pdf", "frame-ancestors 'self'", false}, // Chrome 不在沙箱里渲染 pdf
 		{"表.xlsx", true, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "sandbox;", false},
@@ -52,10 +55,12 @@ func TestMaterialRoute(t *testing.T) {
 	}
 	defer db.Close()
 	dept, _ := org.Add(ctx, db, org.NewDept{Name: "调研"})
+	svg := []byte(`<svg xmlns="http://www.w3.org/2000/svg"><text>图</text></svg>`)
 	png := []byte("\x89PNG\r\n\x1a\n\x00\x00")
 	site, err := org.AddMaterial(ctx, db, data, org.MaterialInput{Org: dept.ID, Title: "magpie", Note: "样本", Files: []org.MaterialFile{
 		{Name: "index.html", Content: []byte(`<img src="images/a.png">`)},
 		{Name: "images/a.png", Content: png},
+		{Name: "images/a.svg", Content: svg},
 	}}, "u1")
 	if err != nil {
 		t.Fatal(err)
@@ -78,6 +83,33 @@ func TestMaterialRoute(t *testing.T) {
 	defer srv.Close()
 	port, _ := strconv.Atoi(srv.URL[strings.LastIndex(srv.URL, ":")+1:])
 	Module().Routes(r, &app.Env{DB: db, Paths: config.Paths{Data: data}, Port: port, Log: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	r.AddAuth(func(token string) (api.Actor, bool) { return api.Actor{ID: "u1", Kind: "user"}, token == "test-token" })
+	org.Module().Routes(r, &app.Env{DB: db, Paths: config.Paths{Data: data}, Log: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	table := cli.NewTable("atrium", "")
+	org.Module().Commands(table)
+	var output bytes.Buffer
+	env := cli.Env{Stdout: &output, Stderr: &output, Getenv: func(key string) string {
+		switch key {
+		case "ATRIUM_WORKER_TOKEN":
+			return "test-token"
+		case "ATRIUM_SERVER":
+			return srv.URL
+		}
+		return ""
+	}}
+	exported := filepath.Join(data, "export.svg")
+	if exit := table.Main(ctx, []string{"material", "ls", site.ID + "/images/a.svg", "--out", exported}, env); exit != 0 {
+		t.Fatalf("CLI 导出：%d %s", exit, output.String())
+	}
+	raw, err := os.ReadFile(exported)
+	if err != nil || !bytes.Equal(raw, svg) {
+		t.Fatalf("CLI 导出的 SVG：%q %v", raw, err)
+	}
+	output.Reset()
+	if exit := table.Main(ctx, []string{"material", "ls", site.ID + "/images/a.svg"}, env); exit != 2 || !strings.Contains(output.String(), "--out") {
+		t.Fatalf("二进制读取应提示 --out：%d %s", exit, output.String())
+	}
+
 	get := func(path, host string) (*http.Response, string) {
 		req, _ := http.NewRequest("GET", srv.URL+path, nil)
 		if host != "" {
@@ -98,6 +130,7 @@ func TestMaterialRoute(t *testing.T) {
 		{"/ui/material/" + site.ID, `<img src="images/a.png">`, "text/html; charset=utf-8"},
 		{"/ui/material/" + site.ID + "/index.html", `<img src="images/a.png">`, "text/html; charset=utf-8"},
 		{"/ui/material/" + site.ID + "/images/a.png", string(png), "image/png"},
+		{"/ui/material/" + site.ID + "/images/a.svg", string(svg), "image/svg+xml"},
 		{"/ui/material/" + set.ID + "/b.png", string(png), "image/png"},
 	} {
 		res, body := get(c.path, "")

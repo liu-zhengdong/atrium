@@ -262,7 +262,7 @@ func Prompt(in PromptInput) string {
 	w("- 备忘：memo edit 文本（覆盖写；只放跨任务、下次醒来先要知道的提示，任务进展写进 task note；超过 %d 字会被拒，先精简）", org.MaxMemo)
 	w("")
 	w("## 权限边界（服务端按你的令牌强制，越权会被拒）")
-	w("- 可以：动你负责的部门及其下属的任务、要点、资料、周期任务，改介绍；在下属负责人管的区域里建、改、裁撤部门，登记新负责人时用 leader add <名字> --org oN 一步绑定部门，或用 org edit oN --leader <aN|-> 撤换、清除。直接下属负责人最多 %d 位，同一位可管多个部门。", org.MaxDirectLeaders)
+	w("- 可以：动你负责的部门及其下属的任务、要点、资料、周期任务，改介绍；在下属负责人管的区域里建、改、裁撤部门，登记新负责人时用 leader add <名字> --org oN 一步绑定部门，或用 org edit oN --leader <aN|-> 撤换、清除。直接下属负责人最多 %d 位，同一位可管多个部门。管辖派活部门（%s）的负责人还能改执行者档案、解除不可用标记（atrium workers edit，--clear 解除）。", org.MaxDirectLeaders, ProfileDept)
 	w("- 不可以：在自己直接管的地方改结构，或动管辖之外的部门。需要建分工时用 atrium leader escalate <要建什么、为什么> --kind beyond 上交；上一层收到后自己动手建（即审批），或回复不同意。不能停机或操作服务。")
 	w("")
 	w("## 上交（投给 %s；只有这四类才上交，其余自己处理）", in.Upstream)
@@ -278,25 +278,30 @@ func Prompt(in PromptInput) string {
 	return b.String()
 }
 
+// ProfileDept 是执行者档案归属的部门（派活）。档案全组织一份，不按部门拆；
+// 谁能改，看管辖包不包括这个部门。仓库没有设置表，为这一处另建配置不值，所以写在这里。
+const ProfileDept = "o9"
+
 // Rule 是负责人令牌碰到一个写接口时要查什么。
 type Rule int
 
 const (
-	RuleDeny         Rule = iota // 不许
-	RuleRead                     // 只读，放行
-	RuleTaskRef                  // 路径 {id} 是任务：任务的部门在管辖内；请求体里的 org、parent 也要在
-	RuleTaskCreate               // 建任务：请求体里的 org 或 parent 必须给且在管辖内
-	RuleDeptRef                  // 路径 {id} 是部门（部门下的要点、资料、周期任务）
-	RuleDeptPatch                // 改部门：介绍在管辖内，结构在下属区域
-	RuleDeptCreate               // 建部门：父部门在下属区域
-	RuleLeaderCreate             // 登记负责人：一步绑定的部门在下属区域
-	RulePointRef                 // 路径 {id} 是要点
-	RuleMaterialRef              // 路径 {id} 是资料
-	RuleScheduleRef              // 路径 {id} 是周期任务
-	RuleBodyDept                 // 建资料、周期任务：请求体里的 org／department 必须给且在管辖内
-	RuleMemo                     // 自己的备忘（由 memo 路由按身份判）
-	RuleEventsAck                // 确认事件：只能是投给自己的
-	RuleEscalate                 // 上交
+	RuleDeny          Rule = iota // 不许
+	RuleRead                      // 只读，放行
+	RuleTaskRef                   // 路径 {id} 是任务：任务的部门在管辖内；请求体里的 org、parent 也要在
+	RuleTaskCreate                // 建任务：请求体里的 org 或 parent 必须给且在管辖内
+	RuleDeptRef                   // 路径 {id} 是部门（部门下的要点、资料、周期任务）
+	RuleDeptPatch                 // 改部门：介绍在管辖内，结构在下属区域
+	RuleDeptCreate                // 建部门：父部门在下属区域
+	RuleLeaderCreate              // 登记负责人：一步绑定的部门在下属区域
+	RulePointRef                  // 路径 {id} 是要点
+	RuleMaterialRef               // 路径 {id} 是资料
+	RuleScheduleRef               // 路径 {id} 是周期任务
+	RuleBodyDept                  // 建资料、周期任务：请求体里的 org／department 必须给且在管辖内
+	RuleMemo                      // 自己的备忘（由 memo 路由按身份判）
+	RuleEventsAck                 // 确认事件：只能是投给自己的
+	RuleEscalate                  // 上交
+	RuleWorkerProfile             // 改执行者档案、解除不可用标记：管辖包含档案所属部门
 )
 
 // RuleFor 纯判定：负责人令牌碰到这条路由（Go 路由模式，如 "POST /api/tasks/{id}/notes"）时的规则。默认拒绝。
@@ -340,6 +345,8 @@ func RuleFor(pattern string) Rule {
 		return RuleEventsAck
 	case path == "/api/escalations" && method == "POST":
 		return RuleEscalate
+	case method == "POST" && (path == "/api/workers/edit" || path == "/api/workers/clear"):
+		return RuleWorkerProfile
 	}
 	return RuleDeny
 }

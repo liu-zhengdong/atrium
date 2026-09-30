@@ -134,6 +134,8 @@ func collect(ctx context.Context, db *store.DB, rule Rule, q *api.Req, body map[
 		if len(checks) == 0 {
 			return nil, Forbid("负责人建这类东西要写归属部门（oN）")
 		}
+	case RuleWorkerProfile:
+		checks = append(checks, Check{What: "执行者档案", Dept: ProfileDept})
 	}
 	return checks, err
 }

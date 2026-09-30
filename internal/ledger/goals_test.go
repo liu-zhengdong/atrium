@@ -98,13 +98,16 @@ func TestReadGoals(t *testing.T) {
 	if err != nil || g.Week.Text != "纠正 0（还没有完成的活）· 认可 —（还没有拍板的选项单）· 复发 0" {
 		t.Fatalf("空库：%+v %v", g, err)
 	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO departments (id, name, created_at, updated_at) VALUES ('o1', '研发', 0, 0)`); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := Add(ctx, db, NewTask{Title: "不是草稿", Source: SourceOrg}, "a1"); code(err) != "usage" {
 		t.Fatalf("来源只给草稿，got %v", err)
 	}
 	if _, err := Add(ctx, db, NewTask{Title: "x", Draft: true, Source: "boss"}, "a1"); code(err) != "usage" {
 		t.Fatalf("未知来源应拒绝，got %v", err)
 	}
-	first, err := Add(ctx, db, NewTask{Title: "grok 没登录", Draft: true, Source: SourceOrg, Class: " 执行者可用性 "}, "a1")
+	first, err := Add(ctx, db, NewTask{Title: "grok 没登录", Org: "o1", Draft: true, Source: SourceOrg, Class: " 执行者可用性 "}, "a1")
 	if err != nil || first.Source != SourceOrg || first.Class != "执行者可用性" {
 		t.Fatalf("加草稿：%+v %v", first, err)
 	}
@@ -113,11 +116,11 @@ func TestReadGoals(t *testing.T) {
 	if _, err := db.ExecContext(ctx, `UPDATE tasks SET created_at = created_at - 2000, finished_at = finished_at - 1000 WHERE id = ?`, first.ID); err != nil {
 		t.Fatal(err)
 	}
-	again, err := Add(ctx, db, NewTask{Title: "模型名无效", Draft: true, Source: SourceUser, Class: "执行者可用性"}, "a1")
+	again, err := Add(ctx, db, NewTask{Title: "模型名无效", Org: "o1", Draft: true, Source: SourceUser, Class: "执行者可用性"}, "a1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	other, _ := Add(ctx, db, NewTask{Title: "别的", Draft: true, Class: "执行者"}, "a1")
+	other, _ := Add(ctx, db, NewTask{Title: "别的", Org: "o1", Draft: true, Class: "执行者"}, "a1")
 	classes, err := Classes(ctx, db)
 	if err != nil || len(classes) != 2 || classes[0] != (Class{Name: "执行者可用性", Tasks: 2, Done: 1}) {
 		t.Fatalf("已有的类：%+v %v", classes, err)
@@ -128,9 +131,6 @@ func TestReadGoals(t *testing.T) {
 	// 写成两个名字的同一类用 task set 并起来
 	if got, err := Edit(ctx, db, other.ID, Patch{Class: ptr("执行者可用性")}, "a1"); err != nil || got.Class != "执行者可用性" || got.Source != "" {
 		t.Fatalf("改类：%+v %v", got, err)
-	}
-	if _, err := db.ExecContext(ctx, `INSERT INTO departments (id, name, created_at, updated_at) VALUES ('o1', '研发', 0, 0)`); err != nil {
-		t.Fatal(err)
 	}
 	now := store.Now()
 	for _, q := range []string{

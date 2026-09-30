@@ -105,3 +105,49 @@ func insertOverPoints(t *testing.T, db *store.DB, dept string, n int) {
 		}
 	}
 }
+
+func TestScanNoticesDraftsPerDept(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "a.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+	for _, id := range []string{"a1", "a2", "a3"} {
+		if _, err := db.Exec(`INSERT INTO identities (id, kind, name, created_at) VALUES (?, 'leader', ?, 0)`, id, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	root := must(Add(ctx, db, NewDept{Name: "公司", Leader: "a1"}))
+	full := must(Add(ctx, db, NewDept{Name: "运行时", Parent: root.ID, Leader: "a2"}))
+	other := must(Add(ctx, db, NewDept{Name: "网页", Parent: root.ID, Leader: "a3"}))
+	n := 0
+	draft := func(dept string) {
+		n++
+		if _, err := db.Exec(`INSERT INTO tasks (id, department, title, status, created_at, updated_at) VALUES (?, ?, '草稿', 'draft', 0, 0)`,
+			fmt.Sprintf("t%d", n), dept); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for range MaxDrafts {
+		draft(full.ID)
+	}
+	draft(other.ID)
+	emit, _, err := ScanNotices(ctx, db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(emit) != 1 || emit[0].Limit.Key != "drafts" || emit[0].Scope != full.ID || emit[0].Target != "a2" || emit[0].Used != MaxDrafts {
+		t.Fatalf("草稿满了只提醒该部门的负责人（不找秘书、不找上级）：%+v", emit)
+	}
+	if got := NoticeNext(emit[0].Limit, full.ID); got != "atrium task ls --org "+full.ID+" --status draft" {
+		t.Fatalf("腾地方的命令应指向本部门的草稿：%q", got)
+	}
+}
+
+func must[T any](v T, err error) T {
+	if err != nil {
+		panic(err)
+	}
+	return v
+}

@@ -311,7 +311,7 @@ func mustSkill(ctx context.Context, q store.Querier, name string) error {
 	return nil
 }
 
-// Add 建一件 todo 任务（Draft 时建成草稿，受草稿上限）。没给部门时沿用父任务的部门。
+// Add 建一件 todo 任务（Draft 时建成草稿，要有部门，受该部门的草稿上限）。没给部门时沿用父任务的部门。
 func Add(ctx context.Context, db *store.DB, in NewTask, actor string) (Task, error) {
 	if in.Priority == "" {
 		in.Priority = Normal
@@ -385,7 +385,7 @@ func Add(ctx context.Context, db *store.DB, in NewTask, actor string) (Task, err
 		}
 		in.Org = view.Org
 		if in.Draft {
-			if err := roomForDraft(ctx, tx); err != nil {
+			if err := roomForDraft(ctx, tx, in.Org); err != nil {
 				return err
 			}
 		}
@@ -573,6 +573,11 @@ func Edit(ctx context.Context, db *store.DB, id string, p Patch, actor string) (
 					return err
 				}
 			}
+			if cur.Status == Draft && after.Org != cur.Org {
+				if err := roomForDraft(ctx, tx, after.Org); err != nil {
+					return err
+				}
+			}
 		}
 		parties, err := PartiesOf(ctx, tx, id)
 		if err != nil {
@@ -734,7 +739,7 @@ func Apply(ctx context.Context, db *store.DB, id string, ev Event, actor, note s
 			return api.Conflict("%s：%v", id, err)
 		}
 		if next.Status == Draft && t.Status != Draft {
-			if err := roomForDraft(ctx, tx); err != nil {
+			if err := roomForDraft(ctx, tx, t.Org); err != nil {
 				return err
 			}
 		}
@@ -771,7 +776,8 @@ func Apply(ctx context.Context, db *store.DB, id string, ev Event, actor, note s
 			return err
 		}
 		if c, ok := Correction(t, next, ev.Kind, actor, note); ok {
-			// 用户亲手的退回、取消不因草稿满了被拒：满了由巡检的上限提醒去腾。
+			// 用户亲手的退回、取消不因草稿满了被拒：满了由巡检提醒该部门负责人去腾。原任务没有部门的，这条草稿也没有，
+			// 不计进哪个部门的上限（只随用户亲手的退回、取消产生，量有限），在 task ls --status draft 里看得到。
 			if _, err := insert(ctx, tx, c, actor); err != nil {
 				return err
 			}
@@ -1026,14 +1032,17 @@ var changed = &notifier{ch: make(chan struct{})}
 // Changed 返回一个通道：本进程里任何任务写入后它会被关闭。先取通道再读库，避免漏掉唤醒。
 func Changed() <-chan struct{} { return changed.wait() }
 
-// roomForDraft：草稿满了（上限表 drafts）拒绝再加。
-func roomForDraft(ctx context.Context, q store.Querier) error {
+// roomForDraft：草稿按部门计上限（上限表 drafts），满了由该部门负责人整理；所以草稿要有部门，部门满了拒绝再加。
+func roomForDraft(ctx context.Context, q store.Querier, dept string) error {
+	if dept == "" {
+		return api.Usage("--org: 草稿要写归属部门（按部门计上限，满了由该部门负责人整理）").WithNext("atrium org ls")
+	}
 	var n int
-	if err := q.QueryRowContext(ctx, `SELECT count(*) FROM tasks WHERE status = 'draft'`).Scan(&n); err != nil {
+	if err := q.QueryRowContext(ctx, `SELECT count(*) FROM tasks WHERE department = ? AND status = 'draft'`, dept).Scan(&n); err != nil {
 		return err
 	}
 	if n >= org.MaxDrafts {
-		return org.Full("drafts", "", n)
+		return org.Full("drafts", dept, n)
 	}
 	return nil
 }

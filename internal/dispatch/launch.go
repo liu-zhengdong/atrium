@@ -2,6 +2,7 @@ package dispatch
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"github.com/liu-zhengdong/atrium/internal/api"
 	"github.com/liu-zhengdong/atrium/internal/gates"
@@ -12,6 +13,7 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/workers"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -215,7 +217,7 @@ func startLocal(tool string, req workers.Request, extra map[string]string, c con
 		defer f.Close()
 		in = f
 	}
-	spec := platform.Spec{Path: exe, Args: l.Args, Dir: l.Dir, Env: env, Stdout: logf, Stderr: logf, Detached: true}
+	spec := platform.Spec{Path: exe, Args: l.Args, Dir: l.Dir, Env: env, Stdout: logf, Stderr: logf, Detached: true, Session: true}
 	if in != nil {
 		spec.Stdin = in
 	}
@@ -227,8 +229,11 @@ func startLocal(tool string, req workers.Request, extra map[string]string, c con
 		return nil, 0, nil, err
 	}
 	return func() int {
-		if err := cmd.Wait(); err != nil && cmd.ProcessState == nil {
-			return workers.ExitUnknown
+		if err := platform.WaitSession(cmd); err != nil {
+			var exit *exec.ExitError
+			if cmd.ProcessState == nil || !errors.As(err, &exit) {
+				return workers.ExitUnknown
+			}
 		}
 		return cmd.ProcessState.ExitCode()
 	}, cmd.Process.Pid, stdin, nil

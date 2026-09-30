@@ -403,7 +403,7 @@ func (a *Agent) launch(ctx context.Context, as Assignment) (int, string, error) 
 		return 0, "", err
 	}
 	defer f.Close()
-	spec.Stdout, spec.Stderr, spec.Detached = f, f, true
+	spec.Stdout, spec.Stderr, spec.Detached, spec.Session = f, f, true, true
 	if spec.Dir == "" {
 		spec.Dir = cwd
 	}
@@ -417,14 +417,14 @@ func (a *Agent) launch(ctx context.Context, as Assignment) (int, string, error) 
 	st := &runState{rec: runRecord{RunRef: RunRef{as.Task, as.Run}, PID: cmd.Process.Pid, Log: logPath}, done: make(chan struct{})}
 	if err := a.save(st.rec); err != nil {
 		platform.KillTree(cmd.Process.Pid)
-		cmd.Wait()
+		platform.WaitSession(cmd)
 		return 0, "", err
 	}
 	a.mu.Lock()
 	a.runs[as.Task] = st
 	a.mu.Unlock()
 	go func() {
-		err := cmd.Wait()
+		err := platform.WaitSession(cmd)
 		code := 0
 		var exit *exec.ExitError
 		if errors.As(err, &exit) {

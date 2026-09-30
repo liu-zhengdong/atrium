@@ -286,7 +286,7 @@ func (h *hub) launch(ctx context.Context, env *app.Env, p Pending) error {
 	}
 	defer logf.Close()
 	fmt.Fprintf(logf, "\n=== %s 唤醒 %s（%s），事件 %v\n", time.Now().Format(time.RFC3339), who.ID, profile, p.IDs)
-	spec.Stdout, spec.Stderr, spec.Detached = logf, logf, true
+	spec.Stdout, spec.Stderr, spec.Detached, spec.Session = logf, logf, true, true
 	if spec.Dir == "" {
 		spec.Dir = dir
 	}
@@ -300,7 +300,7 @@ func (h *hub) launch(ctx context.Context, env *app.Env, p Pending) error {
 // waitLimited 等进程退出；超时或服务停下就结束整棵进程树。
 func waitLimited(ctx context.Context, cmd *exec.Cmd, limit time.Duration) error {
 	done := make(chan error, 1)
-	go func() { done <- cmd.Wait() }()
+	go func() { done <- platform.WaitSession(cmd) }()
 	timer := time.NewTimer(limit)
 	defer timer.Stop()
 	select {

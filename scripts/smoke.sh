@@ -45,7 +45,14 @@ killpid() {
 }
 # private <文件>：Unix 看 600；Windows 逐条核对 ACL，只允许本人、SYSTEM、管理员。
 private() {
-  if [ -z "$win" ]; then [ "$(stat -f %Lp "$1" 2>/dev/null || stat -c %a "$1")" = 600 ]; return; fi
+  if [ -z "$win" ]; then
+    local mode
+    case "$OSTYPE" in
+      darwin*) mode=$(stat -f %Lp "$1") ;;
+      *) mode=$(stat -c %a "$1") ;;
+    esac
+    [ "$mode" = 600 ]; return
+  fi
   ATRIUM_ACL_TARGET="$(cygpath -w "$1")" powershell.exe -NoProfile -NonInteractive -Command '
     $acl = Get-Acl -LiteralPath $env:ATRIUM_ACL_TARGET
     $allowed = @([System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value, "S-1-5-18", "S-1-5-32-544")

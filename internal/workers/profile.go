@@ -24,19 +24,18 @@ var (
 
 // Rules 是档案 frontmatter 的规则。三层叠加后以最具体的一层为准（整项覆盖，checks 写 [] 表示不加查）。
 type Rules struct {
-	Billing     string         `yaml:"billing,omitempty" json:"billing,omitempty"`
-	Prices      *Prices        `yaml:"prices,omitempty" json:"prices,omitempty"`
-	Auto        *bool          `yaml:"auto,omitempty" json:"auto,omitempty"` // nil：缺省参与自动挑人
-	Trust       string         `yaml:"trust,omitempty" json:"trust,omitempty"`
-	MaxRisk     string         `yaml:"max_risk,omitempty" json:"max_risk,omitempty"`
-	Checks      []string       `yaml:"checks,omitempty" json:"checks,omitempty"` // nil：没写（交付检查用缺省）；空：不加查
-	Limits      map[string]int `yaml:"limits,omitempty" json:"limits,omitempty"`
-	Model       string         `yaml:"model,omitempty" json:"model,omitempty"`
-	Endpoint    string         `yaml:"endpoint,omitempty" json:"endpoint,omitempty"`
-	EndpointAPI string         `yaml:"endpoint_api,omitempty" json:"endpoint_api,omitempty"`
-	EndpointKey string         `yaml:"endpoint_key,omitempty" json:"endpoint_key,omitempty"` // 凭据名，值分派任务时注入
-	Protocol    string         `yaml:"protocol,omitempty" json:"protocol,omitempty"`         // 只在 harness 层：cli
-	Usage       *UsageSpec     `yaml:"usage,omitempty" json:"usage,omitempty"`               // 从 JSON 日志取用量的字段路径
+	Billing     string     `yaml:"billing,omitempty" json:"billing,omitempty"`
+	Prices      *Prices    `yaml:"prices,omitempty" json:"prices,omitempty"`
+	Auto        *bool      `yaml:"auto,omitempty" json:"auto,omitempty"` // nil：缺省参与自动挑人
+	Trust       string     `yaml:"trust,omitempty" json:"trust,omitempty"`
+	MaxRisk     string     `yaml:"max_risk,omitempty" json:"max_risk,omitempty"`
+	Checks      []string   `yaml:"checks,omitempty" json:"checks,omitempty"` // nil：没写（交付检查用缺省）；空：不加查
+	Model       string     `yaml:"model,omitempty" json:"model,omitempty"`
+	Endpoint    string     `yaml:"endpoint,omitempty" json:"endpoint,omitempty"`
+	EndpointAPI string     `yaml:"endpoint_api,omitempty" json:"endpoint_api,omitempty"`
+	EndpointKey string     `yaml:"endpoint_key,omitempty" json:"endpoint_key,omitempty"` // 凭据名，值分派任务时注入
+	Protocol    string     `yaml:"protocol,omitempty" json:"protocol,omitempty"`         // 只在 harness 层：cli
+	Usage       *UsageSpec `yaml:"usage,omitempty" json:"usage,omitempty"`               // 从 JSON 日志取用量的字段路径
 	CLISpec     `yaml:",inline" json:"-"`
 }
 

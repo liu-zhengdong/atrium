@@ -70,6 +70,67 @@ func TestExitUsageSnapshot(t *testing.T) {
 	}
 }
 
+func TestCLIExitUsage(t *testing.T) {
+	ctx := context.Background()
+	db, err := store.Open(filepath.Join(t.TempDir(), "a.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	task, err := ledger.Add(ctx, db, ledger.NewTask{Title: "CLI 用量"}, "u1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := `---
+protocol: cli
+command: trae-cli
+args: ["{prompt}"]
+usage:
+  event: result
+  input: usage.input_tokens
+  output: usage.output_tokens
+  cache_read: usage.cache_read_input_tokens
+  cache_write: usage.cache_creation_input_tokens
+  cost: total_cost_usd
+  currency: USD
+billing: metered
+prices: {currency: CNY, input: 6, output: 30, cache_read: 1.2}
+---
+`
+	if _, err := workers.SaveProfile(ctx, db, "harness/trae", workers.Edit{Source: &src}, "u1"); err != nil {
+		t.Fatal(err)
+	}
+	run := workers.Run{N: 1, Worker: "trae", Log: filepath.Join(t.TempDir(), "run.log")}
+	log := `{"type":"result","subtype":"success","usage":{"input_tokens":1000000,"output_tokens":1000000,"cache_read_input_tokens":0,"cache_creation_input_tokens":0},"total_cost_usd":0}` + "\n"
+	if err := os.WriteFile(run.Log, []byte(log), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := recordExit(ctx, db, task.ID, run, workers.Exit{N: 1, Outcome: workers.OutOK}); err != nil {
+		t.Fatal(err)
+	}
+	u, err := workers.ExitUsage(ctx, db, task.ID, 1)
+	if err != nil || u.Source != "estimate" || u.Billing != "metered" || u.Currency != "CNY" || u.Cost == nil || *u.Cost != 36 {
+		t.Fatalf("%+v %v", u, err)
+	}
+	head := logHeader(task.ID, LogChunk{Run: 1, Worker: run.Worker, Usage: u})
+	if !strings.Contains(head, "花费") || !strings.Contains(head, "估算") || !strings.Contains(head, "CNY") {
+		t.Fatal(head)
+	}
+	text, err := workers.ExitText(`{"n":1,"outcome":"ok","usage":` + mustJSON(t, u) + `}`)
+	if err != nil || !strings.Contains(text, "花费 CNY 36") {
+		t.Fatal(text, err)
+	}
+}
+
+func mustJSON(t *testing.T, v any) string {
+	t.Helper()
+	b, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
 func TestClaudeUsageResume(t *testing.T) {
 	ctx := context.Background()
 	db, err := store.Open(filepath.Join(t.TempDir(), "a.db"))

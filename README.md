@@ -1,4 +1,4 @@
-<img src="docs/brand/atrium-logo.svg" width="88" alt="Atrium logo">
+<img src="internal/web/static/logo.svg" width="88" alt="Atrium logo">
 
 # Atrium · 中庭
 

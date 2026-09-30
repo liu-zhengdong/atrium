@@ -5,7 +5,7 @@
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const icon = {
-  choose: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 8.5 6.5 12 13 4.5"/></svg>',
+  choose: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="4" cy="5" r="1.6"/><circle cx="4" cy="11" r="1.6" fill="currentColor"/><path d="M8 5h5.5M8 11h5.5"/></svg>',
   accept: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="7" cy="7" r="4"/><path d="M10 10l3.5 3.5"/></svg>',
   stuck: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M8 4v5"/><circle cx="8" cy="11.8" r=".6" fill="currentColor"/></svg>',
   escalate: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M8 13V3.5M4 7.5l4-4 4 4"/></svg>',
@@ -267,7 +267,7 @@ function renderLegion(d) {
   const accts = d.accounts.length ? `<div class="accts">${d.accounts.map(a => {
     const left = a.left ?? 0;
     const note = [a.note, a.stale && a.at ? readAt(a.at) : ""].filter(Boolean).join(" · ");
-    return `<div class="acct"><span class="n">${brandMark(a.name)}${esc(a.name)}</span><div class="bar"><i style="width:${left}%;${left < 20 ? "background:var(--wait)" : ""}"></i><span class="reserve" style="width:${reserve}%"></span></div>
+    return `<div class="acct"><span class="n">${brandMark(a.name)}${esc(a.name)}</span><div class="bar"><i style="width:${left}%;${left < 20 ? "background:var(--bad)" : ""}"></i><span class="reserve" style="width:${reserve}%"></span></div>
     <span class="r">${a.left === null ? esc(a.note || "没有读数") : `剩 <span class="num">${a.left}%</span>${note ? " · " + esc(note) : ""}`}</span></div>`;
   }).join("")}</div>` : `<div class="empty">还没有额度读数</div>`;
   const hosts = d.hosts.length ? `<div class="hosts">${d.hosts.map(h => `
@@ -362,15 +362,15 @@ function relHTML(d) {
     + part("在等它", d.waiters.map(rel).join(""));
 }
 
-/* 抽屉：头部写短号与部门，同一件东西重画时保留滚动位置（推送一来就重画，读长文不能跳回顶）。
+/* 抽屉：头部写短号与所属（部门名、「负责人」），同一件东西重画时保留滚动位置（推送一来就重画，读长文不能跳回顶）。
    tools 是关闭钮前的按钮，只有资料抽屉给：它更宽，还能放宽 */
 let drawerId = "";
-function drawer(id, head, body, tools = "") {
+function drawer(id, of, body, tools = "") {
   const keep = drawerId === id ? $("#drawer .dbody")?.scrollTop || 0 : 0;
   drawerId = id;
   $("#drawer").classList.toggle("mat", !!tools);
   $("#drawer").classList.toggle("wide", !!tools && wide);
-  $("#drawer").innerHTML = `<div class="dhead"><span class="id">${esc(head)}</span>${tools}<button class="x" data-close aria-label="关闭">${icon.x}</button></div>
+  $("#drawer").innerHTML = `<div class="dhead"><span class="id">${esc(id)}${of ? ` <b>· ${esc(of)}</b>` : ""}</span>${tools}<button class="x" data-close aria-label="关闭">${icon.x}</button></div>
     <div class="dbody">${body}</div>`;
   $("#drawer .dbody").scrollTop = keep;
 }
@@ -386,7 +386,7 @@ function renderTask(d) {
   const pr = !t.pr ? "还没有" : /^https?:\/\//.test(t.pr) ? `<a href="${esc(t.pr)}" target="_blank" rel="noreferrer">${esc(t.pr.replace(/^.*\/pull\//, "#"))}</a>` : esc(t.pr);
   const draft = d.state === "draft";
   const label = stuck ? "卡住" : draft ? "草稿" : d.state === "done" ? "完成" : d.state === "off" ? "取消" : "现在";
-  drawer(t.id, [t.id, d.dept_name].filter(Boolean).join(" · "), `
+  drawer(t.id, d.dept_name, `
       ${d.parent ? `<div class="crumb up"><a href="${esc(hashWith(d.parent.id))}"><span class="id">${esc(d.parent.id)}</span>${esc(d.parent.title)}</a><span>/</span></div>` : ""}
       <h3>${esc(t.title)}</h3>
       ${draft ? "" : `<div class="steps">${d.steps.map((s, i) => `<div class="step ${i < d.step ? "past" : i === d.step ? "now" + (stuck ? " stuck" : "") : ""}"><i></i>${s}</div>`).join("")}</div>`}
@@ -399,7 +399,7 @@ function renderTask(d) {
 function renderChoice(c) {
   const status = c.status === "open" ? "" : c.status === "picked" ? "已拍板" : "这轮都不做";
   const rec = new Set(c.recommend || []);
-  drawer(c.id, [c.id, c.dept_name].filter(Boolean).join(" · "), `<h3>${esc(c.title)}</h3><p class="sub-t">${c.task ? "出自 " + esc(c.task) + " · " : ""}${esc(ago(c.created_at))}前${status ? " · " + status : ""}</p>
+  drawer(c.id, c.dept_name, `<h3>${esc(c.title)}</h3><p class="sub-t">${c.task ? "出自 " + esc(c.task) + " · " : ""}${esc(ago(c.created_at))}前${status ? " · " + status : ""}</p>
       ${c.reason ? `<p class="status-line">${esc(c.reason)}</p>` : ""}
       <div class="opts">${c.options.map(o => `
         <div class="opt ${o.task ? "on" : ""}">
@@ -419,7 +419,7 @@ function renderSchedule(s) {
     : /^\d\d-/.test(w) ? `${w} ${clock(s.next_at)}` : `${/^\d\d:/.test(w) ? "今天 " : ""}${w}（${pad(next.getMonth() + 1)}-${pad(next.getDate())}）`;
   const facts = [["每轮", kindDoes[s.kind] || firstPara(s.detail)], ["技能", s.skill]].filter(x => x[1]);
   const day = r => (r.title.match(/（(\d\d-\d\d)）$/) || [])[1];
-  drawer(s.id, s.id + " · " + s.dept_name, `<h3>${esc(s.title)}</h3>
+  drawer(s.id, s.dept_name, `<h3>${esc(s.title)}</h3>
       <p class="sub-t">${esc([s.cadence, s.kind].filter(Boolean).join(" · "))} · ${esc({ secretary: "秘书", u1: "你" }[s.by] || s.by)} ${esc(date(s.created_at))} 建</p>
       <div class="holder"><b>下一轮</b>　${esc(when)}</div>
       ${facts.length ? `<dl class="facts">${facts.map(f => `<dt>${f[0]}</dt><dd>${esc(f[1])}</dd>`).join("")}</dl>` : ""}
@@ -437,7 +437,7 @@ function renderLeader(deptPage, id) {
   const l = deptPage.leader;
   if (l?.id !== id) throw new Error(id + " 不是这个部门的负责人");
   const n = [...l.memo].length;
-  drawer(l.id, l.id + " · 负责人", `<h3>${esc(l.name)}</h3>
+  drawer(l.id, "负责人", `<h3>${esc(l.name)}</h3>
     ${l.inherited ? `<p class="sub-t">${esc(deptPage.dept.name)}没有自己的负责人，由上级的这一位管</p>` : ""}
     <dl class="facts"><dt>执行者</dt><dd>${esc(l.workers)}</dd>
       <dt>负责</dt><dd>${l.depts.map(p => `<a href="#${esc(p.id)}">${esc(p.name)}</a>`).join("、")}</dd></dl>
@@ -553,7 +553,7 @@ function renderMaterial(deptPage, id) {
   // 有正文的目录资料：正文下面折起全部文件（图源、没被正文引用的图也找得到）
   const all = kind !== "set" && m.files.length > 1
     ? `<details class="full"><summary>这条资料里的 ${m.files.length} 个文件</summary>${fileList(m)}</details>` : "";
-  drawer(id, id + " · " + deptPage.dept.name, `<h3>${esc(m.title)}</h3><p class="sub-t">${esc(meta.join(" · "))}</p>
+  drawer(id, deptPage.dept.name, `<h3>${esc(m.title)}</h3><p class="sub-t">${esc(meta.join(" · "))}</p>
     <div class="viewer ${kind}" id="viewer"><div class="quiet-line">正在打开…</div></div>${all}`, tools);
   const el = $("#viewer"), still = () => drawerId === id && shownMat === key;
   Promise.resolve().then(() => viewers[kind](el, m))
@@ -613,7 +613,7 @@ function showDrawer(open, page) {
   const dr = drawerOf(open, page), d = last.get(dr.path), key = open + JSON.stringify(d ?? null);
   if (key === shownDrawer) return;
   shownDrawer = key;
-  if (d) dr.draw(d); else drawer(open, open, skeleton);
+  if (d) dr.draw(d); else drawer(open, "", skeleton);
 }
 function fail(err) {
   shownKey = "";

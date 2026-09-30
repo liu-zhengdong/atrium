@@ -839,7 +839,7 @@ func TestEnqueueSetsWorker(t *testing.T) {
 	}
 }
 
-// Lost 即使日志声称成功也不能进交付检查，沿现有临时退出路径有界重试。
+// Lost 即使日志声称成功也不能进入交付检查，沿现有临时退出路径有界重试。
 func TestRemoteLostRetries(t *testing.T) {
 	env, d := setup(t)
 	ctx := context.Background()

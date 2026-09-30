@@ -254,7 +254,7 @@ type Action string
 
 const (
 	Keep     Action = ""
-	ExitOK   Action = "exit_ok"   // 进程已结束且没见错误：进交付检查（交付检查自己查事实）
+	ExitOK   Action = "exit_ok"   // 进程已结束且没见错误：进入交付检查（交付检查自己查事实）
 	ExitFail Action = "exit_fail" // 进程已结束且出错：转失败
 	Retry    Action = "retry"     // 结束进程、转失败、交给分派任务重新入队（可换人）
 	Fail     Action = "fail"      // 结束进程、转失败

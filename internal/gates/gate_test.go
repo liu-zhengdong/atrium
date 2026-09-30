@@ -332,7 +332,7 @@ func TestGateNoRepo(t *testing.T) {
 	}
 }
 
-// 低信任执行者：交付检查过后建审阅任务；审阅者结论决定进合入队列还是交回。
+// 低信任执行者：交付检查通过后建审阅任务；审阅者结论决定进合入队列还是交回。
 func TestReview(t *testing.T) {
 	cases := []struct {
 		name     string

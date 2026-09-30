@@ -86,7 +86,7 @@ type EventKind string
 const (
 	Enqueue    EventKind = "enqueue"     // 进分派任务队列（task run）
 	Start      EventKind = "start"       // 执行者进程已拉起
-	ExitOK     EventKind = "exit_ok"     // 执行者正常退出，进交付检查
+	ExitOK     EventKind = "exit_ok"     // 执行者正常退出，进入交付检查
 	ExitFail   EventKind = "exit_fail"   // 执行者失败且重试用尽
 	GatePass   EventKind = "gate_pass"   // 交付检查通过
 	ReviewPass EventKind = "review_pass" // 审阅通过

@@ -2,7 +2,7 @@
 // 不正忙）、挑机器（本机优先、空位最多），在任务目录的 git worktree 里拉起执行者，退出后按信号重试、换人、继续或进入交付检查。
 //
 // 命令：task run、task tell（POST /api/tasks/{id}/tell）、task log；停下是 ledger 的 task stop（转受阻，分派任务循环结束它的执行者）。
-// 状态只经 ledger.Apply：入队 Enqueue、拉起 Start、退出 ExitOK（进交付检查，gates 接手）或 ExitFail、停下 Block。
+// 状态只经 ledger.Apply：入队 Enqueue、拉起 Start、退出 ExitOK（进入交付检查，gates 接手）或 ExitFail、停下 Block。
 // 拉起记录以任务经历 kind "launch"（workers.Run）存，gates、watch 读它。每次自主动作前问 Pause。
 package dispatch
 

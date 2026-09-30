@@ -24,7 +24,7 @@ type Delivery struct {
 	Name string
 	// Rules 是提示词「通用约束」里怎么交；%s 换成执行者的分支。
 	Rules []string
-	// check 查事实判交付检查。
+	// check 查事实判定交付检查结果。
 	check func(g *Gate, ctx context.Context, t ledger.Task) (checked, error)
 	// land 是应用的第一步（交付检查、审阅、验收都过了之后）；nil 是没有要应用的（东西已在原地，或只是结论），
 	// 验收拦不住什么，过了交付检查、审阅就完成，不等验收人。
@@ -254,7 +254,7 @@ func (g *Gate) landChoice(ctx context.Context, t ledger.Task) (landed, error) {
 	return landed{note: "登记了选项单 " + c.ID}, nil
 }
 
-// checkPR 查事实、判交付检查：git 在工作树所在机器上查（On），PR 由服务查 GitHub；过了记下 PR，按风险与信任定要不要审阅。
+// checkPR 查事实、判定交付检查结果：git 在工作树所在机器上查（On），PR 由服务查 GitHub；过了记下 PR，按风险与信任定要不要审阅。
 func (g *Gate) checkPR(ctx context.Context, t ledger.Task) (checked, error) {
 	w, err := mustWorkspace(ctx, g.DB, t.ID)
 	if err != nil {

@@ -218,7 +218,7 @@ func TestDecide(t *testing.T) {
 		{"临时错误重试", worker(RoleWorker, now-minute), Obs{Alive: true, Signal: SigTransient}, Retry},
 		{"额度用尽重试", worker(RoleWorker, now-minute), Obs{Alive: true, Signal: SigQuota}, Retry},
 		{"刚退出先等拉起者收尾", worker(RoleWorker, now-minute), Obs{DeadTicks: 1}, Keep},
-		{"没人收尾且没报错进交付检查", worker(RoleWorker, now-minute), Obs{DeadTicks: 2}, ExitOK},
+		{"没人收尾且没报错进入交付检查", worker(RoleWorker, now-minute), Obs{DeadTicks: 2}, ExitOK},
 		{"没人收尾且报错", worker(RoleWorker, now-minute), Obs{DeadTicks: 2, Signal: SigError}, ExitFail},
 		{"没人收尾且思考耗尽", worker(RoleWorker, now-minute), Obs{DeadTicks: 3, Signal: SigThinking}, Retry},
 		{"检查没输出", Holder{Kind: "check", Role: RoleCheck, Since: now - 11*minute}, Obs{Alive: true}, KillIt},
@@ -309,7 +309,7 @@ func TestTickTakesOverExitedWorker(t *testing.T) {
 		t.Fatal(err)
 	}
 	if s := status(t, env, task.ID); s.Status != ledger.Running || s.Stage != ledger.StageGate {
-		t.Fatalf("连续两轮不在应进交付检查：%+v", s)
+		t.Fatalf("连续两轮不在应进入交付检查：%+v", s)
 	}
 }
 

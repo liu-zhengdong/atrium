@@ -1,4 +1,4 @@
-// Package gates 是验收交付检查：执行者退出后运行时自己查事实（PR、提交、推送、改动规模、PR 正文），
+// Package gates 是交付检查与验收：执行者退出后运行时自己查事实（PR、提交、推送、改动规模、PR 正文），
 // 按档案 checks 判过或不过，不采信执行者自述；高风险或低信任的交付先另派不同工具、不同模型的审阅者；
 // 部门的验收人是 leader、user 时停在等验收，由 task accept / task reject 判。
 //
@@ -34,7 +34,7 @@ import (
 // Actor 是运行时交付检查在经历里的署名。
 const Actor = "gates"
 
-// Module 是本包接入点：后台循环推进交付检查与审阅阶段的任务；task accept / task reject 判等验收的任务。
+// Module 是本包接入点：后台循环推进入交付检查与审阅阶段的任务；task accept / task reject 判等验收的任务。
 func Module() app.Module {
 	return app.Module{Name: "gates", Commands: Commands, Routes: Routes,
 		Run: func(ctx context.Context, env *app.Env) error {
@@ -226,7 +226,7 @@ type gateRecord struct {
 	Facts Facts `json:"facts"`
 }
 
-// gate 按交付方式查事实、判交付检查：不过交回执行者；过了按风险先审阅，或按部门的验收人等验收，或直接应用。
+// gate 按交付方式查事实、判定交付检查结果：不过交回执行者；过了按风险先审阅，或按部门的验收人等验收，或直接应用。
 func (g *Gate) gate(ctx context.Context, t ledger.Task) error {
 	d, err := g.deliveryOf(ctx, t, true)
 	if err != nil {

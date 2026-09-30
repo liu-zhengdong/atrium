@@ -93,7 +93,6 @@ func readGrok(p *Parser, e event, line string) bool {
 					m["name"] = "Bash"
 				}
 			case "server_tool_use":
-				// 服务端工具（web_search）是真实一步：显示调用；结果是网址列表，认出但不展开。
 				p.call(m.str("id"), p.step(m.str("name"), m.obj("input")))
 			case "web_search_tool_result":
 				p.result(m.str("tool_use_id"), 0, "")

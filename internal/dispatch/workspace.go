@@ -12,7 +12,9 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/api"
 	"github.com/liu-zhengdong/atrium/internal/gates"
 	"github.com/liu-zhengdong/atrium/internal/ledger"
+	"github.com/liu-zhengdong/atrium/internal/org/agenda"
 	"github.com/liu-zhengdong/atrium/internal/platform"
+	"github.com/liu-zhengdong/atrium/internal/store"
 	"github.com/liu-zhengdong/atrium/internal/workers"
 )
 
@@ -49,8 +51,9 @@ func RemoteRepo(ctx context.Context, repo string) (string, error) {
 	return gates.Slug(ctx, gates.NewExec(), repo)
 }
 
-// hostNeed 是这件活对机器的要求：仓库按远程的写法比对机器登记的仓库；本机克隆换算不出 origin、有工作地点（本机文件夹）就只派本机。
-func hostNeed(ctx context.Context, w workers.Spec, t ledger.Task) HostNeed {
+// hostNeed 是这件活对机器的要求：仓库按远程的写法比对机器登记的仓库；本机克隆换算不出 origin、有工作地点（本机文件夹）、
+// 是体验巡检那样的周期任务一轮（agenda.LocalOnly）就只派本机。
+func hostNeed(ctx context.Context, q store.Querier, w workers.Spec, t ledger.Task) (HostNeed, error) {
 	n := HostNeed{Tool: w.Tool, Model: w.Model, Repo: t.Repo, Urgent: t.Priority == ledger.Urgent}
 	if t.Dir != "" {
 		n.LocalOnly = "工作地点 " + t.Dir + " 是本机文件夹"
@@ -59,7 +62,13 @@ func hostNeed(ctx context.Context, w workers.Spec, t ledger.Task) HostNeed {
 	} else {
 		n.Repo = repo
 	}
-	return n
+	if n.LocalOnly == "" {
+		var err error
+		if n.LocalOnly, err = agenda.LocalOnly(ctx, q, t.ID); err != nil {
+			return HostNeed{}, err
+		}
+	}
+	return n, nil
 }
 
 // run 跑一条命令（经 platform），返回标准输出；失败时带上标准错误。

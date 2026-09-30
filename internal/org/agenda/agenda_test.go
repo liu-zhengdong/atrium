@@ -412,3 +412,28 @@ func TestScheduleTick(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// 体验巡检每轮只派本机；其他种类、不是周期任务生成的任务不受影响。
+func TestLocalOnly(t *testing.T) {
+	env, dept := setup(t)
+	ctx := context.Background()
+	Enqueue = func(context.Context, *app.Env, string, string) error { return nil }
+	t.Cleanup(func() { Enqueue = nil })
+	for kind, local := range map[string]bool{"patrol": true, "task": false, "research": false} {
+		x, err := AddSchedule(ctx, env.DB, "", NewSchedule{Org: dept, Title: kind, Kind: kind, Every: "1d"}, "u1", store.Now(), time.UTC)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tk, err := RunNow(ctx, env, x.ID, time.UTC)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if why, err := LocalOnly(ctx, env.DB, tk.ID); err != nil || (why != "") != local {
+			t.Errorf("%s：%q %v", kind, why, err)
+		}
+	}
+	tk, _ := ledger.Add(ctx, env.DB, ledger.NewTask{Title: "普通任务", Org: dept}, "u1")
+	if why, err := LocalOnly(ctx, env.DB, tk.ID); err != nil || why != "" {
+		t.Errorf("普通任务：%q %v", why, err)
+	}
+}

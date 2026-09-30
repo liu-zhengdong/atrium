@@ -18,6 +18,8 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/events"
 	"github.com/liu-zhengdong/atrium/internal/hosts"
 	"github.com/liu-zhengdong/atrium/internal/ledger"
+	"github.com/liu-zhengdong/atrium/internal/org"
+	"github.com/liu-zhengdong/atrium/internal/org/agenda"
 	"github.com/liu-zhengdong/atrium/internal/pause"
 	"github.com/liu-zhengdong/atrium/internal/store"
 	"github.com/liu-zhengdong/atrium/internal/watch"
@@ -626,20 +628,45 @@ func flowRemote(t *testing.T, repo string) {
 	}
 }
 
-// 本机克隆读不出 GitHub 上的 origin、有工作地点（本机文件夹）：只派本机。
+// 本机克隆读不出 GitHub 上的 origin、有工作地点（本机文件夹）、体验巡检的一轮：只派本机。
 func TestHostNeedLocalOnly(t *testing.T) {
-	if n := hostNeed(context.Background(), workers.Spec{Tool: "claude"}, ledger.Task{Dir: t.TempDir()}); n.LocalOnly == "" {
-		t.Errorf("有工作地点应只派本机：%+v", n)
+	ctx := context.Background()
+	db, err := store.Open(filepath.Join(t.TempDir(), "atrium.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	claude := workers.Spec{Tool: "claude"}
+	if n, err := hostNeed(ctx, db, claude, ledger.Task{Dir: t.TempDir()}); err != nil || n.LocalOnly == "" {
+		t.Errorf("有工作地点应只派本机：%+v %v", n, err)
 	}
 	plain := t.TempDir()
 	if out, err := exec.Command("git", "init", "--quiet", plain).CombinedOutput(); err != nil {
 		t.Fatalf("%v %s", err, out)
 	}
 	for repo, local := range map[string]bool{"": false, "owner/name": false, plain: true} {
-		n := hostNeed(context.Background(), workers.Spec{Tool: "claude"}, ledger.Task{Repo: repo})
-		if (n.LocalOnly != "") != local {
-			t.Errorf("%q：%+v", repo, n)
+		n, err := hostNeed(ctx, db, claude, ledger.Task{Repo: repo})
+		if err != nil || (n.LocalOnly != "") != local {
+			t.Errorf("%q：%+v %v", repo, n, err)
 		}
+	}
+	old := agenda.Enqueue
+	agenda.Enqueue = func(context.Context, *app.Env, string, string) error { return nil }
+	t.Cleanup(func() { agenda.Enqueue = old })
+	d, err := org.Add(ctx, db, org.NewDept{Name: "公司"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	x, err := agenda.AddSchedule(ctx, db, "", agenda.NewSchedule{Org: d.ID, Title: "巡检", Kind: "patrol", Every: "7d"}, "u1", store.Now(), time.UTC)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tk, err := agenda.RunNow(ctx, &app.Env{DB: db}, x.ID, time.UTC)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n, err := hostNeed(ctx, db, claude, tk); err != nil || n.LocalOnly == "" {
+		t.Errorf("体验巡检的一轮应只派本机：%+v %v", n, err)
 	}
 }
 

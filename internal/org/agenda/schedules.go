@@ -234,6 +234,20 @@ func ScheduleOf(ctx context.Context, q store.Querier, task string) (string, erro
 	return id, err
 }
 
+// kindLocal 是每轮只能派到服务所在本机的种类与原因。
+var kindLocal = map[string]string{"patrol": "体验巡检要打开服务的只读网页，网页只认本机地址"}
+
+// LocalOnly 是任务只能派到本机的原因：它是这些种类的周期任务生成的一轮；不是（或那条已删）为空。
+func LocalOnly(ctx context.Context, q store.Querier, task string) (string, error) {
+	var kind string
+	err := q.QueryRowContext(ctx, `SELECT s.kind FROM task_events e JOIN schedules s ON s.id = e.actor
+		WHERE e.task = ? AND e.kind = 'created' LIMIT 1`, task).Scan(&kind)
+	if store.IsNotFound(err) {
+		return "", nil
+	}
+	return kindLocal[kind], err
+}
+
 // openRound 是上一轮还没结束的任务；没有为空。
 func openRound(ctx context.Context, q store.Querier, x Schedule) (string, error) {
 	if x.LastTask == "" {

@@ -117,7 +117,11 @@ func dryRun(q *api.Req, env *app.Env, id string, o Options) (RunResult, error) {
 		if err != nil {
 			return RunResult{}, err
 		}
-		c, err := pickHost(ctx, env, hostNeed(ctx, w, t), o.Host)
+		need, err := hostNeed(ctx, env.DB, w, t)
+		if err != nil {
+			return RunResult{}, err
+		}
+		c, err := pickHost(ctx, env, need, o.Host)
 		if err != nil {
 			return RunResult{}, err
 		}

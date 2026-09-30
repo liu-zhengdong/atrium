@@ -73,6 +73,11 @@ var (
 		k, err := org.GetSkill(ctx, env.DB, env.Paths.Data, name)
 		return Skill{Path: k.Path, Workers: k.Workers, Secrets: k.Secrets}, err
 	}
+	// skillIndex 是提示词里的技能索引（除去这件活挂上的 except）。
+	skillIndex = func(ctx context.Context, env *app.Env, except string) (string, error) {
+		ks, err := org.Skills(ctx, env.DB, env.Paths.Data)
+		return org.SkillIndex(ks, except), err
+	}
 	// secretEnv 按名称从任务部门往上取凭据的值（记下使用时间）。
 	secretEnv = func(ctx context.Context, env *app.Env, dept string, names []string) (map[string]string, error) {
 		return org.SecretEnv(ctx, env.DB, env.Paths.Data, dept, names)

@@ -16,7 +16,8 @@ type PromptInput struct {
 	Detail  string
 	Global  string   // 用户的全局原则（org.Principles 拼好的一节）；没有为空
 	Points  []string // 部门要点链，每条一行（org.ChainLine）
-	Skill   string   // 技能 SKILL.md 路径
+	Skill   string   // 挂上的技能 SKILL.md 路径
+	Skills  string   // 其余技能的索引（org.SkillIndex 拼好的一节）；没有为空
 	Profile string   // 执行者档案正文
 	Tells   []string // 运行中捎话（时间正序）
 	Bounces []string // 交回原因（最近的在后）
@@ -50,7 +51,7 @@ func showRule(dept string) string {
 		"网页资料预览只认相对路径：站点按相对路径构建（如 base 设成 ./），做不到就交截图。"
 }
 
-// BuildPrompt 拼提示词（纯函数）：标题 + 语言要求 + 详述 + 用户全局原则 + 部门要点链 + 技能路径 + 执行者档案正文 + 仓库约定 + 捎话与交回原因 + 通用约束。
+// BuildPrompt 拼提示词（纯函数）：标题 + 语言要求 + 详述 + 用户全局原则 + 部门要点链 + 挂上的技能 + 技能索引 + 执行者档案正文 + 仓库约定 + 捎话与交回原因 + 通用约束。
 func BuildPrompt(in PromptInput) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# 任务 %s：%s\n\n%s\n", in.Task, in.Title, langRule)
@@ -72,6 +73,9 @@ func BuildPrompt(in PromptInput) string {
 	section("部门要点（沿组织树继承，靠前的优先）", in.Points)
 	if in.Skill != "" {
 		fmt.Fprintf(&b, "\n## 技能\n\n按这份做法干：%s（附属文件在同一目录）\n", in.Skill)
+	}
+	if in.Skills != "" {
+		fmt.Fprintf(&b, "\n%s", in.Skills)
 	}
 	if p := strings.TrimSpace(in.Profile); p != "" {
 		fmt.Fprintf(&b, "\n## 给这个执行者的叮嘱\n\n%s\n", p)

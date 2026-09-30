@@ -321,6 +321,7 @@ out=$(json task add 只交结论 --org "$acc_org"); msg=$(jq -r .result.id <<<"$
 json task run "$msg" --worker fakesh >/dev/null
 out=$(json task wait "$msg" --timeout 30); has '.result.task.status == "done"'
 grep -q "开 PR" "$ATRIUM_DATA/tasks/$msg/prompt-1.md" && fail "没有仓库的活提示词里不该要求开 PR"
+grep -q "^- fix-bug：修 bug 的做法——" "$ATRIUM_DATA/tasks/$msg/prompt-1.md" || fail "没挂技能的活提示词里也该有技能索引"
 out=$(json org edit o1 --accept -); has '.ok'
 
 step "本机交付：本机仓库没有远程 → 假执行者提交 → 关卡 → 等你验收 → 打回交回原执行者、第 3 次转受阻 → 再派 → 验收通过合进本机 main → 删任务工作树与分支"

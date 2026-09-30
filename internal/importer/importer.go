@@ -417,7 +417,7 @@ func importMaterials(ctx context.Context, old *sql.DB, tx *sql.Tx, depts map[str
 			if err != nil {
 				return fmt.Errorf("资料 %s：%w", ref, err)
 			}
-			u, binary := org.Units(content)
+			u, binary := org.Units(e.Path, content)
 			if err := writeNew(filepath.Join(stage, "materials", ref, fmt.Sprintf("r%d", m.version), filepath.FromSlash(e.Path)), content); err != nil {
 				return err
 			}

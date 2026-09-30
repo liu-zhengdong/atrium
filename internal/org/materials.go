@@ -22,6 +22,7 @@ import (
 
 // 资料：部门的知识分两层——一份「总览」（每次附给负责人，≤MaxOverview 字）与按需取的细节。
 // 一个文件或一个目录是一条资料：目录里的入口文件（报告、README……）是正文，其余是附属文件，按相对路径存，正文里的相对引用在这条资料内部解析。
+// 图片扩展名（含 SVG）按二进制计量，其余合法 UTF-8、无 NUL 的内容按字计量。
 // 整个部门没归档的资料：文本合计 ≤MaxMaterial 字，二进制合计 ≤MaxMaterialBin MB，单个文件 ≤MaxMaterialFile MB（附属文件一样算）。
 // 内容在 materials/<mN>/r<rev>/<相对路径>。加资料永远新建一条；给已有资料加一版要显式指明 mN，不按名字猜。
 const (
@@ -34,10 +35,10 @@ const (
 	MaxMaterialBody = maxMaterialRequest/3*4 + 1<<20
 )
 
-// Units 纯函数：资料的字数。文本（合法 UTF-8、无 NUL）按字（rune）数；二进制（图片等）不折算字数，
-// 记 0，另按字节数计入二进制总量。
-func Units(content []byte) (units int, binary bool) {
-	if IsText(content) {
+// Units 纯函数：图片扩展名（复用 imageExts）不折算字数；其余文本（合法 UTF-8、无 NUL）按字（rune）数。
+// 图片与非文本内容字数记 0，另按字节数计入二进制总量。
+func Units(name string, content []byte) (units int, binary bool) {
+	if !imageExts[strings.ToLower(path.Ext(name))] && IsText(content) {
 		return utf8.RuneCount(content), false
 	}
 	return 0, true
@@ -229,7 +230,7 @@ func PlanMaterial(dept string, existing []materialSlot, in MaterialInput) (mater
 		if len(f.Content) > MaxMaterialFile<<20 {
 			return s, TooBig("material_file", f.Name, len(f.Content))
 		}
-		units, binary := Units(f.Content)
+		units, binary := Units(f.Name, f.Content)
 		s.files = append(s.files, MaterialFileInfo{Path: f.Name, Size: len(f.Content), Units: units, Binary: binary})
 		if binary {
 			s.bin += len(f.Content)

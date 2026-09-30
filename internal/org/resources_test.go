@@ -57,10 +57,10 @@ func TestSecretName(t *testing.T) {
 }
 
 func TestUnitsAndPlan(t *testing.T) {
-	if u, bin := Units([]byte("你好ab")); u != 4 || bin {
+	if u, bin := Units("a.txt", []byte("你好ab")); u != 4 || bin {
 		t.Fatalf("文本按字：%d %v", u, bin)
 	}
-	if u, bin := Units([]byte{0, 1, 2, 3}); u != 0 || !bin {
+	if u, bin := Units("a.bin", []byte{0, 1, 2, 3}); u != 0 || !bin {
 		t.Fatalf("二进制不折算字数：%d %v", u, bin)
 	}
 	existing := []materialSlot{{id: "m1", kind: "overview", title: "总览.md", units: 1000, rev: 2},
@@ -548,7 +548,7 @@ func TestMergeFlatMaterials(t *testing.T) {
 	dept, _ := Add(ctx, db, NewDept{Name: "调研"})
 	old := func(id string, rev int, title, note, by string, at int64, body string, archived bool) {
 		t.Helper()
-		units, binary := Units([]byte(body))
+		units, binary := Units(title, []byte(body))
 		base := filepath.Base(title)
 		var arch any
 		if archived {
@@ -611,5 +611,45 @@ func TestMergeFlatMaterials(t *testing.T) {
 	}
 	if n, err := mergeFlatMaterials(ctx, db, data); err != nil || n != 0 {
 		t.Fatalf("再跑什么都不做：%d %v", n, err)
+	}
+}
+
+func TestMaterialSVGUnits(t *testing.T) {
+	svg := []byte(`<svg xmlns="http://www.w3.org/2000/svg"><text>矢量图</text></svg>`)
+	for _, name := range []string{"images/a.svg", "images/a.SVG", "images/a.txt"} {
+		t.Run(name, func(t *testing.T) {
+			db, data := openDB(t)
+			ctx := context.Background()
+			dept, err := Add(ctx, db, NewDept{Name: "调研"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			m, err := AddMaterial(ctx, db, data, MaterialInput{Org: dept.ID, Title: "报告", Note: "SVG 计量样本", Files: []MaterialFile{
+				{Name: "report.md", Content: []byte("正文")}, {Name: name, Content: svg},
+			}}, "u1")
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantUnits, wantBin := 2, len(svg)
+			binary := !strings.HasSuffix(name, ".txt")
+			if !binary {
+				wantUnits += len([]rune(string(svg)))
+				wantBin = 0
+			}
+			if m.Units != wantUnits || m.binBytes() != wantBin {
+				t.Fatalf("计量：%+v，二进制字节 %d", m, m.binBytes())
+			}
+			f, p, err := m.File(name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if f.Binary != binary || f.Units != wantUnits-2 {
+				t.Fatalf("文件计量：%+v", f)
+			}
+			raw, err := os.ReadFile(p)
+			if err != nil || string(raw) != string(svg) {
+				t.Fatalf("原文件：%q %v", raw, err)
+			}
+		})
 	}
 }

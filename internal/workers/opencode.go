@@ -2,7 +2,6 @@ package workers
 
 import (
 	"encoding/json"
-	"path/filepath"
 
 	"github.com/liu-zhengdong/atrium/internal/api"
 )
@@ -14,23 +13,7 @@ func opencodeAdapter() *Driver {
 		Efforts: []string{"minimal", "low", "medium", "high", "max"}, Exclusive: true, Tell: TellRestart, JSON: true,
 		Endpoints: []string{"openai", "anthropic"}, read: readOpencode}
 	a.build = func(in Request) (Launch, error) {
-		if !filepath.IsAbs(in.PromptFile) {
-			return Launch{}, api.Usage("opencode 的提示词文件须为绝对路径")
-		}
-		root := in.PromptFile + ".opencode-config"
-		l := Launch{Exe: a.Exe, Dir: in.Dir, Env: map[string]string{
-			"XDG_CONFIG_HOME":                  root,
-			"OPENCODE_CONFIG_DIR":              filepath.Join(root, "opencode"),
-			"OPENCODE_TEST_HOME":               root,
-			"OPENCODE_DISABLE_PROJECT_CONFIG":  "true",
-			"OPENCODE_DISABLE_DEFAULT_PLUGINS": "true",
-		}}
-		cfg := map[string]any{"mcp": map[string]any{}}
-		if in.ChromeURL != "" {
-			mcp := chromeMCP(in.ChromeURL)
-			command := append([]string{mcp["command"].(string)}, mcp["args"].([]string)...)
-			cfg["mcp"] = map[string]any{"chrome-devtools": map[string]any{"type": "local", "command": command}}
-		}
+		l := Launch{Exe: a.Exe, Dir: in.Dir}
 		model := in.Model
 		if e := in.Endpoint; e != nil {
 			if model == "" {
@@ -44,16 +27,12 @@ func opencodeAdapter() *Driver {
 			if e.API == "anthropic" {
 				npm = "@ai-sdk/anthropic"
 			}
-			cfg["provider"] = map[string]any{"atrium": map[string]any{
-				"npm": npm, "name": "Atrium 自定义端点", "options": opts, "models": map[string]any{model: map[string]string{"name": model}}}}
+			cfg, _ := json.Marshal(map[string]any{"provider": map[string]any{"atrium": map[string]any{
+				"npm": npm, "name": "Atrium 自定义端点", "options": opts, "models": map[string]any{model: map[string]string{"name": model}}}}})
+			l.Env = map[string]string{"OPENCODE_CONFIG_CONTENT": string(cfg)}
 			model = "atrium/" + model
 		}
-		content, err := json.Marshal(cfg)
-		if err != nil {
-			return Launch{}, err
-		}
-		l.Env["OPENCODE_CONFIG_CONTENT"] = string(content)
-		l.Args = []string{"run", "--format", "json", "--auto", "--pure"}
+		l.Args = []string{"run", "--format", "json", "--auto"}
 		if model != "" {
 			l.Args = append(l.Args, "-m", model)
 		}

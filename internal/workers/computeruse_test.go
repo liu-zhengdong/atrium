@@ -77,10 +77,8 @@ func TestLocalTools(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", home)
 	req := Request{Prompt: "x", Dir: home, ChromeURL: "http://wrong:1", ComputerUse: []string{"wrong"}}
 	// 没有 ~/.codex/config.toml：什么都不带。
-	for _, tool := range []string{"codex", "claude", "opencode"} {
-		if got, err := LocalTools(tool, req); err != nil || got.ComputerUse != nil || got.ChromeURL != "" {
-			t.Fatalf("%s 没配置：%+v %v", tool, got, err)
-		}
+	if got, err := LocalTools("codex", req); err != nil || (got.ComputerUse != nil || got.ChromeURL != "") {
+		t.Fatalf("没配置：%+v %v", got, err)
 	}
 	if err := os.MkdirAll(filepath.Join(home, ".codex"), 0o700); err != nil {
 		t.Fatal(err)
@@ -136,8 +134,8 @@ func TestUnifiedMCP(t *testing.T) {
 	if err := os.WriteFile(marker, []byte("9222\n/devtools/browser/test"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	for _, tool := range []string{"codex", "claude", "opencode"} {
-		req, err := LocalTools(tool, Request{Dir: home, Prompt: "x", PromptFile: filepath.Join(home, "prompt.md")})
+	for _, tool := range []string{"codex", "claude"} {
+		req, err := LocalTools(tool, Request{Dir: home, Prompt: "x"})
 		if err != nil || req.ChromeURL != "http://127.0.0.1:9222" {
 			t.Fatalf("%s: %+v %v", tool, req, err)
 		}
@@ -145,7 +143,7 @@ func TestUnifiedMCP(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		args := strings.Join(launch.Args, " ") + launch.Env["OPENCODE_CONFIG_CONTENT"]
+		args := strings.Join(launch.Args, " ")
 		if !strings.Contains(args, "chrome-devtools") || !strings.Contains(args, "--browser-url=http://127.0.0.1:9222") {
 			t.Fatalf("%s: %s", tool, args)
 		}

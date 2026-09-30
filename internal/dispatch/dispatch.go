@@ -872,7 +872,8 @@ func (d *dispatcher) exited(ctx context.Context, p *proc, code int) error {
 		note += "（" + sig.Evidence + "）"
 	}
 	note += marked
-	if err := recordExit(ctx, db, p.task, p.run.N, workers.OutcomeOf(sig, route.Do != "fail"), note); err != nil {
+	exit := workers.Exit{N: p.run.N, Model: workers.ModelOf(p.run.Worker, head), Outcome: workers.OutcomeOf(sig, route.Do != "fail"), Reason: note}
+	if err := recordExit(ctx, db, p.task, exit); err != nil {
 		return err
 	}
 	apply := func(kind ledger.EventKind, why string) error {
@@ -959,8 +960,8 @@ func noteUnknown(ctx context.Context, db *store.DB, task string, run workers.Run
 }
 
 // recordExit 记这次拉起的结果（workers 按拉起统计用）。
-func recordExit(ctx context.Context, q store.Querier, task string, n int, outcome, reason string) error {
-	raw, _ := json.Marshal(workers.Exit{N: n, Outcome: outcome, Reason: reason})
+func recordExit(ctx context.Context, q store.Querier, task string, x workers.Exit) error {
+	raw, _ := json.Marshal(x)
 	return ledger.Record(ctx, q, task, workers.ExitKind, actor, string(raw))
 }
 

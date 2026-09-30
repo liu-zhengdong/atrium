@@ -109,7 +109,8 @@ func MergeLayers(layers []Profile) (map[string]any, string) {
 	return keys, strings.Join(bodies, "\n\n")
 }
 
-// Resolve 解析执行者标识并读出生效档案。只写工具时模型取 harness 档案的 model，再退回适配器缺省。
+// Resolve 解析执行者标识并读出生效档案。写了模型（标识里或 harness 档案的 model）就固定用它；
+// 都没写取适配器缺省（Driver.DefaultModel），它也空就不传模型，跟随工具自带的缺省（最新），ID 只有工具名。
 func Resolve(ctx context.Context, q store.Querier, id string) (Resolved, error) {
 	s, err := ParseWorker(id)
 	if err != nil {

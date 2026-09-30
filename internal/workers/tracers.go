@@ -20,7 +20,7 @@ func readClaude(p *Parser, e event, _ string) bool {
 	switch e.str("type") {
 	case "system":
 		if e.str("subtype") == "init" {
-			p.dir = e.str("cwd")
+			p.dir, p.t.Model = e.str("cwd"), e.str("model")
 		}
 	case "assistant":
 		for _, c := range content {
@@ -139,7 +139,7 @@ func codexItem(p *Parser, it event) (cmd, out string, code int) {
 func readAgy(p *Parser, e event, line string) bool {
 	switch e.str("event") {
 	case "init":
-		p.dir = e.obj("init").str("cwd")
+		p.dir, p.t.Model = e.obj("init").str("cwd"), e.obj("init").str("model")
 	case "step_update":
 		s := e.obj("step_update")
 		id := fmt.Sprint(s["step_index"])
@@ -206,7 +206,7 @@ func readCursor(p *Parser, e event, _ string) bool {
 	switch e.str("type") {
 	case "system":
 		if e.str("subtype") == "init" {
-			p.dir = e.str("cwd")
+			p.dir, p.t.Model = e.str("cwd"), e.str("model")
 		}
 	case "user", "thinking", "connection", "retry":
 	case "interaction_query":

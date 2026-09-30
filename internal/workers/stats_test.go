@@ -97,6 +97,11 @@ func TestStats(t *testing.T) {
 	t4 := add("还在跑")
 	launch(t4, 1, "agy+gemini-3.8-flash-high")
 
+	t5 := add("跟随工具缺省：退出记录带上工具报的模型")
+	launch(t5, 1, "codex:high")
+	raw, _ := json.Marshal(Exit{N: 1, Model: "gpt-6.1-sol", Outcome: OutOK})
+	must(ledger.Record(ctx, db, t5, ExitKind, "runtime", string(raw)))
+
 	stats, err := Stats(ctx, db)
 	must(err)
 	outs := func(k string) []string {
@@ -129,6 +134,12 @@ func TestStats(t *testing.T) {
 	}
 	if b := stats["claude+opus"][1]; b.Reason != "bounce" {
 		t.Errorf("被交回的原因取交回记录：%+v", b)
+	}
+	if a := stats["codex"]; len(a) != 1 || a[0].Model != "gpt-6.1-sol" || a[0].Outcome != OutOK {
+		t.Errorf("跟随的执行者按工具归，明细带实际模型：%+v", a)
+	}
+	if a := stats["agy+gemini-3.8-flash-high"][0]; a.Model != "" {
+		t.Errorf("没有退出记录的不编模型：%+v", a)
 	}
 
 	d, err := Show(ctx, db, "claude+opus:high")

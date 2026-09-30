@@ -324,6 +324,8 @@ func showCmd(c *cli.Ctx, name string) error {
 	writeMarks(&b, d.Marks)
 	if r.CLIModel != "" {
 		fmt.Fprintf(&b, "交给工具的模型：%s\n", r.CLIModel)
+	} else {
+		b.WriteString("交给工具的模型：不传，跟随工具自带的缺省（工具在日志里报了实际模型的，写在下面各次的括号里）\n")
 	}
 	if r.Rules.Checks != nil {
 		fmt.Fprintf(&b, "checks：%s\n", strings.Join(r.Rules.Checks, "、"))
@@ -340,8 +342,11 @@ func showCmd(c *cli.Ctx, name string) error {
 	}
 	fmt.Fprintf(&b, "档案层：%s\n%s（按 %s 统计，强度不单列）\n", layers, *d.Stat, Combo(r.ID))
 	for _, a := range d.Attempts {
-		fmt.Fprintf(&b, "  %s  %s 第 %d 次  %s@%s  %s", time.UnixMilli(a.At).Local().Format("01-02 15:04"), a.Task, a.N,
-			a.Worker, a.Host, OutText(a.Outcome))
+		fmt.Fprintf(&b, "  %s  %s 第 %d 次  %s@%s", time.UnixMilli(a.At).Local().Format("01-02 15:04"), a.Task, a.N, a.Worker, a.Host)
+		if a.Model != "" {
+			fmt.Fprintf(&b, "（%s）", a.Model)
+		}
+		fmt.Fprintf(&b, "  %s", OutText(a.Outcome))
 		if a.Reason != "" && a.Outcome != OutOK {
 			fmt.Fprintf(&b, "：%s", clipRunes(oneLine(a.Reason), 80))
 		}

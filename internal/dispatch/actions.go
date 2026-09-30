@@ -163,7 +163,12 @@ func Requeue(ctx context.Context, env *app.Env, id string, why watch.Why) error 
 		if why.Signal == watch.SigQuota {
 			outcome = workers.OutQuota
 		}
-		if err := recordExit(ctx, env.DB, id, run.N, outcome, why.Reason); err != nil {
+		head, err := readHead(run.Log, 64*1024)
+		if err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		exit := workers.Exit{N: run.N, Model: workers.ModelOf(run.Worker, head), Outcome: outcome, Reason: why.Reason}
+		if err := recordExit(ctx, env.DB, id, exit); err != nil {
 			return err
 		}
 	}

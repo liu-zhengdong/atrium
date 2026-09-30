@@ -1,6 +1,7 @@
 package workers
 
 import (
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -75,7 +76,7 @@ func TestTraceClaudeEvents(t *testing.T) {
 }
 
 func TestTraceCodexLog(t *testing.T) {
-	tr, err := ReadTrace("codex+gpt-6-sol", "testdata/codex-sample.jsonl")
+	tr, err := ReadTrace("codex", "testdata/codex-sample.jsonl")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,6 +92,31 @@ func TestTraceCodexLog(t *testing.T) {
 	}
 	if !reflect.DeepEqual(tr, want) {
 		t.Errorf("得到 %+v", tr)
+	}
+}
+
+// 实际模型取工具在开头报的：claude、cursor 在 system init，agy 在 init；codex --json 不报。
+func TestModelOf(t *testing.T) {
+	read := func(f string) string {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+	claude := `{"type":"system","subtype":"hook_started","hook_id":"h"}` + "\n" +
+		`{"type":"system","subtype":"init","cwd":"/r","session_id":"717b9af2-4989-4044-86f8-ce8adffa1a8b","model":"claude-opus-5-5"}` + "\n"
+	cases := []struct{ worker, head, want string }{
+		{"claude+opus", claude, "claude-opus-5-5"},
+		{"cursor+auto", read("testdata/cursor-t347.jsonl"), "Auto"},
+		{"agy+gemini-3.8-flash-high", read("testdata/agy-t349.jsonl"), "gemini-3.8-flash-high"},
+		{"codex", read("testdata/codex-sample.jsonl"), ""},
+		{"kimi", "Model: k2\n", ""},
+	}
+	for _, c := range cases {
+		if got := ModelOf(c.worker, c.head); got != c.want {
+			t.Errorf("%s：得到 %q，应为 %q", c.worker, got, c.want)
+		}
 	}
 }
 
@@ -139,7 +165,7 @@ func TestTraceAgyEvents(t *testing.T) {
 		{Cmd: "subagent 读设计、读测试", State: CmdOK},
 		{Cmd: "go test ./...", State: CmdOK, Out: "ok"},
 		{Cmd: "gh pr create", State: CmdRun},
-	}}}, Unknown: 1, UnknownHead: []string{`{"event":"step_update","step_update":{"step_index":7,"state":"DONE","step_type":"brand_new_step"}}`}, Lines: []string{
+	}}}, Model: "m", Unknown: 1, UnknownHead: []string{`{"event":"step_update","step_update":{"step_index":7,"state":"DONE","step_type":"brand_new_step"}}`}, Lines: []string{
 		`{"event":"step_update","step_update":{"step_index":7,"state":"DONE","step_type":"brand_new_step"}}`,
 		`{"event":"result","result":{"status":"ERROR","error":"boom"}}`,
 	}}

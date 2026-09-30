@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -56,8 +57,8 @@ func TestBuild(t *testing.T) {
 		{tool: "claude", in: Request{Prompt: "x", PromptFile: pf, Dir: dir, Live: true}, want: []string{"--input-format", "stream-json", "--replay-user-messages"}},
 		{tool: "claude", in: Request{Prompt: "x", PromptFile: pf, Dir: dir, Session: "0123abcd-0123-0123-0123-0123456789ab"}, want: []string{"-p", "--resume", "0123abcd-0123-0123-0123-0123456789ab"}},
 		{tool: "claude", in: in("", "ultra"), bad: "思考强度只能是"},
-		{tool: "codex", in: in("gpt-6", "high"), want: []string{"exec", "--json", "--skip-git-repo-check", "-C", dir, "-m", "gpt-6", `model_reasoning_effort="high"`, "-"}},
-		{tool: "codex", in: Request{Prompt: "x", PromptFile: pf, Dir: dir, Session: "0123abcd-0123-0123-0123-0123456789ab"}, want: []string{"exec", "resume", "--json", "--skip-git-repo-check", "0123abcd-0123-0123-0123-0123456789ab", "-"}},
+		{tool: "codex", in: in("gpt-6", "high"), want: []string{"exec", "--json", "--skip-git-repo-check", "--ignore-user-config", "-C", dir, "-m", "gpt-6", `model_reasoning_effort="high"`, "-"}},
+		{tool: "codex", in: Request{Prompt: "x", PromptFile: pf, Dir: dir, Session: "0123abcd-0123-0123-0123-0123456789ab"}, want: []string{"exec", "resume", "--json", "--skip-git-repo-check", "--ignore-user-config", "0123abcd-0123-0123-0123-0123456789ab", "-"}},
 		{tool: "opencode", in: in("p/m", "low"), want: []string{"run", "--format", "json", "--auto", "-m", "p/m", "--variant", "low", "--", "做事"}},
 		{tool: "kimi", in: in("k2", ""), want: []string{"-p", "做事", "-m", "k2"}},
 		{tool: "kimi", in: in("", "high"), bad: "不接受思考强度"},
@@ -87,6 +88,14 @@ func TestBuild(t *testing.T) {
 		}
 		if l.Dir != c.in.Dir || l.Exe != a.Exe {
 			t.Errorf("%s：%+v", c.tool, l)
+		}
+	}
+	// 没写模型：codex、grok 不传模型参数，跟随工具自带的缺省。
+	for _, tool := range []string{"codex", "grok"} {
+		a, _ := Builtin(tool)
+		l, err := a.Build(in("", ""))
+		if err != nil || slices.Contains(l.Args, "-m") {
+			t.Errorf("%s 没写模型不应传 -m：%q %v", tool, l.Args, err)
 		}
 	}
 	// 走标准输入的接提示词文件，走参数的不接。
@@ -245,6 +254,14 @@ func TestResolveAndRefusal(t *testing.T) {
 	}
 	if r.Rules.Refusal("medium") == "" || r.Rules.Refusal("low") != "" {
 		t.Fatal("trust=low 只接 low")
+	}
+	// 只写工具、档案没写 model：有别名缺省的补上（claude 的 opus 在上面被 harness 盖掉，这里看 cursor 的 auto），
+	// 没有的不传模型、ID 只有工具名，models/ 档案挂不上。
+	for id, want := range map[string]string{"cursor": "cursor+auto", "codex:high": "codex:high", "grok": "grok"} {
+		r, err := Resolve(ctx, db, id)
+		if err != nil || r.ID != want || (want != "cursor+auto" && (r.CLIModel != "" || r.Spec.Model != "")) {
+			t.Errorf("%s：%+v %v", id, r, err)
+		}
 	}
 	if r, err := Resolve(ctx, db, "mytool"); err != nil || r.Adapter.Exe != "mytool" {
 		t.Fatalf("通用命令行执行者：%+v %v", r, err)

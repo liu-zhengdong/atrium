@@ -857,7 +857,7 @@ func (d *dispatcher) exited(ctx context.Context, p *proc, code int) error {
 		return err
 	}
 	same, switches, tried := tries(runs)
-	sig := workers.Classify(code, tail, time.Now())
+	sig := workers.Classify(code, p.run.Worker, tail, time.Now())
 	session := p.adapter.SessionOf(head)
 	route := RouteExit(ExitInput{Code: code, Signal: sig, Ending: p.adapter.Ended(tail), StopFor: p.stopReason(),
 		Same: same, Switches: switches, Pending: len(pending), CanResume: p.adapter.CanResume() && session != ""})

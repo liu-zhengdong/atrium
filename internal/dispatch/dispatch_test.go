@@ -137,6 +137,7 @@ func TestRouteExit(t *testing.T) {
 		{"临时错误先重试", ExitInput{Code: 1, Signal: transient}, "same"},
 		{"临时错误再换人", ExitInput{Code: 1, Signal: transient, Same: 1}, "switch"},
 		{"临时错误用尽", ExitInput{Code: 1, Signal: transient, Same: 1, Switches: 2}, "fail"},
+		{"零步骤出错退出重新排队", ExitInput{Code: 1, Signal: workers.Signal{Kind: workers.SignalNoStart, Reason: "零步骤出错退出（退出码 1，原因不明）"}}, "requeue"},
 		{"没登录重新排队", ExitInput{Code: 1, Signal: workers.Signal{Kind: workers.SignalSetup, Reason: "没登录"}, Switches: 2}, "requeue"},
 		{"有捎话能续上", ExitInput{Code: 0, Pending: 1, CanResume: true}, "resume"},
 		{"有捎话不能续上", ExitInput{Code: 0, Pending: 2}, "restart"},

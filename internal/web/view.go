@@ -12,9 +12,10 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/hosts"
 	"github.com/liu-zhengdong/atrium/internal/ledger"
 	"github.com/liu-zhengdong/atrium/internal/quota"
+	"github.com/liu-zhengdong/atrium/internal/watch"
 )
 
-// 本文件是网页的纯判定：任务在五步里走到哪、行尾写什么。当前等待对象用 watch.HolderOf，不在这里另判。
+// 本文件是网页的纯判定：任务在五步里走到哪、行首行尾怎么写。当前等待对象用 watch.HolderOf，不在这里另判。
 
 // Steps 是任务详情的五步。
 var Steps = []string{"分派任务", "执行", "验收", "合入", "上线"}
@@ -48,8 +49,12 @@ func step(t ledger.Task) int {
 	return 0
 }
 
-// state 是列表行前的状态点：run 在做、idle 排队或没开始、draft 草稿、bad 卡住或失败、done 完成、off 取消。
-func state(t ledger.Task) string {
+// state 是列表行前的状态点：run 在做（含拆成子任务在做的）、idle 排队或没开始、draft 草稿、bad 卡住或失败、done 完成、off 取消。
+// h 是 watch.HolderOf 的结果，自身待派的只按它看是不是子任务在做。
+func state(t ledger.Task, h watch.Holder) string {
+	if h.Kind == "children" {
+		return "run"
+	}
 	switch t.Status {
 	case ledger.Draft:
 		return "draft"
@@ -78,31 +83,9 @@ func finishedText(t ledger.Task) string {
 	return "已完成"
 }
 
-// who 是列表行尾的短标签：交付阶段优先，否则是执行者与机器；没派的有依赖时写在等谁、哪件等不到了（见 ledger.DepGate）。
-func who(t ledger.Task, deps []ledger.DepState) string {
+// who 是列表行尾的短标签：结束了的按结果说，没结束的取等待对象的短标签（watch.HolderOf）；草稿自成一组，组名已说明。
+func who(t ledger.Task, h watch.Holder) string {
 	switch t.Status {
-	case ledger.Blocked:
-		return "卡住"
-	case ledger.Failed:
-		return "失败"
-	case ledger.Queued:
-		return "排队"
-	case ledger.Todo:
-		waiting, broken := ledger.DepGate(deps)
-		switch n := len(waiting); {
-		case len(broken) == 1:
-			return "依赖的 " + ledger.BrokenText(broken)
-		case len(broken) > 1:
-			return fmt.Sprintf("%d 件依赖等不到了", len(broken))
-		case n == 0:
-			return "没派"
-		case n <= 2: // 两个短号还放得下；再多写件数，点开抽屉看是哪几件
-			return "等 " + strings.Join(waiting, "、")
-		default:
-			return fmt.Sprintf("等 %d 件", n)
-		}
-	case ledger.Draft:
-		return "" // 草稿自成一组，组名已说明
 	case ledger.Cancelled:
 		return "取消"
 	case ledger.Done:
@@ -114,29 +97,7 @@ func who(t ledger.Task, deps []ledger.DepState) string {
 		}
 		return "完成"
 	}
-	switch t.Stage {
-	case ledger.StageGate:
-		return "验收中"
-	case ledger.StageReview:
-		return "审阅中"
-	case ledger.StageAccept:
-		return "等验收"
-	case ledger.StageMerge:
-		return "合入队列"
-	case ledger.StageMerged:
-		return "等发版"
-	}
-	w, _, _ := strings.Cut(t.Worker, "+") // 行尾只放工具名，完整组合在详情里
-	if t.Host != "" {
-		if w != "" {
-			w += " · "
-		}
-		w += t.Host
-	}
-	if w == "" {
-		return "在做"
-	}
-	return w
+	return h.Short
 }
 
 // nest 把任务排成森林：父任务也在 tasks 里的，挂到父任务的 Kids 下（按建立先后）；其余是根，保持 tasks 里的先后。

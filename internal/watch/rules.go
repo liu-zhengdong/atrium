@@ -69,6 +69,7 @@ type Holder struct {
 	Kind  string `json:"kind"` // worker check runtime release leader secretary user deps children draft
 	Who   string `json:"who,omitempty"`
 	Text  string `json:"text"`
+	Short string `json:"short,omitempty"` // 列表行尾的短标签（网页）
 	Role  Role   `json:"role,omitempty"`
 	Since int64  `json:"since,omitempty"`
 	Next  string `json:"next,omitempty"`
@@ -88,7 +89,7 @@ type Facts struct {
 	ProgressAt   int64             // 进程最近一次有进展；0 表示拉起后还没有
 }
 
-// HolderOf 判定一件没结束的任务当前在等谁。top、statusline、task show 共用。
+// HolderOf 判定一件没结束的任务当前在等谁，顺带给列表行尾的短标签。top、statusline、task show、网页共用。
 func HolderOf(f Facts) Holder {
 	t := f.Task
 	owner := Holder{Kind: kindOf(f.Owner), Who: f.Owner, Role: RoleLeader, Since: t.UpdatedAt}
@@ -114,39 +115,52 @@ func HolderOf(f Facts) Holder {
 				after = strings.Join(keep, ",")
 			}
 			owner.Text = "依赖的 " + ledger.BrokenText(broken) + "，改依赖或取消"
+			owner.Short = "依赖的 " + ledger.BrokenText(broken)
+			if len(broken) > 1 {
+				owner.Short = fmt.Sprintf("%d 件依赖等不到了", len(broken))
+			}
 			owner.Next = "atrium task set " + t.ID + " --after " + after
 			return owner
 		}
 		if len(waiting) > 0 {
-			return Holder{Kind: "deps", Text: "等 " + strings.Join(waiting, "、") + " 完成"}
+			return Holder{Kind: "deps", Text: "等 " + strings.Join(waiting, "、") + " 完成", Short: waitShort(waiting)}
 		}
 		if f.OpenChildren > 0 {
 			// 拆开在做的父任务：子任务各自计时，全部结束后负责人收到结果再来收尾。
-			return Holder{Kind: "children", Text: fmt.Sprintf("子任务在做（%d/%d 结束）", f.Children-f.OpenChildren, f.Children)}
+			ended := fmt.Sprintf("%d/%d 结束", f.Children-f.OpenChildren, f.Children)
+			return Holder{Kind: "children", Text: "子任务在做（" + ended + "）", Short: "子任务 " + ended}
 		}
-		owner.Text, owner.Next = "待分派", "atrium task run "+t.ID
+		owner.Text, owner.Short, owner.Next = "待分派", "没派", "atrium task run "+t.ID
 		if f.Children > 0 {
-			owner.Text, owner.Next = "子任务都结束了，等收尾", "atrium task set "+t.ID+" --status done"
+			owner.Text, owner.Short, owner.Next = "子任务都结束了，等收尾", "等收尾", "atrium task set "+t.ID+" --status done"
 		}
 		return owner
 	case ledger.Queued:
 		if len(waiting) > 0 {
-			return Holder{Kind: "deps", Text: "排队，等 " + strings.Join(waiting, "、") + " 完成后自动派"}
+			return Holder{Kind: "deps", Text: "排队，等 " + strings.Join(waiting, "、") + " 完成后自动派", Short: waitShort(waiting)}
 		}
-		return Holder{Kind: "runtime", Who: "运行时", Text: "排队等执行者"}
+		return Holder{Kind: "runtime", Who: "运行时", Text: "排队等执行者", Short: "排队"}
 	case ledger.Blocked:
-		owner.Text, owner.Next = "卡住，等处理", "atrium task show "+t.ID
+		owner.Text, owner.Short, owner.Next = "卡住，等处理", "卡住", "atrium task show "+t.ID
 		return owner
 	case ledger.Failed:
-		owner.Text, owner.Next = "失败，等处理", "atrium task show "+t.ID
+		owner.Text, owner.Short, owner.Next = "失败，等处理", "失败", "atrium task show "+t.ID
 		return owner
 	}
 	// running：按交付阶段。
 	switch t.Stage {
 	case ledger.StageNone:
 		h := Holder{Kind: "worker", Who: t.Worker, Text: "执行者在做"}
+		h.Short, _, _ = strings.Cut(t.Worker, "+") // 短标签只放工具名与机器，完整组合在详情里
 		if t.Host != "" {
 			h.Text += "（" + t.Host + "）"
+			if h.Short != "" {
+				h.Short += " · "
+			}
+			h.Short += t.Host
+		}
+		if h.Short == "" {
+			h.Short = "在做"
 		}
 		if f.Proc != nil {
 			h.Role, h.Since = RoleWorkerStart, f.Proc.At
@@ -156,15 +170,15 @@ func HolderOf(f Facts) Holder {
 		}
 		return h
 	case ledger.StageGate:
-		return Holder{Kind: "runtime", Who: "运行时", Text: "正在检查交付结果"}
+		return Holder{Kind: "runtime", Who: "运行时", Text: "正在检查交付结果", Short: "验收中"}
 	case ledger.StageReview:
-		return Holder{Kind: "runtime", Who: "运行时", Text: "审阅中"}
+		return Holder{Kind: "runtime", Who: "运行时", Text: "审阅中", Short: "审阅中"}
 	case ledger.StageAccept:
 		next := "atrium task accept " + t.ID
 		if f.Acceptor == org.AcceptUser {
-			return Holder{Kind: "user", Who: "u1", Text: "等你验收", Role: RoleAccept, Since: t.UpdatedAt, Next: next}
+			return Holder{Kind: "user", Who: "u1", Text: "等你验收", Short: "等验收", Role: RoleAccept, Since: t.UpdatedAt, Next: next}
 		}
-		owner.Text, owner.Role, owner.Next = "等负责人验收", RoleAccept, next
+		owner.Text, owner.Short, owner.Role, owner.Next = "等负责人验收", "等验收", RoleAccept, next
 		return owner
 	case ledger.StageMerge:
 		if f.Proc != nil && f.Proc.Role == "check" {
@@ -172,14 +186,22 @@ func HolderOf(f Facts) Holder {
 			if f.ProgressAt > 0 {
 				since = f.ProgressAt
 			}
-			return Holder{Kind: "check", Who: "运行时", Text: "快检查在跑", Role: RoleCheck, Since: since}
+			return Holder{Kind: "check", Who: "运行时", Text: "快检查在跑", Short: "合入队列", Role: RoleCheck, Since: since}
 		}
-		return Holder{Kind: "runtime", Who: "运行时", Text: "排队合入"}
+		return Holder{Kind: "runtime", Who: "运行时", Text: "排队合入", Short: "合入队列"}
 	case ledger.StageMerged:
-		return Holder{Kind: "release", Who: "运行时", Text: "已合入，等发版", Role: RoleRelease, Since: t.UpdatedAt,
+		return Holder{Kind: "release", Who: "运行时", Text: "已合入，等发版", Short: "等发版", Role: RoleRelease, Since: t.UpdatedAt,
 			Next: "atrium update"}
 	}
-	return Holder{Kind: "runtime", Who: "运行时", Text: string(t.Status) + "/" + string(t.Stage)}
+	return Holder{Kind: "runtime", Who: "运行时", Text: string(t.Status) + "/" + string(t.Stage), Short: string(t.Stage)}
+}
+
+// waitShort 是等依赖的短标签：两个短号还放得下；再多写件数，详情里看是哪几件。
+func waitShort(waiting []string) string {
+	if len(waiting) <= 2 {
+		return "等 " + strings.Join(waiting, "、")
+	}
+	return fmt.Sprintf("等 %d 件", len(waiting))
 }
 
 // leaderSince 是待派任务归负责人时的计时起点：它开始要负责人处理的那一刻。依赖断了从最早断的那个算，

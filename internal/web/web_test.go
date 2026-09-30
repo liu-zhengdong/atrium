@@ -27,6 +27,7 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/pause"
 	"github.com/liu-zhengdong/atrium/internal/quota"
 	"github.com/liu-zhengdong/atrium/internal/store"
+	"github.com/liu-zhengdong/atrium/internal/watch"
 	"github.com/liu-zhengdong/atrium/internal/workers"
 )
 
@@ -53,6 +54,8 @@ func TestLocalHost(t *testing.T) {
 }
 
 func TestStepHolder(t *testing.T) {
+	// 行首行尾都取 watch.HolderOf 的结果，这里的事实按列表行给的来（行尾不看负责人）。
+	of := func(f watch.Facts) watch.Holder { return watch.HolderOf(f) }
 	cases := []struct {
 		t          ledger.Task
 		step       int
@@ -72,33 +75,56 @@ func TestStepHolder(t *testing.T) {
 		{ledger.Task{Status: ledger.Blocked, PR: "#1"}, 2, "bad", "卡住"},
 		{ledger.Task{Status: ledger.Failed, Worker: "x"}, 1, "bad", "失败"},
 		{ledger.Task{Status: ledger.Cancelled}, 0, "off", "取消"},
+		{ledger.Task{Status: ledger.Draft}, 0, "draft", ""}, // 草稿自成一组，组名已说明
 	}
 	for _, c := range cases {
-		if step(c.t) != c.step || state(c.t) != c.state || who(c.t, nil) != c.who {
-			t.Errorf("%s/%s：step %d state %s who %s", c.t.Status, c.t.Stage, step(c.t), state(c.t), who(c.t, nil))
+		h := of(watch.Facts{Task: c.t})
+		if step(c.t) != c.step || state(c.t, h) != c.state || who(c.t, h) != c.who {
+			t.Errorf("%s/%s：step %d state %s who %s", c.t.Status, c.t.Stage, step(c.t), state(c.t, h), who(c.t, h))
 		}
 	}
-	// 没派的写在等谁、哪件等不到了；别的状态有依赖也不写（排队、在做说明依赖已经完成）。
+	// 待派的：依赖先于子任务（依赖没好不会拆着做）；拆成子任务在做的行首算在做。
 	dep := func(id string, s ledger.Status) ledger.DepState { return ledger.DepState{ID: id, Status: s} }
 	run7, run9, run12 := dep("t7", ledger.Running), dep("t9", ledger.Todo), dep("t12", ledger.Blocked)
 	waits := []struct {
-		status ledger.Status
-		deps   []ledger.DepState
-		who    string
+		status     ledger.Status
+		deps       []ledger.DepState
+		open, all  int
+		state, who string
 	}{
-		{ledger.Todo, []ledger.DepState{run7}, "等 t7"},
-		{ledger.Todo, []ledger.DepState{run7, dep("t8", ledger.Done), run9}, "等 t7、t9"},
-		{ledger.Todo, []ledger.DepState{run7, run9, run12}, "等 3 件"},
-		{ledger.Todo, []ledger.DepState{dep("t8", ledger.Done)}, "没派"},
-		{ledger.Todo, []ledger.DepState{dep("t6", ledger.Cancelled), dep("t8", ledger.Done)}, "依赖的 t6 已取消"},
-		{ledger.Todo, []ledger.DepState{dep("t6", ledger.Cancelled), dep("t5", ledger.Failed), run7}, "2 件依赖等不到了"},
-		{ledger.Queued, []ledger.DepState{run7}, "排队"},
-		{ledger.Draft, []ledger.DepState{run7}, ""},
+		{ledger.Todo, []ledger.DepState{run7}, 0, 0, "idle", "等 t7"},
+		{ledger.Todo, []ledger.DepState{run7, dep("t8", ledger.Done), run9}, 0, 0, "idle", "等 t7、t9"},
+		{ledger.Todo, []ledger.DepState{run7, run9, run12}, 0, 0, "idle", "等 3 件"},
+		{ledger.Todo, []ledger.DepState{dep("t8", ledger.Done)}, 0, 0, "idle", "没派"},
+		{ledger.Todo, []ledger.DepState{dep("t6", ledger.Cancelled), dep("t8", ledger.Done)}, 0, 0, "idle", "依赖的 t6 已取消"},
+		{ledger.Todo, []ledger.DepState{dep("t6", ledger.Cancelled), dep("t5", ledger.Failed), run7}, 0, 0, "idle", "2 件依赖等不到了"},
+		{ledger.Todo, nil, 1, 4, "run", "子任务 3/4 结束"},
+		{ledger.Todo, nil, 0, 4, "idle", "等收尾"},
+		{ledger.Todo, []ledger.DepState{run7}, 1, 4, "idle", "等 t7"},
+		{ledger.Queued, []ledger.DepState{run7}, 0, 0, "idle", "等 t7"},
+		{ledger.Queued, []ledger.DepState{dep("t8", ledger.Done)}, 0, 0, "idle", "排队"},
 	}
 	for _, c := range waits {
-		if got := who(ledger.Task{Status: c.status}, c.deps); got != c.who {
-			t.Errorf("%s 依赖 %v：得到 %q，应为 %q", c.status, c.deps, got, c.who)
+		x := ledger.Task{Status: c.status}
+		h := of(watch.Facts{Task: x, Deps: c.deps, OpenChildren: c.open, Children: c.all})
+		if st, got := state(x, h), who(x, h); st != c.state || got != c.who {
+			t.Errorf("%s 依赖 %v 子任务 %d/%d：得到 %s %q，应为 %s %q", c.status, c.deps, c.open, c.all, st, got, c.state, c.who)
 		}
+	}
+}
+
+func TestCountKids(t *testing.T) {
+	tasks := []ledger.Task{
+		{ID: "t1", Status: ledger.Todo},
+		{ID: "t2", Parent: "t1", Status: ledger.Running},
+		{ID: "t3", Parent: "t1", Status: ledger.Done},
+		{ID: "t4", Parent: "t1", Status: ledger.Failed},
+		{ID: "t5", Parent: "t2", Status: ledger.Todo},
+	}
+	got := countKids(tasks)
+	want := map[string]kidCount{"t1": {open: 1, all: 3}, "t2": {open: 1, all: 1}}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("得到 %+v，应为 %+v", got, want)
 	}
 }
 
@@ -452,6 +478,9 @@ func TestTaskTree(t *testing.T) {
 	if len(page.Tasks) != 1 || page.Tasks[0].ID != goal.ID {
 		t.Fatalf("部门页应只有一棵以目标为根的树：%+v", page.Tasks)
 	}
+	if g := page.Tasks[0]; g.State != "run" || g.Who != "子任务 1/3 结束" {
+		t.Errorf("目标自身待派、子任务在做，行首在做、行尾写子任务：%s %q", g.State, g.Who)
+	}
 	kids := page.Tasks[0].Kids
 	if len(kids) != 3 || kids[0].ID != a.ID || kids[1].ID != b.ID || kids[2].ID != old.ID || kids[2].State != "done" {
 		t.Fatalf("子任务按建立先后，含早就结束的：%+v", kids)
@@ -473,6 +502,12 @@ func TestTaskTree(t *testing.T) {
 	if d.Parent == nil || d.Parent.ID != goal.ID || !reflect.DeepEqual(ids(d.Kids), []string{c.ID}) ||
 		!reflect.DeepEqual(ids(d.Waits), []string{iface.ID, a.ID}) || len(d.Waiters) != 0 {
 		t.Errorf("第二件的抽屉：%+v", d)
+	}
+	if d.Parent != nil && (d.Parent.State != "run" || d.Parent.Who != "子任务 1/3 结束") {
+		t.Errorf("抽屉里的上级同样按子任务在做：%+v", d.Parent)
+	}
+	if d, err = loadTask(ctx, db, goal.ID); err != nil || d.State != "run" || d.Holder != "子任务在做（1/3 结束）" {
+		t.Errorf("目标的抽屉：%s %q %v", d.State, d.Holder, err)
 	}
 	d, err = loadTask(ctx, db, iface.ID)
 	if err != nil {

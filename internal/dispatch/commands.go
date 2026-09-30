@@ -241,7 +241,7 @@ func traceLog(c *cli.Ctx, id, path string, ch LogChunk) error {
 		}
 	}
 	if !c.JSON {
-		fmt.Fprintf(c.Env.Stdout, "== %s 第 %d 次拉起（%s）\n", id, ch.Run, ch.Worker)
+		fmt.Fprintln(c.Env.Stdout, logHeader(id, ch))
 	}
 	for {
 		p.Feed(ch.Text)
@@ -266,11 +266,15 @@ func traceLog(c *cli.Ctx, id, path string, ch LogChunk) error {
 		ch = next
 	}
 	show(true)
+	tr := p.Trace()
+	if !ch.Running {
+		tr.Usage = ch.Usage
+	}
 	if c.JSON {
-		return c.Done(TraceView{Task: id, Run: ch.Run, Worker: ch.Worker, Running: ch.Running, Trace: p.Trace()}, "", logNext(id, ch))
+		return c.Done(TraceView{Task: id, Run: ch.Run, Worker: ch.Worker, Running: ch.Running, Trace: tr}, "", logNext(id, ch))
 	}
 	if follow {
-		return c.Done(nil, "== 执行者已退出", logNext(id, ch))
+		return c.Done(nil, logHeader(id, ch)+"\n== 执行者已退出", logNext(id, ch))
 	}
 	return c.Done(nil, "", logNext(id, ch))
 }
@@ -278,12 +282,12 @@ func traceLog(c *cli.Ctx, id, path string, ch LogChunk) error {
 // rawLog 给日志原文（末尾一段起）；--follow 跟到退出。
 func rawLog(c *cli.Ctx, id, path string, ch LogChunk) error {
 	if !c.Bool("follow") {
-		return c.Done(ch, fmt.Sprintf("== %s 第 %d 次拉起（%s）\n%s", id, ch.Run, ch.Worker, ch.Text), logNext(id, ch))
+		return c.Done(ch, logHeader(id, ch)+"\n"+ch.Text, logNext(id, ch))
 	}
 	var all strings.Builder
 	all.WriteString(ch.Text)
 	if !c.JSON {
-		fmt.Fprintf(c.Env.Stdout, "== %s 第 %d 次拉起（%s）\n%s", id, ch.Run, ch.Worker, ch.Text)
+		fmt.Fprintf(c.Env.Stdout, "%s\n%s", logHeader(id, ch), ch.Text)
 	}
 	for ch.Running {
 		next, err := followOnce(c, path, ch.Offset)
@@ -303,7 +307,7 @@ func rawLog(c *cli.Ctx, id, path string, ch LogChunk) error {
 	if c.JSON {
 		return c.Done(ch, "", logNext(id, ch))
 	}
-	return c.Done(nil, "== 执行者已退出", logNext(id, ch))
+	return c.Done(nil, logHeader(id, ch)+"\n== 执行者已退出", logNext(id, ch))
 }
 
 // followOnce 等下一段日志；服务平滑重启时等新服务起来再接着读。

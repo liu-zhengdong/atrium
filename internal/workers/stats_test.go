@@ -126,10 +126,10 @@ func TestStats(t *testing.T) {
 	if _, ok := stats["claude+opus:high"]; ok {
 		t.Error("强度不单列")
 	}
-	if s := Count(stats["agy+gemini-3.8-flash-high"]); s != (Stat{Launches: 2, Quota: 1, Fail: 1}) {
+	if s := Count(stats["agy+gemini-3.8-flash-high"]); [6]int{s.Launches, s.OK, s.Bounce, s.Quota, s.Setup, s.Fail} != [6]int{2, 0, 0, 1, 0, 1} {
 		t.Errorf("agy 计数：%+v", s)
 	}
-	if s := Count(stats["claude+opus"]); s != (Stat{Launches: 3, OK: 2, Bounce: 1}) {
+	if s := Count(stats["claude+opus"]); [6]int{s.Launches, s.OK, s.Bounce, s.Quota, s.Setup, s.Fail} != [6]int{3, 2, 1, 0, 0, 0} {
 		t.Errorf("claude 计数：%+v", s)
 	}
 	if n := Fails(stats["agy+gemini-3.8-flash-high"], 5); n != 2 {

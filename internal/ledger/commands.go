@@ -171,7 +171,11 @@ func Commands(t *cli.Table) {
 			if len(d.History) > 0 {
 				b.WriteString("\n经历：\n")
 				for _, e := range d.History {
-					fmt.Fprintf(&b, "  %s  %s  %s  %s\n", time.UnixMilli(e.At).Format("01-02 15:04"), e.Actor, e.Kind, oneLine(e.Body))
+					text, err := historyText(e)
+					if err != nil {
+						return fmt.Errorf("经历 %d：%w", e.ID, err)
+					}
+					fmt.Fprintf(&b, "  %s  %s  %s  %s\n", time.UnixMilli(e.At).Format("01-02 15:04"), e.Actor, e.Kind, text)
 				}
 			}
 			next := "atrium task wait " + t.ID

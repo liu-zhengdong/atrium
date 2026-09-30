@@ -209,6 +209,13 @@ func agentRoutes(r *api.Router, env *app.Env) {
 			return nil, err
 		}
 		ctx := q.Context()
+		previous, err := Get(ctx, env.DB, host)
+		if err != nil {
+			return nil, err
+		}
+		if previous.Info != nil {
+			b.Info.CLIs = previous.Info.CLIs
+		}
 		if err := touch(ctx, env.DB, host, &b.Info, nil); err != nil {
 			return nil, err
 		}
@@ -341,14 +348,19 @@ func agentRoutes(r *api.Router, env *app.Env) {
 		theHub.notify()
 		return map[string]any{"done": true}, nil
 	})
+	handle("GET /api/agent/tools", func(q *api.Req, host string) (any, error) {
+		return workers.ToolCatalog(q.Context(), env.DB)
+	})
 	handle("POST /api/agent/probe", func(q *api.Req, host string) (any, error) {
-		var b struct {
-			Failed []ProbeFailure `json:"failed"`
-		}
+		var b ProbeReport
 		if err := q.Decode(&b); err != nil {
 			return nil, err
 		}
-		return map[string]int{"failed": len(b.Failed)}, workers.SyncProbes(q.Context(), env.DB, host, probeMarks(b.Failed), store.Now())
+		tools, err := workers.ToolCatalog(q.Context(), env.DB)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]int{"failed": len(b.Failed)}, recordProbe(q.Context(), env.DB, host, b, tools)
 	})
 	handle("POST /api/agent/quota", func(q *api.Req, host string) (any, error) {
 		var b struct {

@@ -523,12 +523,15 @@ out=$(json workers edit harness/fakemodel --file "$work/fakemodel.md"); has '.ok
 out=$(json org add 可用性演练 --parent o1); av_org=$(jq -r .result.id <<<"$out")
 out=$(json task add 模型名无效 --org "$av_org"); av=$(jq -r .result.id <<<"$out")
 json task run "$av" --worker fakemodel >/dev/null
+# 主机实测异步更新；确认已拉起再暂停，避免新增档案还没探测就先挡住派活。
+for _ in $(seq 150); do out=$(json task show "$av"); jq -e '.result.task.status == "running"' >/dev/null <<<"$out" && break; sleep 0.2; done
+has '.result.task.status == "running"'
 out=$(json pause --org "$av_org"); has '.ok'   # 重新排队后不再拉起，好断言停在 queued
 for _ in $(seq 50); do out=$(json workers fakemodel); jq -e '(.result.marks // [])|length == 1' >/dev/null <<<"$out" && break; sleep 0.2; done
 has '.result.marks[0].host == "h1" and .result.marks[0].kind == "model" and .result.marks[0].until == 0'
 out=$(json task show "$av"); has '.result.task.status == "queued" and (.result.history|map(.body // "")|join(" ")|contains("已标记 fakemodel@h1 不可用"))'
 out=$(json workers); has '(.result|map(select(.id == "fakemodel"))|.[0].marks|length) == 1'
-out=$(json task run "$av" --dry-run); has '.result.pick.candidates|map(select(.id == "fakemodel"))|.[0]|(.eligible|not) and (.refusals|join("")|contains("本机不可用：模型名无效"))'
+out=$(json task run "$av" --dry-run); has '.result.pick.candidates|map(select(.id == "fakemodel"))|.[0]|(.eligible|not) and (.refusals|join("")|contains("不可用：模型名无效"))'
 out=$(json workers edit --clear fakemodel@h1); has '.result.cleared == 1'
 out=$(json workers edit --clear fakemodel@h1 || true); has '.error.code == "not_found"'
 out=$(json workers edit --clear "bad tool" || true); has '.error.code == "usage" and (.error.message|startswith("--clear:"))'

@@ -7,7 +7,6 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/hosts"
 	"github.com/liu-zhengdong/atrium/internal/org"
 	"github.com/liu-zhengdong/atrium/internal/quota"
-	"github.com/liu-zhengdong/atrium/internal/store"
 	"github.com/liu-zhengdong/atrium/internal/workers"
 )
 
@@ -42,24 +41,6 @@ var (
 	stopRemote = hosts.Stop
 	spares     = quota.Spares
 	accountOf  = quota.AccountOf
-	// localLoggedOut 是本机机器信息里看出没登录的工具（服务启动时看登录文件）：挑执行者时避开。
-	// 远程机器的由 hosts.Pick 挑机器时避开；执行者报出来的没登录记在 workers 的不可用标记里。
-	localLoggedOut = func(ctx context.Context, q store.Querier) (map[string]bool, error) {
-		h, err := hosts.Get(ctx, q, LocalHost)
-		if err != nil || h.Info == nil {
-			if isAPI(err) { // 本机还没登记
-				err = nil
-			}
-			return nil, err
-		}
-		out := map[string]bool{}
-		for tool, c := range h.Info.CLIs {
-			if c.LoggedIn != nil && !*c.LoggedIn {
-				out[tool] = true
-			}
-		}
-		return out, nil
-	}
 	// isolated：隔离实例（数据目录不是缺省的那个）自动挑人不挑内置工具，测试、开发不会拉起本机真实执行者；写死 --worker 不拦。
 	isolated = func(env *app.Env) bool { return env.Paths.Isolated() }
 	// skillOf 是任务挂的技能：优先执行者、要的凭据。

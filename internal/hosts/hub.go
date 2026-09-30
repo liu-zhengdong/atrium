@@ -356,12 +356,7 @@ func candidate(h Host, running int, paused, polling bool, now int64) Candidate {
 		if c.Max == 0 {
 			c.Max = h.Info.MaxWorkers
 		}
-		if h.Kind == "remote" {
-			c.CLIs = h.Info.CLIs
-			if c.CLIs == nil {
-				c.CLIs = map[string]CLI{}
-			}
-		}
+		c.CLIs = h.Info.CLIs
 	}
 	if h.Load != nil {
 		c.Busy = h.Load.Busy

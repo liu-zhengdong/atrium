@@ -22,12 +22,6 @@ const (
 	onlineMs = 60_000      // 多久没来算离线（长轮询每轮最多 25 秒）
 )
 
-// Tools 是执行者工具与它的可执行文件名（代理据此上报装没装）。
-var Tools = []struct{ Name, Exe string }{
-	{"claude", "claude"}, {"codex", "codex"}, {"opencode", "opencode"}, {"kimi", "kimi"},
-	{"grok", "grok"}, {"agy", "agy"}, {"cursor", "cursor-agent"},
-}
-
 // CLI 是一台机器上某个编码 CLI 的情况。LoggedIn 为 nil 表示看不出。
 type CLI struct {
 	Installed bool  `json:"installed"`
@@ -110,7 +104,7 @@ type Candidate struct {
 	Kind    string
 	Conn    Conn
 	Paused  bool
-	CLIs    map[string]CLI // 远程上报的编码 CLI；本机为 nil（挑执行者时已判过装没装）
+	CLIs    map[string]CLI // 这台实测可用的工具（本机与远程相同）
 	Marks   []workers.Mark // 此刻有效的不可用标记（各台的都在，workers.Blocked 按机器筛）
 	Repos   []string       // 自动派活能接的仓库（owner/name，* 为全部）；指定 --host 不看
 	Running int
@@ -164,7 +158,7 @@ func fit(c Candidate, n Need, pinned bool) (ok bool, later bool, reason string) 
 	if c.Paused {
 		return false, false, c.ID + " 已暂停接活"
 	}
-	if c.CLIs != nil && n.Tool != "" {
+	if n.Tool != "" {
 		cli := c.CLIs[n.Tool]
 		if !cli.Installed {
 			return false, false, fmt.Sprintf("%s 上没装 %s", c.ID, n.Tool)

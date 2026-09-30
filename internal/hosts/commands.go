@@ -14,6 +14,7 @@ import (
 	"os/user"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -206,12 +207,8 @@ func formatView(v View) string {
 	if v.Info != nil {
 		fmt.Fprintf(&b, "系统：%s/%s，%d 核，%s\n", v.Info.OS, v.Info.Arch, v.Info.CPUs, v.Info.Hostname)
 		var clis []string
-		for _, t := range Tools {
-			c, ok := v.Info.CLIs[t.Name]
-			if !ok {
-				continue
-			}
-			s := t.Name
+		for name, c := range v.Info.CLIs {
+			s := name
 			switch {
 			case c.LoggedIn == nil:
 				s += "（登录看不出）"
@@ -220,6 +217,7 @@ func formatView(v View) string {
 			}
 			clis = append(clis, s)
 		}
+		sort.Strings(clis)
 		if len(clis) == 0 {
 			clis = []string{"没装"}
 		}

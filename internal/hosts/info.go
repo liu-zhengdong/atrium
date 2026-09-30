@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"fmt"
 	"os"
-	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -51,20 +50,7 @@ func MaxWorkers(env map[string]string, cpus int) int {
 // machineInfo 按给定环境（PATH、HOME）看这台机器。
 func machineInfo(data string, env map[string]string) Info {
 	name, _ := os.Hostname()
-	home := env[platform.EnvKey(runtime.GOOS, "HOME")]
-	if home == "" {
-		home, _ = os.UserHomeDir()
-	}
 	clis := map[string]CLI{}
-	for _, t := range Tools {
-		if _, err := platform.LookPath(t.Exe, env); err != nil {
-			continue
-		}
-		clis[t.Name] = CLI{Installed: true, LoggedIn: LoggedIn(t.Name, runtime.GOOS, func(rel string) bool {
-			_, err := os.Stat(filepath.Join(home, filepath.FromSlash(rel)))
-			return err == nil
-		})}
-	}
 	return Info{Hostname: name, OS: runtime.GOOS, Arch: runtime.GOARCH, CPUs: runtime.NumCPU(),
 		Version: service.Version, Data: data, CLIs: clis, MaxWorkers: MaxWorkers(env, runtime.NumCPU())}
 }

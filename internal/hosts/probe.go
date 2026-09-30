@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -18,19 +20,19 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/workers"
 )
 
-// 自检：机器上线时和之后每 ProbeEvery 对装了的每个编码 CLI 跑一次 --version（七个内置工具都认，最便宜），
+// 自检：机器上线时和之后每 ProbeEvery 对 workers 工具目录中装了的命令跑 --version，
 // 用执行者同一份白名单环境。拉不起来、非 0 退出、超时就把「工具@机器」标成不可用（workers.MarkProbe），跑通了自动解除。
-// 没装（PATH 上找不到）不在这里标：挑执行者与挑机器已按「没装」避开。
+// 没装或自检失败的工具不列入主机可用工具。
 
-// ProbeEvery 是自检间隔：7 个进程各不到 1 秒，10 分钟一轮开销可以忽略；装坏或修好后至多 10 分钟挑人就跟上，
+// ProbeEvery 是自检间隔：装坏或修好后至多 10 分钟挑人就跟上，
 // 期间真派过去起不来的由退出信号（workers.MarkOf）当场标记，自检只补「一直没人派、坏着没人发现」的那部分。
 const ProbeEvery = 10 * time.Minute
 
 // probeTimeout 是一次 --version 最多等多久：正常的都在 1 秒内，Windows 冷启动留足余量。
 var probeTimeout = 20 * time.Second
 
-// probeTools 是要自检的工具（测试换掉，免得跑到本机真装的）。
-var probeTools = Tools
+// 测试关闭后台探测，免得跑到本机真装的工具。
+var probeEnabled = true
 
 // ProbeResult 是一次 --version 的原始结果。
 type ProbeResult struct {
@@ -77,12 +79,15 @@ func clip(s string, n int) string {
 	return s
 }
 
-// Probe 按给定环境（执行者的白名单环境）自检这台装了的每个工具，返回不过的。
-func Probe(ctx context.Context, env map[string]string) []ProbeFailure {
+// Probe 按给定环境（执行者的白名单环境）自检目录中的工具，返回成功工具与失败证据。
+func Probe(ctx context.Context, env map[string]string, tools []workers.Tool) ProbeReport {
 	var mu sync.Mutex
 	var wg sync.WaitGroup
-	out := []ProbeFailure{}
-	for _, t := range probeTools {
+	out := ProbeReport{CLIs: map[string]CLI{}, Failed: []ProbeFailure{}}
+	if !probeEnabled {
+		return out
+	}
+	for _, t := range tools {
 		path, err := platform.LookPath(t.Exe, env)
 		if err != nil {
 			continue
@@ -92,7 +97,22 @@ func Probe(ctx context.Context, env map[string]string) []ProbeFailure {
 			defer wg.Done()
 			if reason, lines := ProbeFault(t.Exe, runVersion(ctx, path, env)); reason != "" {
 				mu.Lock()
-				out = append(out, ProbeFailure{Tool: t.Name, Reason: reason, Output: lines})
+				out.Failed = append(out.Failed, ProbeFailure{Tool: t.Name, Reason: reason, Output: lines})
+				mu.Unlock()
+			} else {
+				mu.Lock()
+				c := CLI{Installed: true}
+				home := env[platform.EnvKey(runtime.GOOS, "HOME")]
+				if runtime.GOOS == "windows" {
+					home = env["USERPROFILE"]
+				}
+				if home != "" {
+					c.LoggedIn = LoggedIn(t.Name, runtime.GOOS, func(rel string) bool {
+						_, err := os.Stat(filepath.Join(home, filepath.FromSlash(rel)))
+						return err == nil
+					})
+				}
+				out.CLIs[t.Name] = c
 				mu.Unlock()
 			}
 		}()
@@ -151,11 +171,11 @@ func runVersion(ctx context.Context, path string, env map[string]string) ProbeRe
 	return r
 }
 
-// probeMarks 把自检不过的翻成这台的标记（纯函数）；不认识的工具名丢掉（代理报的，只收 Tools 里的）。
-func probeMarks(failed []ProbeFailure) []workers.Mark {
+// probeMarks 把自检不过的翻成这台的标记（纯函数）；不认识的工具名丢掉（代理报的，只收 workers 工具目录里的）。
+func probeMarks(failed []ProbeFailure, tools []workers.Tool) []workers.Mark {
 	out := []workers.Mark{}
 	for _, f := range failed {
-		for _, t := range Tools {
+		for _, t := range tools {
 			if t.Name == f.Tool {
 				out = append(out, workers.Mark{Tool: f.Tool, Kind: workers.MarkProbe, Reason: clip(f.Reason, 300), Evidence: clip(f.Output, 300)})
 			}
@@ -164,21 +184,63 @@ func probeMarks(failed []ProbeFailure) []workers.Mark {
 	return out
 }
 
-// probeLocal 是本机（h1）的自检循环：服务启动时一轮，之后每 ProbeEvery 一轮。
+// probeLocal 是本机（h1）的自检循环：每 5 秒检查目录变化，变化或到 ProbeEvery 就实测。
 func probeLocal(ctx context.Context, env *app.Env) {
 	wenv := platform.WorkerEnv(runtime.GOOS, platform.EnvMap(os.Environ()))
+	var previous []workers.Tool
+	var due time.Time
 	for {
-		failed := Probe(ctx, wenv)
+		tools, err := workers.ToolCatalog(ctx, env.DB)
+		if err != nil {
+			env.Log.Warn("读取工具目录失败", "err", err)
+			return
+		}
+		if time.Now().Before(due) && slices.Equal(previous, tools) {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(5 * time.Second):
+			}
+			continue
+		}
+		report := Probe(ctx, wenv, tools)
+		previous, due = tools, time.Now().Add(ProbeEvery)
 		if ctx.Err() != nil {
 			return
 		}
-		if err := workers.SyncProbes(ctx, env.DB, Local, probeMarks(failed), store.Now()); err != nil && ctx.Err() == nil {
+		if err := recordProbe(ctx, env.DB, Local, report, tools); err != nil && ctx.Err() == nil {
 			env.Log.Warn("记本机自检结果失败", "err", err)
 		}
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(ProbeEvery):
+		case <-time.After(5 * time.Second):
 		}
 	}
+}
+
+// ProbeReport 同一轮上报成功工具与失败证据，未探测或没装的工具不在 CLIs 中。
+type ProbeReport struct {
+	CLIs   map[string]CLI `json:"clis"`
+	Failed []ProbeFailure `json:"failed"`
+}
+
+func recordProbe(ctx context.Context, db *store.DB, host string, report ProbeReport, tools []workers.Tool) error {
+	h, err := Get(ctx, db, host)
+	if err != nil {
+		return err
+	}
+	if h.Info == nil {
+		h.Info = &Info{}
+	}
+	h.Info.CLIs = map[string]CLI{}
+	for _, tool := range tools {
+		if c, ok := report.CLIs[tool.Name]; ok {
+			h.Info.CLIs[tool.Name] = c
+		}
+	}
+	if err := workers.SyncProbes(ctx, db, host, probeMarks(report.Failed, tools), store.Now()); err != nil {
+		return err
+	}
+	return touch(ctx, db, host, h.Info, nil)
 }

@@ -86,7 +86,7 @@ func init() {
 		return nil, false
 	}
 	pollWait = 300 * time.Millisecond
-	probeTools = nil // 代理与本机循环不跑本机真装的工具；TestProbe 自己换上假工具
+	probeEnabled = false // 代理与本机循环不跑本机真装的工具；TestProbe 自己换上假工具
 }
 
 type rig struct {
@@ -337,11 +337,14 @@ func TestReconnectReconcile(t *testing.T) {
 }
 
 // 这台上标了不可用的「工具+模型」：挑机器不再派给它，同一工具的别的模型照派；到期的不算。
-// 用本机 h1：本机不按上报的 CLIs 判装没装，结果不随跑测试的机器装了什么而变。
+// 用本机 h1，并提供假的实测结果，结果不随测试机器装了什么而变。
 func TestPickSkipsMarked(t *testing.T) {
 	g := newRig(t)
 	ctx := context.Background()
 	host := "h1"
+	if err := touch(ctx, g.env.DB, host, &Info{CLIs: map[string]CLI{"grok": {Installed: true}}}, nil); err != nil {
+		t.Fatal(err)
+	}
 	now := time.Now()
 	for _, m := range []workers.Mark{
 		{Tool: "grok", Model: "grok-4.6", Host: host, Kind: workers.SignalQuota, Reason: "额度用尽", Until: now.Add(time.Hour).UnixMilli(), Since: now.UnixMilli()},

@@ -36,6 +36,7 @@ type Rules struct {
 	EndpointAPI string         `yaml:"endpoint_api,omitempty" json:"endpoint_api,omitempty"`
 	EndpointKey string         `yaml:"endpoint_key,omitempty" json:"endpoint_key,omitempty"` // 凭据名，值分派任务时注入
 	Protocol    string         `yaml:"protocol,omitempty" json:"protocol,omitempty"`         // 只在 harness 层：cli
+	Usage       *UsageSpec     `yaml:"usage,omitempty" json:"usage,omitempty"`               // 从 JSON 日志取用量的字段路径
 	CLISpec     `yaml:",inline" json:"-"`
 }
 
@@ -157,6 +158,7 @@ func CheckProfile(name string, keys map[string]any) error {
 	layer, rest, _ := strings.Cut(name, "/")
 	var p []string
 	p = append(p, r.billingProblems()...)
+	p = append(p, r.usageProblems()...)
 	if r.Trust != "" && TrustLevel(r.Trust) < 0 {
 		p = append(p, "trust 只能是 "+strings.Join(Trusts, "、"))
 	}

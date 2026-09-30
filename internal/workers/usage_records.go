@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 
 	"github.com/liu-zhengdong/atrium/internal/store"
 )
 
 // RunUsage 解析整次日志并按当前档案结算；结果随 exit 保存，此后展示只读 exit。
+// 档案写了 usage 时按声明从日志取读数，否则用内置工具的 reader。
 func RunUsage(ctx context.Context, q store.Querier, task string, run Run) (Usage, error) {
 	t, err := ReadTrace(run.Worker, run.Log)
 	if err != nil {
@@ -17,6 +19,16 @@ func RunUsage(ctx context.Context, q store.Querier, task string, run Run) (Usage
 	w, err := Resolve(ctx, q, run.Worker)
 	if err != nil {
 		return Usage{}, err
+	}
+	if w.Rules.Usage != nil {
+		raw, err := os.ReadFile(run.Log)
+		if os.IsNotExist(err) {
+			return Charge(Usage{}, w.Rules), nil
+		}
+		if err != nil {
+			return Usage{}, err
+		}
+		return Charge(ExtractUsage(string(raw), *w.Rules.Usage), w.Rules), nil
 	}
 	if w.Spec.Tool == "claude" && run.Why == WhyResume && t.Usage.Cost != nil {
 		if err := resumeCost(ctx, q, task, run, &t); err != nil {

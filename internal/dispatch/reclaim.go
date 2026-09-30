@@ -21,6 +21,7 @@ const reclaimedKind = "worktree_reclaimed"
 type reclaimItem struct {
 	id               int64
 	task, repo, body string
+	workdir          string
 	launch, exit     string
 	remoteRunning    bool
 	remoteRun        int
@@ -68,6 +69,8 @@ func (d *dispatcher) reclaim(ctx context.Context) error {
 			if err := hosts.Reclaim(ctx, w.Host, hosts.ReclaimRequest{Task: it.task, Dir: w.Dir, Run: it.remoteRun}); err != nil {
 				return err
 			}
+		} else if it.repo == "" && (w.Dir == filepath.Join(TaskDir(d.env.Paths.Data, it.task), "work") || (it.workdir != "" && w.Dir == it.workdir)) {
+			// 指定工作地点与无仓库任务只回收临时文件，工作内容保留。
 		} else if filepath.IsAbs(w.Dir) && filepath.Clean(w.Dir) == filepath.Join(d.env.Paths.Data, "tasks", it.task, "repo") {
 			clone := ""
 			if it.repo != "" {
@@ -82,6 +85,9 @@ func (d *dispatcher) reclaim(ctx context.Context) error {
 			}
 		} else {
 			return fmt.Errorf("%s 登记目录不是本实例的任务仓库工作树，保留目录", it.task)
+		}
+		if err := worktree.RemoveTemp(filepath.Join(TaskDir(d.env.Paths.Data, it.task), "tmp")); err != nil {
+			return err
 		}
 		if err := ledger.Record(ctx, d.env.DB, it.task, reclaimedKind, actor, strconv.FormatInt(it.id, 10)); err != nil {
 			return err
@@ -147,7 +153,7 @@ func (d *dispatcher) reclaimBatch(ctx context.Context) ([]reclaimItem, error) {
 			args = append(args, status)
 		}
 	}
-	rows, err := d.env.DB.QueryContext(ctx, `SELECT e.id, e.task, t.repo, e.body,
+	rows, err := d.env.DB.QueryContext(ctx, `SELECT e.id, e.task, t.repo, e.body, COALESCE((SELECT dir FROM task_dirs WHERE task = e.task), ''),
 		COALESCE((SELECT body FROM task_events l WHERE l.task = e.task AND l.kind = 'launch' ORDER BY id DESC LIMIT 1), ''),
 		COALESCE((SELECT body FROM task_events x WHERE x.task = e.task AND x.kind = 'exit' ORDER BY id DESC LIMIT 1), ''),
 		EXISTS(SELECT 1 FROM host_runs h WHERE h.task = e.task AND h.exited_at IS NULL),
@@ -162,7 +168,7 @@ func (d *dispatcher) reclaimBatch(ctx context.Context) ([]reclaimItem, error) {
 	var items []reclaimItem
 	for rows.Next() {
 		var it reclaimItem
-		if err := rows.Scan(&it.id, &it.task, &it.repo, &it.body, &it.launch, &it.exit, &it.remoteRunning, &it.remoteRun); err != nil {
+		if err := rows.Scan(&it.id, &it.task, &it.repo, &it.body, &it.workdir, &it.launch, &it.exit, &it.remoteRunning, &it.remoteRun); err != nil {
 			rows.Close()
 			return nil, err
 		}

@@ -199,8 +199,9 @@ func ServiceEnv(goos string, base map[string]string) (env map[string]string, dro
 
 // WorkerEnv 是执行者进程的环境：系统基本、Go 编译选项与代理出网，不传 ATRIUM_*（执行者不该连到派它的服务）、
 // 凭据与身份类变量；固定加非交互标记与 ATRIUM_WORKER=1（命令行据此拒绝操作用户的服务）。
+// tempDir 非空时统一指定任务临时目录；非任务进程（负责人、自检）不传。
 // 任务声明的凭据由调用方在此之后逐个注入。
-func WorkerEnv(goos string, base map[string]string) map[string]string {
+func WorkerEnv(goos string, base map[string]string, tempDir ...string) map[string]string {
 	env := map[string]string{}
 	for k, v := range base {
 		if name := EnvKey(goos, k); baseAllowed(goos, name) {
@@ -209,6 +210,11 @@ func WorkerEnv(goos string, base map[string]string) map[string]string {
 	}
 	// 各工作树共用编译缓存；保留用户选项，再追加路径无关的编译规则。
 	env["GOFLAGS"] = strings.TrimSpace(env["GOFLAGS"] + " -trimpath")
+	if len(tempDir) > 0 && tempDir[0] != "" {
+		for _, key := range []string{"TMPDIR", "TMP", "TEMP"} {
+			env[key] = tempDir[0]
+		}
+	}
 	env["NO_COLOR"] = "1"
 	env["GIT_PAGER"] = "cat"
 	env["PAGER"] = "cat"

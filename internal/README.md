@@ -155,7 +155,7 @@ type Module struct {
 - 隔离实例（`config.Paths.Isolated`：数据目录不是缺省的那个）不自己拉起本机真实的模型进程：自动挑执行者（没写 `--worker`，含周期任务、审阅、换人）时内置工具一律不挑，只挑通用命令行执行者；写死 `--worker` 不拦（测试把假 `claude` 放进 PATH 就靠它）。负责人唤醒同理（`ATRIUM_LEADER_WAKE=1` 才开）。
 - 别的包要重新派：`dispatch.Enqueue(ctx, env, id, Options{…}, actor)`（即 task run，写队列行与 risk）；watch 经 `Hooks.Requeue`、周期任务经 `agenda.Enqueue`、审阅任务经 `gates.Enqueue`，都在 dispatch 的 Routes 里接上。交回（`gates.Bounce`）只转 queued、不写队列行：dispatch 对没有队列行的 queued 任务沿用上次拉起的执行者、机器（工作目录在那里；接不了就等或转受阻，不换机）、风险与凭据。
 - 远程：`workers.Request` 是纯数据，代理拿到后填 `Dir`，把提示词写到自己的任务目录并填本机的 `PromptFile`，用 `workers.Build(tool, req)` 算出同样的调用。
-- 工作树回收：dispatch 生命周期循环统一判 `Reclaimable`，`done`、`cancelled` 在执行者退出后回收；退回、受阻、可直接重派的 `failed` 保留。启动与后续循环按同一规则分页补清全部机器的工作树登记，离线代理上线后再清；回收成功记 `worktree_reclaimed`，不重复处理。只删运行时创建的仓库工作树和本地 `task-tN` 分支，prompt、run 日志及指定的工作地点保留。重开经原创建入口重建：已推送的任务分支还在就从它继续，否则从默认基线重新开始；终态里未提交、未推送的改动随工作树删除。merge 与 gates 的应用交付结果只负责合入，不再自行清理。早期缺 `host` 的 worktree、launch 按本机登记处理，仍核对本实例任务目录与分支归属；缺目录、无效登记或归属不符经 `ledger.EachTask` 记 `loop_error` 并保留，单件错误不停止服务、不重复重试。
+- 工作树回收：dispatch 生命周期循环统一判 `Reclaimable`，`done`、`cancelled` 在执行者退出后回收；退回、受阻、可直接重派的 `failed` 保留。启动与后续循环按同一规则分页补清全部机器的工作树登记，离线代理上线后再清；回收成功记 `worktree_reclaimed`，不重复处理。回收运行时创建的仓库工作树和本地 `task-tN` 分支，任务临时目录 `tasks/tN/tmp` 同步回收（包括只读文件）；无仓库任务也回收临时目录，工作内容、prompt、run 日志及指定的工作地点保留。重开经原创建入口重建：已推送的任务分支还在就从它继续，否则从默认基线重新开始；终态里未提交、未推送的改动随工作树删除。merge 与 gates 的应用交付结果只负责合入，不再自行清理。早期缺 `host` 的 worktree、launch 按本机登记处理，仍核对本实例任务目录与分支归属；缺目录、无效登记或归属不符经 `ledger.EachTask` 记 `loop_error` 并保留，单件错误不停止服务、不重复重试。
 
 #### 接入一个执行者
 
@@ -171,7 +171,7 @@ type Module struct {
 
 ### 子进程（`internal/platform`）
 
-- 子进程只经 `platform.Start(platform.Spec{Path, Args, Dir, Env, Stdout, Stderr, Detached})` 拉起；`Env` 必填。执行者用 `platform.WorkerEnv(runtime.GOOS, platform.EnvMap(os.Environ()))`（带 `ATRIUM_WORKER=1`，不带 `ATRIUM_*` 与凭据），任务声明的凭据在其后逐个注入，再加 `ATRIUM_SERVER`、`ATRIUM_WORKER_TOKEN`，并经 `platform.SelfOnPath` 把服务（远程是代理）这个二进制排进 PATH 最前。服务与执行者保留环境中的 `GOFLAGS`；`WorkerEnv` 统一追加 `-trimpath`，让本机、远程执行者与合入检查的 Go 编译跨工作树复用缓存。
+- 子进程只经 `platform.Start(platform.Spec{Path, Args, Dir, Env, Stdout, Stderr, Detached})` 拉起；`Env` 必填。任务执行者用 `platform.WorkerEnv(runtime.GOOS, platform.EnvMap(os.Environ()), tempDir)`，`tempDir` 是本机或代理任务目录下的 `tmp`，统一覆盖 `TMPDIR`、`TMP`、`TEMP`；负责人及自检不传临时目录。执行者环境带 `ATRIUM_WORKER=1`，不继承其他 `ATRIUM_*` 与凭据；任务声明的凭据在其后逐个注入，再加 `ATRIUM_SERVER`、`ATRIUM_WORKER_TOKEN`，并经 `platform.SelfOnPath` 把服务（远程是代理）这个二进制排进 PATH 最前。服务与执行者保留环境中的 `GOFLAGS`；`WorkerEnv` 统一追加 `-trimpath`，让本机、远程执行者与合入检查的 Go 编译跨工作树复用缓存。
 - 执行者一律 `Detached: true`：服务重启不影响它；结束用 `platform.KillTree(pid)`。拉起后必须 `Wait`（Unix 不 Wait 会留僵尸，`Alive` 会一直报活）。
 - 找程序用 `platform.LookPath(name, env)`（按子进程环境的 PATH/PATHEXT；`platform.EnvMap` 在 Windows 上把变量名落成大写）；shell 用 `platform.Shell(cmd)`。Windows 上找到的 `.cmd`/`.bat`（npm 装的 claude.cmd 等）由 `Start` 经 `cmd.exe /d /s /c` 拉起，参数带换行会报错。
 

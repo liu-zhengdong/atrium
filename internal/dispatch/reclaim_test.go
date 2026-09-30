@@ -28,6 +28,7 @@ func reclaimRig(t *testing.T) (*dispatcher, *fakegh.GH, context.Context) {
 	data := t.TempDir()
 	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(data, "gitconfig"))
 	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	t.Setenv("NO_LEADERS", "1")
 	t.Setenv("HOME", data)
 	t.Setenv("USERPROFILE", data)
 	db, err := store.Open(filepath.Join(data, "atrium.db"))
@@ -62,6 +63,11 @@ func reclaimTask(t *testing.T, d *dispatcher, gh *fakegh.GH, ctx context.Context
 	gh.Write(dir, ".venv/cache", "依赖")
 	gh.Write(TaskDir(d.env.Paths.Data, tk.ID), "prompt-1.md", "提示词")
 	gh.Write(TaskDir(d.env.Paths.Data, tk.ID), "run-1.log", "日志\n")
+	temp := filepath.Join(TaskDir(d.env.Paths.Data, tk.ID), "tmp")
+	gh.Write(temp, "cache", "临时文件")
+	if err := os.Chmod(filepath.Join(temp, "cache"), 0400); err != nil {
+		t.Fatal(err)
+	}
 	return tk, dir
 }
 
@@ -182,9 +188,19 @@ func TestReclaimEndingsAndReopen(t *testing.T) {
 }
 
 func TestMain(m *testing.M) {
-	if len(os.Args) > 1 && os.Args[1] == "--reclaim-fake-worker" {
+	if len(os.Args) > 1 && (os.Args[1] == "--reclaim-fake-worker" || os.Args[1] == "--reclaim-wait-worker") {
 		if err := os.WriteFile("continued.txt", []byte("继续干"), 0600); err != nil {
 			os.Exit(1)
+		}
+		temp := os.Getenv("TMPDIR")
+		if temp == "" || os.Getenv("TMP") != temp || os.Getenv("TEMP") != temp {
+			os.Exit(2)
+		}
+		if err := os.WriteFile(filepath.Join(temp, "readonly"), []byte("只读缓存"), 0o400); err != nil {
+			os.Exit(3)
+		}
+		if os.Args[1] == "--reclaim-wait-worker" {
+			time.Sleep(time.Minute)
 		}
 		fmt.Println("DONE\n交付结论：完成")
 		os.Exit(0)
@@ -259,6 +275,14 @@ func TestReclaimRuleAndOwnership(t *testing.T) {
 			}
 			if err := d.reclaim(ctx); err != nil {
 				t.Fatal(err)
+			}
+			_, tempErr := os.Stat(filepath.Join(TaskDir(d.env.Paths.Data, tk.ID), "tmp"))
+			if Reclaimable(status) {
+				if !os.IsNotExist(tempErr) {
+					t.Fatal("临时目录未回收", tempErr)
+				}
+			} else if tempErr != nil {
+				t.Fatal("可续跑任务临时目录被删", tempErr)
 			}
 			_, err := os.Stat(dir)
 			if status == ledger.Done || status == ledger.Cancelled {

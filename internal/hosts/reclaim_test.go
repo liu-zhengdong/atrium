@@ -68,6 +68,10 @@ func TestAgentReclaimAndRebuild(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitExit(t, g.env, "t1", run)
+	temp := filepath.Join(a.Dir, "tasks", "t1", "tmp")
+	if _, err := os.Stat(filepath.Join(temp, "readonly")); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.MkdirAll(filepath.Join(dir, "node_modules"), 0700); err != nil {
 		t.Fatal(err)
 	}
@@ -85,6 +89,9 @@ func TestAgentReclaimAndRebuild(t *testing.T) {
 	}
 	if _, err := os.Stat(dir); !os.IsNotExist(err) {
 		t.Fatalf("远程工作树还在：%v", err)
+	}
+	if _, err := os.Stat(temp); !os.IsNotExist(err) {
+		t.Fatalf("远程临时目录还在：%v", err)
 	}
 	clone := filepath.Join(a.Dir, "repos", CloneName(origin))
 	if out, err := a.workspaceRun(ctx, clone, "git", "branch", "--list", "task-t1"); err != nil || out != "" {
@@ -110,4 +117,45 @@ func TestAgentReclaimAndRebuild(t *testing.T) {
 		t.Fatalf("远程重建丢改动：%s %v", b, err)
 	}
 	t.Log("远程代理已回收工作树与分支，保留 prompt/run，第二轮实际执行者已在重建工作树退出")
+}
+
+func TestAgentTempWithoutRepo(t *testing.T) {
+	g := newRig(t)
+	g.task("t1")
+	a, cancel, done := g.agent(t.TempDir())
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Error("代理没停")
+		}
+	})
+	ctx, stop := context.WithTimeout(context.Background(), 20*time.Second)
+	defer stop()
+	as := Assignment{Task: "t1", Tool: "echo", Request: workers.Request{Prompt: "无仓库临时目录"}, Log: filepath.Join(g.env.Paths.Data, "task.log")}
+	run, _, dir, err := Launch(ctx, g.env, a.Cfg.Host, as)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitExit(t, g.env, "t1", run)
+	temp := filepath.Join(a.Dir, "tasks", "t1", "tmp")
+	if _, err := os.Stat(filepath.Join(temp, "readonly")); err != nil {
+		t.Fatal(err)
+	}
+	if err := Reclaim(ctx, a.Cfg.Host, ReclaimRequest{Task: "t1", Dir: dir, Run: run - 1}); err == nil {
+		t.Fatal("旧轮号回收了当前临时目录")
+	}
+	if _, err := os.Stat(temp); err != nil {
+		t.Fatal("拒绝旧指令后临时目录丢失", err)
+	}
+	if err := Reclaim(ctx, a.Cfg.Host, ReclaimRequest{Task: "t1", Dir: dir, Run: run}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(temp); !os.IsNotExist(err) {
+		t.Fatal("临时目录未回收", err)
+	}
+	if _, err := os.Stat(dir); err != nil {
+		t.Fatal("工作地点被删除", err)
+	}
 }

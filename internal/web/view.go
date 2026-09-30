@@ -183,7 +183,7 @@ func earlier(a, b ledger.Task) bool {
 	return na < nb
 }
 
-// startOfDay 是 now 所在本地日期的零点（Unix 毫秒），「今天上线」从这里算。
+// startOfDay 是 now 所在本地日期的零点（Unix 毫秒），「今天完成」从这里算。
 func startOfDay(now time.Time) int64 {
 	y, m, d := now.Date()
 	return time.Date(y, m, d, 0, 0, 0, 0, now.Location()).UnixMilli()

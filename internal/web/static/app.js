@@ -94,24 +94,24 @@ function hashWith(open) {
   return "#" + [page, tab, open].filter(Boolean).join("/");
 }
 
-/* 列表行；depth 是在任务树里的层级（缩进），who 缺省用行自带的 */
-function taskRow(r, timeFn = ago, depth = 0, who = r.who) {
+/* 列表行；depth 是在任务树里的层级（缩进），who 缺省用行自带的；给了 dept 就多一列部门名（今天页） */
+function taskRow(r, timeFn = ago, depth = 0, who = r.who, dept) {
   const lead = r.state === "done" ? icon.check : `<span class="dot ${esc(r.state)}"></span>`;
   return `<div class="row ${["done", "draft", "off"].includes(r.state) ? "done" : ""}" data-task="${esc(r.id)}" tabindex="0"${depth ? ` style="--d:${Math.min(depth, 4)}"` : ""}>
     ${lead}<div class="title"><span class="id">${esc(r.id)}</span>${esc(r.title)}</div>
-    <div class="who">${esc(who)}</div><div class="time num">${esc(timeFn(r.at))}</div></div>`;
+    ${dept === undefined ? "" : `<div class="dept">${esc(dept)}</div>`}<div class="who">${esc(who)}</div><div class="time num">${esc(timeFn(r.at))}</div></div>`;
 }
 
 /* 周期任务一行：多久一轮写在行尾标签，下一轮写在时间列；暂停范围内写「暂停中」。窄屏时间列隐藏，改用下一轮顶替标签（见 app.css）。
    dept：部门页，下面挂上一轮（点开是那件任务）；today：今天页，不挂上一轮，只在出了问题时把问题写在行尾。 */
 // 下一轮总写到钟点：窄屏只剩这一列，省了钟点就看不出几点跑。
 const schedWhen = s => s.paused ? "暂停中" : ahead(s.next_at);
-function schedRow(s, where, deptLabel = "") {
-  const tag = [deptLabel, s.cadence, s.kind].filter(Boolean).join(" · ");
+function schedRow(s, where) {
+  const tag = where === "today" ? s.cadence : [s.cadence, s.kind].filter(Boolean).join(" · "); // 今天页那一列只放多久一轮，类型在抽屉里
   const warn = where === "today" && s.trouble;
   const head = `<div class="row sched${warn ? " trouble" : ""}" data-sched="${esc(s.id)}" tabindex="0">${icon.repeat}
     <div class="title"><span class="id">${esc(s.id)}</span>${esc(s.title)}</div>
-    <div class="who">${warn ? `<span class="warn">上一轮派活失败</span>` : esc(tag)}</div><div class="time num">${esc(schedWhen(s))}</div></div>`;
+    ${where === "today" ? `<div class="dept">${esc(s.dept_name)}</div>` : ""}<div class="who">${warn ? `<span class="warn">上一轮派活失败</span>` : esc(tag)}</div><div class="time num">${esc(schedWhen(s))}</div></div>`;
   if (where !== "dept" || !s.last) return head;
   const who = s.trouble ? `<span class="warn">派活失败</span>` : esc(s.last.who) + (s.skips ? ` · <span class="warn">跳过 ${s.skips} 轮</span>` : "");
   return head + taskRow({ ...s.last, title: "上一轮" }, ago, 1).replace(/<div class="who">.*?<\/div>/, `<div class="who">${who}</div>`);
@@ -145,28 +145,28 @@ function taskGroups(rows) {
 function draftsLink(n) {
   const root = nav.depts.find(d => !d.parent);
   if (!n) return "";
-  return root ? ` · <a class="quiet" href="#${esc(root.id)}/tasks" data-drafts>草稿 ${n} 件</a>` : ` · 草稿 ${n} 件`;
+  return root ? `<a class="quiet" href="#${esc(root.id)}/tasks" data-drafts>草稿 ${n} 件</a>` : `草稿 ${n} 件`;
 }
 
-/* 今天页脉搏行开头的暂停说明；部门写名字，机器写 hN */
+/* 今天页标题下一行开头的暂停说明；部门写名字，机器写 hN */
 function pausedNote(paused) {
   if (!paused.length) return "";
   const what = paused.includes("all") ? "已全部暂停" : "部分暂停：" + esc(paused.map(deptName).join("、"));
-  return `<span class="paused">${icon.pause}${what}</span> · `;
+  return `<span class="paused">${icon.pause}${what}</span>`;
 }
 
-/* 今天 */
+/* 今天：节标题是唯一的一级标签，带件数；三张列表共用一套列（状态、标题、部门、谁或什么、时间），在整页对齐（见 app.css .today）。
+   标题下一行只放没有单独一节的：暂停、排队、草稿；都没有就不出这一行。 */
+const count = n => n ? `<span class="n num">${n}</span>` : "";
+function todayNote(d) {
+  const bits = [pausedNote(d.paused), d.queued ? `${d.queued} 件排队` : "", draftsLink(d.drafts)].filter(Boolean);
+  return bits.length ? `<p class="pulse-line">${bits.join(" · ")}</p>` : "";
+}
 function renderToday(d) {
-  let live = "";
-  if (!d.running.length) live = `<div class="empty">没有在做的</div>`;
-  else if (sortMode === "部门") {
-    const groups = new Map();
-    d.running.forEach(r => { const g = r.group || ""; if (!groups.has(g)) groups.set(g, []); groups.get(g).push(r); });
-    live = [...groups].map(([g, rows]) =>
-      `<div class="dept-h">${g ? `<a href="#${esc(g)}">${esc(deptName(g))}</a>` : "没归部门"}</div>${rows.map(r => taskRow(r)).join("")}`).join("");
-  } else {
-    live = [...d.running].sort((a, b) => a.at - b.at).map(r => taskRow(r)).join("");
-  }
+  // 按部门：一级部门按首次出现的先后排，组内保持原序；按用时：开始早的在前
+  const rank = new Map();
+  d.running.forEach(r => rank.has(r.group) || rank.set(r.group, rank.size));
+  const live = [...d.running].sort(sortMode === "部门" ? (a, b) => rank.get(a.group) - rank.get(b.group) : (a, b) => a.at - b.at);
   const asks = d.asks.length ? `<div class="asks">${d.asks.map(a => `
       <button class="ask ${esc(a.kind)}" data-open="${esc(a.id)}">
         <span class="kind">${icon[a.kind]}</span>
@@ -175,29 +175,29 @@ function renderToday(d) {
       </button>`).join("")}</div>` : `<div class="empty">没有等你的事</div>`;
   $("#page").innerHTML = `
     <h1 class="hello">今天</h1>
-    <p class="pulse-line">${pausedNote(d.paused)}<span class="dot ${d.running.length ? "run" : "idle"}"></span>&nbsp; ${d.running.length} 件在做 · ${d.queued} 件排队 · 今天上线 ${d.shipped.length} 件${draftsLink(d.drafts)}</p>
-    <section class="section"><h2>等你</h2>${asks}</section>
-    <section class="section"><h2>在做${d.running.length > 1 ? `<button class="sort" id="sort">按${sortMode}${icon.sort}</button>` : ""}</h2><div class="rows">${live}</div></section>
-    <section class="section"><h2>接下来 7 天</h2>${soonHTML(d.soon)}</section>
-    ${d.shipped.length ? `<section class="section"><h2>今天上线</h2><div class="rows">${shippedRows(d.shipped)}</div></section>` : ""}
-    <section class="section"><h2>三个目标</h2><dl class="facts"><dt>近 7 天</dt><dd>${esc(d.goals.week.text)}</dd><dt>累计</dt><dd>${esc(d.goals.all.text)}</dd></dl></section>`;
+    ${todayNote(d)}
+    <div class="today">
+    <section class="section"><h2>等你${count(d.asks.length)}</h2>${asks}</section>
+    <section class="section"><h2>在做${count(d.running.length)}${d.running.length > 1 ? `<button class="sort" id="sort">按${sortMode}${icon.sort}</button>` : ""}</h2>
+      ${live.length ? `<div class="rows">${live.map(r => taskRow(r, ago, 0, r.who, deptName(r.dept))).join("")}</div>` : `<div class="empty">没有在做的</div>`}</section>
+    <section class="section"><h2>接下来 7 天${count(d.soon.rows.length)}</h2>${soonHTML(d.soon)}</section>
+    ${d.shipped.length ? `<section class="section"><h2>今天完成${count(d.shipped.length)}</h2><div class="rows">${shippedRows(d.shipped)}</div></section>` : ""}
+    <section class="section"><h2>三个目标</h2><dl class="facts"><dt>近 7 天</dt><dd>${esc(d.goals.week.text)}</dd><dt>累计</dt><dd>${esc(d.goals.all.text)}</dd></dl></section>
+    </div>`;
 }
 
-/* 今天上线：先摆最近 5 件，其余折成一行（与任务树里「已结束 N 件」同一种折法） */
+/* 今天完成（含完成未上线的）：先摆最近 5 件，其余折成一行（与任务树里「已结束 N 件」同一种折法）；对勾已说明做完，行尾不写状态字 */
 const shipFold = 5;
 function shippedRows(rows) {
   const open = openKids.has("shipped"), rest = rows.length - shipFold;
-  return rows.slice(0, rest > 1 && !open ? shipFold : rows.length).map(r => taskRow(r, clock)).join("")
+  return rows.slice(0, rest > 1 && !open ? shipFold : rows.length).map(r => taskRow(r, clock, 0, "", deptName(r.dept))).join("")
     + (rest > 1 ? `<button class="row kfold" data-kids="shipped" aria-expanded="${open}">${icon.chev}<div class="title">${open ? "收起" : `还有 ${rest} 件`}</div></button>` : "");
 }
 
-/* 接下来 7 天：按一级部门分组，组内按下一轮先后；不在一级部门本身的，行尾带部门名 */
+/* 接下来 7 天：按下一轮先后 */
 function soonHTML(soon) {
   if (!soon.rows.length) return `<div class="empty">7 天内没有定期的事</div>`;
-  const groups = new Map();
-  soon.rows.forEach(s => { if (!groups.has(s.group)) groups.set(s.group, []); groups.get(s.group).push(s); });
-  return `<div class="rows">${[...groups].map(([g, rows]) => `<div class="dept-h"><a href="#${esc(g)}">${esc(deptName(g))}</a></div>`
-    + rows.map(s => schedRow(s, "today", s.org !== g ? s.dept_name : "")).join("")).join("")}</div>`
+  return `<div class="rows">${soon.rows.map(s => schedRow(s, "today")).join("")}</div>`
     + (soon.later ? `<div class="more">另有 ${soon.later} 条在 7 天以后</div>` : "");
 }
 

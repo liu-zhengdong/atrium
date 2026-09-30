@@ -30,7 +30,7 @@ type Row struct {
 	ID    string `json:"id"`
 	Title string `json:"title"`
 	Dept  string `json:"dept,omitempty"`
-	Group string `json:"group,omitempty"` // 今天页分组用的一级部门
+	Group string `json:"group,omitempty"` // 今天页「按部门」排序用的一级部门
 	State string `json:"state"`
 	Who   string `json:"who"`
 	At    int64  `json:"at"`             // 行尾时间：在做的是开始（最近变化）时间，完成的是结束时间
@@ -279,7 +279,6 @@ type Today struct {
 	Drafts  int          `json:"drafts"` // 草稿只给数，点开到根部门的任务页
 	Goals   ledger.Goals `json:"goals"`  // 三个目标的数（与 top 同一份）
 	Shipped []Row        `json:"shipped"`
-	Groups  []Pair       `json:"groups"` // 分组的一级部门 id 与名字
 	Paused  []string     `json:"paused"` // 暂停范围（all、oN、hN）；空表示没暂停
 	Soon    Soon         `json:"soon"`
 }
@@ -331,15 +330,9 @@ func loadToday(ctx context.Context, q store.Querier, now time.Time) (Today, erro
 	if err != nil {
 		return Today{}, err
 	}
-	out := Today{Asks: nonNil(asks), Queued: queued, Drafts: drafts, Goals: goals, Running: []Row{}, Shipped: []Row{}, Groups: []Pair{}, Paused: paused}
-	seen := map[string]bool{}
+	out := Today{Asks: nonNil(asks), Queued: queued, Drafts: drafts, Goals: goals, Running: []Row{}, Shipped: []Row{}, Paused: paused}
 	for _, t := range running {
-		r := toRow(t, ix.parents, nil)
-		out.Running = append(out.Running, r)
-		if r.Group != "" && !seen[r.Group] {
-			seen[r.Group] = true
-			out.Groups = append(out.Groups, Pair{r.Group, ix.name(r.Group)})
-		}
+		out.Running = append(out.Running, toRow(t, ix.parents, nil))
 	}
 	for _, t := range done {
 		out.Shipped = append(out.Shipped, toRow(t, ix.parents, nil))
@@ -537,7 +530,6 @@ type Sched struct {
 	ID       string `json:"id"`
 	Org      string `json:"org"`
 	DeptName string `json:"dept_name"`
-	Group    string `json:"group"`          // 今天页分组用的一级部门
 	Kind     string `json:"kind,omitempty"` // 体验巡检、调研才写；自定义的不写
 	Title    string `json:"title"`
 	Cadence  string `json:"cadence"` // 多久一轮（agenda.Cadence，与 schedule ls 同一份）
@@ -554,7 +546,7 @@ func toSched(ctx context.Context, q store.Querier, x agenda.Schedule, ix *orgInd
 	for id := x.Org; id != ""; id = ix.parents[id] {
 		chain = append(chain, id)
 	}
-	r := Sched{ID: x.ID, Org: x.Org, DeptName: ix.name(x.Org), Group: topGroup(ix.parents, x.Org), Title: x.Title,
+	r := Sched{ID: x.ID, Org: x.Org, DeptName: ix.name(x.Org), Title: x.Title,
 		Cadence: agenda.Cadence(x, time.Local), NextAt: x.NextAt, Paused: pause.Paused(paused, pause.Scope{Orgs: chain}),
 		Skips: x.Skips, Note: x.LastNote, Trouble: strings.Contains(x.LastNote, agenda.DispatchFailed)}
 	if x.Kind != "task" {

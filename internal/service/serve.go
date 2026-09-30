@@ -54,7 +54,7 @@ func Serve(mods []app.Module, getenv func(string) string) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(paths.Data, 0o700); err != nil {
+	if err := platform.PrivateDir(paths.Data); err != nil {
 		return err
 	}
 	replacing, _ := strconv.Atoi(getenv(replaceEnv))
@@ -179,6 +179,9 @@ func listen(addr string, wait time.Duration) (net.Listener, error) {
 // ensureToken 读用户令牌；没有就生成一个。
 func ensureToken(p config.Paths) (string, error) {
 	if t, err := config.ReadToken(p); err == nil && t != "" {
+		if err := platform.RestrictFile(p.Token()); err != nil {
+			return "", err
+		}
 		return t, nil
 	}
 	return writeToken(p)
@@ -192,7 +195,7 @@ func writeToken(p config.Paths) (string, error) {
 	}
 	token := hex.EncodeToString(buf)
 	tmp := p.Token() + ".tmp"
-	if err := os.WriteFile(tmp, []byte(token+"\n"), 0o600); err != nil {
+	if err := platform.WritePrivateFile(tmp, []byte(token+"\n")); err != nil {
 		return "", fmt.Errorf("写用户令牌失败：%w", err)
 	}
 	return token, os.Rename(tmp, p.Token())
@@ -223,7 +226,7 @@ func spawnServe(p config.Paths, base map[string]string, replacing int) (pid int,
 		env[replaceEnv] = strconv.Itoa(replacing)
 	}
 	env["ATRIUM_DATA"] = p.Data
-	if err := os.MkdirAll(p.Data, 0o700); err != nil {
+	if err := platform.PrivateDir(p.Data); err != nil {
 		return 0, nil, nil, err
 	}
 	logf, err := os.OpenFile(p.Log(), os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)

@@ -37,9 +37,9 @@ type Row struct {
 	Kids  []Row  `json:"kids,omitempty"` // 子任务（按建立先后）；只有部门页排成树
 }
 
-// toRow 是一件任务的列表行；deps 是它的依赖（只有没派的任务用得上）。
-func toRow(t ledger.Task, parents map[string]string, deps []ledger.DepState) Row {
-	r := Row{ID: t.ID, Title: t.Title, Dept: t.Org, State: state(t), Who: who(t, deps), At: t.UpdatedAt}
+// toRow 是一件任务的列表行；h 是它的等待对象（watch.HolderOf）。
+func toRow(t ledger.Task, parents map[string]string, h watch.Holder) Row {
+	r := Row{ID: t.ID, Title: t.Title, Dept: t.Org, State: state(t, h), Who: who(t, h), At: t.UpdatedAt}
 	if t.FinishedAt != nil {
 		r.At = *t.FinishedAt
 	}
@@ -49,16 +49,49 @@ func toRow(t ledger.Task, parents map[string]string, deps []ledger.DepState) Row
 	return r
 }
 
-// rowOf 是 toRow 加上查依赖：没派的任务才查，别的状态行尾不写在等谁。
-func rowOf(ctx context.Context, q store.Querier, t ledger.Task, parents map[string]string) (Row, error) {
-	if t.Status != ledger.Todo {
-		return toRow(t, parents, nil), nil
+// rowOf 是 toRow 加上判定等待对象要的事实：待派、排队的查依赖；子任务数 kids 由调用方从已加载的任务里数。
+// 行尾不写负责人是谁，所以不取 Owner。
+func rowOf(ctx context.Context, q store.Querier, t ledger.Task, parents map[string]string, kids kidCount) (Row, error) {
+	f := watch.Facts{Task: t, OpenChildren: kids.open, Children: kids.all}
+	if t.Status == ledger.Todo || t.Status == ledger.Queued {
+		var err error
+		if f.Deps, err = ledger.Deps(ctx, q, t.ID); err != nil {
+			return Row{}, err
+		}
 	}
-	deps, err := ledger.Deps(ctx, q, t.ID)
-	if err != nil {
-		return Row{}, err
+	return toRow(t, parents, watch.HolderOf(f)), nil
+}
+
+// looseRow 是零散加载的一件任务的行（抽屉里的上级与依赖、定时任务的各轮）：子任务没加载，待派的单独数一次。
+func looseRow(ctx context.Context, q store.Querier, t ledger.Task, parents map[string]string) (Row, error) {
+	var kids kidCount
+	if t.Status == ledger.Todo {
+		var err error
+		if kids.open, kids.all, err = ledger.Children(ctx, q, t.ID); err != nil {
+			return Row{}, err
+		}
 	}
-	return toRow(t, parents, deps), nil
+	return rowOf(ctx, q, t, parents, kids)
+}
+
+// kidCount 是一件任务的直接子任务数：没结束的与全部。
+type kidCount struct{ open, all int }
+
+// countKids 从已加载的任务里数每件任务的直接子任务；调用方要保证加载了所数父任务的全部子任务。
+func countKids(tasks []ledger.Task) map[string]kidCount {
+	out := map[string]kidCount{}
+	for _, t := range tasks {
+		if t.Parent == "" {
+			continue
+		}
+		c := out[t.Parent]
+		c.all++
+		if !t.Status.Finished() {
+			c.open++
+		}
+		out[t.Parent] = c
+	}
+	return out
 }
 
 // DeptBrief 是侧栏与卡片里的部门。
@@ -347,11 +380,12 @@ func loadToday(ctx context.Context, q store.Querier, now time.Time) (Today, erro
 		return Today{}, err
 	}
 	out := Today{Asks: nonNil(asks), Queued: queued, Drafts: drafts, Goals: goals, Running: []Row{}, Shipped: []Row{}, Paused: paused}
+	// 在做的、完成的不看依赖和子任务，等待对象只凭任务自己就判得出。
 	for _, t := range running {
-		out.Running = append(out.Running, toRow(t, ix.parents, nil))
+		out.Running = append(out.Running, toRow(t, ix.parents, watch.HolderOf(watch.Facts{Task: t})))
 	}
 	for _, t := range done {
-		out.Shipped = append(out.Shipped, toRow(t, ix.parents, nil))
+		out.Shipped = append(out.Shipped, toRow(t, ix.parents, watch.HolderOf(watch.Facts{Task: t})))
 	}
 	if out.Soon, err = loadSoon(ctx, q, ix, paused, now); err != nil {
 		return Today{}, err
@@ -574,7 +608,7 @@ func toSched(ctx context.Context, q store.Querier, x agenda.Schedule, ix *orgInd
 		if err != nil {
 			return Sched{}, err
 		}
-		last, err := rowOf(ctx, q, t, ix.parents)
+		last, err := looseRow(ctx, q, t, ix.parents)
 		if err != nil {
 			return Sched{}, err
 		}
@@ -618,7 +652,7 @@ func loadSchedule(ctx context.Context, q store.Querier, id string) (SchedDetail,
 		return SchedDetail{}, err
 	}
 	for _, t := range rounds {
-		r, err := rowOf(ctx, q, t, ix.parents)
+		r, err := looseRow(ctx, q, t, ix.parents)
 		if err != nil {
 			return SchedDetail{}, err
 		}
@@ -680,9 +714,10 @@ func deptTasks(ctx context.Context, q store.Querier, ix *orgIndex, id string) ([
 			}
 		}
 	}
+	kids := countKids(tasks) // 每件列出的任务都补了整棵子树，子任务数是全的
 	out := make([]Row, len(tasks))
 	for i, t := range tasks {
-		if out[i], err = rowOf(ctx, q, t, ix.parents); err != nil {
+		if out[i], err = rowOf(ctx, q, t, ix.parents, kids[t.ID]); err != nil {
 			return nil, err
 		}
 	}
@@ -811,10 +846,11 @@ func loadTask(ctx context.Context, q store.Querier, id string) (TaskDetail, erro
 	if err != nil {
 		return TaskDetail{}, err
 	}
-	out := TaskDetail{Task: t, Steps: Steps, Step: step(t), State: state(t)}
-	if out.Holder, err = holderText(ctx, q, t); err != nil {
-		return out, err
+	h, err := holderOf(ctx, q, t)
+	if err != nil {
+		return TaskDetail{}, err
 	}
+	out := TaskDetail{Task: t, Steps: Steps, Step: step(t), State: state(t, h), Holder: holderText(t, h)}
 	if err := relations(ctx, q, &out); err != nil {
 		return out, err
 	}
@@ -889,7 +925,7 @@ func relations(ctx context.Context, q store.Querier, d *TaskDetail) error {
 		if err != nil {
 			return Row{}, err
 		}
-		return rowOf(ctx, q, x, nil)
+		return looseRow(ctx, q, x, nil)
 	}
 	if t.Parent != "" {
 		p, err := row(t.Parent)
@@ -903,11 +939,12 @@ func relations(ctx context.Context, q store.Querier, d *TaskDetail) error {
 		return err
 	}
 	d.Kids = []Row{}
+	kids := countKids(sub)
 	for _, k := range sub[1:] {
 		if k.Parent != t.ID {
 			continue
 		}
-		r, err := rowOf(ctx, q, k, nil)
+		r, err := rowOf(ctx, q, k, nil, kids[k.ID])
 		if err != nil {
 			return err
 		}
@@ -946,33 +983,35 @@ func relations(ctx context.Context, q store.Querier, d *TaskDetail) error {
 	return nil
 }
 
-// holderText 是「现在在等谁」：没结束的任务用 watch 的等待对象判定（与 top、statusline 同一份），
-// 结束了的按结果说。
-func holderText(ctx context.Context, q store.Querier, t ledger.Task) (string, error) {
+// holderOf 是任务详情的等待对象：取齐事实交给 watch.HolderOf（与 top、statusline 同一份判定）。
+func holderOf(ctx context.Context, q store.Querier, t ledger.Task) (watch.Holder, error) {
+	f := watch.Facts{Task: t}
+	var err error
+	if f.Owner, err = org.Recipient(ctx, q, t.Org); err != nil {
+		return watch.Holder{}, err
+	}
+	if f.Deps, err = ledger.Deps(ctx, q, t.ID); err != nil {
+		return watch.Holder{}, err
+	}
+	if f.OpenChildren, f.Children, err = ledger.Children(ctx, q, t.ID); err != nil {
+		return watch.Holder{}, err
+	}
+	return watch.HolderOf(f), nil
+}
+
+// holderText 是「现在在等谁」：没结束的按等待对象说，结束了的按结果说。
+func holderText(t ledger.Task, h watch.Holder) string {
 	if t.Status.Finished() && t.Status != ledger.Failed {
-		return finishedText(t), nil
+		return finishedText(t)
 	}
-	owner, err := org.Recipient(ctx, q, t.Org)
-	if err != nil {
-		return "", err
-	}
-	deps, err := ledger.Deps(ctx, q, t.ID)
-	if err != nil {
-		return "", err
-	}
-	open, children, err := ledger.Children(ctx, q, t.ID)
-	if err != nil {
-		return "", err
-	}
-	h := watch.HolderOf(watch.Facts{Task: t, Owner: owner, Deps: deps, OpenChildren: open, Children: children})
 	if h.Who == "" {
-		return h.Text, nil
+		return h.Text
 	}
 	who := h.Who
 	if who == org.Secretary {
 		who = "秘书"
 	}
-	return who + "：" + h.Text, nil
+	return who + "：" + h.Text
 }
 
 // ChoiceDetail 是选项单抽屉：agenda 的选项单加上部门名。

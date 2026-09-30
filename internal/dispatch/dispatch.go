@@ -437,15 +437,11 @@ type tellRow struct {
 	Text string
 }
 
-// tells 取捎话：pendingOnly 时只取 upto 之后、还没即时送到的。
-func tells(ctx context.Context, q store.Querier, task string, upto int64, pendingOnly bool) ([]tellRow, error) {
-	query := `SELECT id, body FROM (SELECT id, body FROM task_events WHERE task = ? AND kind = 'tell' ORDER BY id DESC LIMIT 20) ORDER BY id`
-	args := []any{task}
-	if pendingOnly {
-		query = `SELECT id, body FROM task_events WHERE task = ? AND kind = 'tell' AND id > ?
-			AND CAST(id AS TEXT) NOT IN (SELECT body FROM task_events WHERE task = ? AND kind = 'tell_sent') ORDER BY id LIMIT 50`
-		args = []any{task, upto, task}
-	}
+// tells 只取 upto 之后、还没即时送到的捎话。
+func tells(ctx context.Context, q store.Querier, task string, upto int64) ([]tellRow, error) {
+	query := `SELECT id, body FROM task_events WHERE task = ? AND kind = 'tell' AND id > ?
+		AND CAST(id AS TEXT) NOT IN (SELECT body FROM task_events WHERE task = ? AND kind = 'tell_sent') ORDER BY id LIMIT 50`
+	args := []any{task, upto, task}
 	rows, err := q.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
@@ -536,7 +532,7 @@ func (d *dispatcher) launch(ctx context.Context, t ledger.Task, o launchOpts) er
 		return err
 	}
 	secrets := o.Secrets
-	in := PromptInput{Task: t.ID, Org: t.Org, Title: t.Title, Detail: t.Detail, Profile: o.W.Body, Repo: t.Repo, Dir: t.Dir, Branch: branch}
+	in := PromptInput{Task: t.ID, Org: t.Org, Title: t.Title, Profile: o.W.Body, Repo: t.Repo, Dir: t.Dir, Branch: branch}
 	if in.Origin, err = gates.Origin(ctx, gates.NewExec(), t.Repo); err != nil {
 		return err
 	}
@@ -563,13 +559,10 @@ func (d *dispatcher) launch(ctx context.Context, t ledger.Task, o launchOpts) er
 	if in.Skills, err = skillIndex(ctx, d.env, t.Skill); err != nil {
 		return err
 	}
-	all, err := tells(ctx, db, t.ID, 0, false)
+	var upto int64
+	in.Detail, upto, err = ledger.Brief(ctx, db, t)
 	if err != nil {
 		return err
-	}
-	var upto int64
-	for _, tr := range all {
-		in.Tells, upto = append(in.Tells, tr.Text), tr.ID
 	}
 	if in.Bounces, err = bounceNotes(ctx, db, t.ID); err != nil {
 		return err
@@ -848,7 +841,7 @@ func (d *dispatcher) exited(ctx context.Context, p *proc, code int) error {
 	if err != nil && !os.IsNotExist(err) {
 		return err
 	}
-	pending, err := tells(ctx, db, p.task, p.run.TellsUpto, true)
+	pending, err := tells(ctx, db, p.task, p.run.TellsUpto)
 	if err != nil {
 		return err
 	}

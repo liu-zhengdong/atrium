@@ -455,7 +455,11 @@ func (g *Gate) startReview(ctx context.Context, t ledger.Task) error {
 	if w.Remote() {
 		dir = ""
 	}
-	brief := ReviewBrief(t.ID, t.Title, repo, pr.PR, dir, pr.Base, why, last.Facts.Diff, t.Detail)
+	detail, _, err := ledger.Brief(ctx, g.DB, t)
+	if err != nil {
+		return err
+	}
+	brief := ReviewBrief(t.ID, t.Title, repo, pr.PR, dir, pr.Base, why, last.Facts.Diff, detail)
 	rt, err := ledger.Add(ctx, g.DB, ledger.NewTask{Title: Clip("审阅 "+t.ID+"："+t.Title, 200), Detail: brief,
 		Parent: t.ID, Org: t.Org, Priority: t.Priority}, Actor)
 	if err != nil {

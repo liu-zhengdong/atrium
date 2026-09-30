@@ -160,10 +160,10 @@ func TestTries(t *testing.T) {
 
 func TestBuildPrompt(t *testing.T) {
 	p := BuildPrompt(PromptInput{Task: "t3", Org: "o2", Title: "修登录", Detail: "详述", Global: "## 用户的全局原则\n\n先给结论\n", Points: []string{"k1（o1）简洁——整体更简单"},
-		Skill: "fix", Skills: "## 技能索引（Atrium 全部技能）\n\n- web：网页\n", Profile: "先跑相关测试", Tells: []string{"改用 A 方案"}, Bounces: []string{"没有 PR"},
+		Skill: "fix", Skills: "## 技能索引（Atrium 全部技能）\n\n- web：网页\n", Profile: "先跑相关测试", Bounces: []string{"没有 PR"},
 		Repo: "a/b", Branch: "task-t3", Guide: "不要用 git stash"})
 	for _, want := range []string{"# 任务 t3：修登录", "- k1（o1）简洁——整体更简单", "先跑相关测试", "atrium material ls mN 取正文",
-		"- 改用 A 方案", "- 没有 PR", "分支 task-t3", "端到端验证", "隔离实例", "凭据不打印", "## 这个仓库的约定", "不要用 git stash", "atrium material add o2 <目录>", "`交付结论：完成`"} {
+		"- 没有 PR", "分支 task-t3", "端到端验证", "隔离实例", "凭据不打印", "## 这个仓库的约定", "不要用 git stash", "atrium material add o2 <目录>", "`交付结论：完成`"} {
 		if !strings.Contains(p, want) {
 			t.Errorf("提示词缺 %q：\n%s", want, p)
 		}

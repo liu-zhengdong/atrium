@@ -1,52 +1,39 @@
 :root{
-  --base:#ECEEEC; --island:#FFFFFF; --raise:#F5F6F4; --hover:#EEF0EE;
-  --ink:#1B1F1D; --ink2:#5C635F; --ink3:#9AA19C; --line:#E3E6E3;
-  --accent:#23625A; --accent-soft:#E3EFEC;
-  --wait:#B7791F; --wait-soft:#FBF1DF; --bad:#C2413A; --bad-soft:#FBE8E6; --ok:#2F7D4F;
-  --shadow:0 1px 2px rgba(20,30,25,.05),0 8px 28px rgba(20,30,25,.06);
-  --drawer-shadow:-12px 0 40px rgba(20,30,25,.10);
+  /* 颜色一处定：light-dark(浅色, 深色)，跟 color-scheme 走；跟随系统，手动切换时 app.js 设 data-theme */
+  color-scheme:light dark;
+  --base:light-dark(#F3F2EE,#141414); --island:light-dark(#FFFFFF,#1C1C1B); --raise:light-dark(#F6F5F1,#252523); --hover:light-dark(#ECEAE4,#2E2D2B);
+  --ink:light-dark(#141414,#EDEBE6); --ink2:light-dark(#5F5D58,#A9A69F); --ink3:light-dark(#8A8882,#716F6A); --line:light-dark(#E7E5DF,#302F2C);
+  /* 橙色只给要你处理的事；--user-ink 是橙色的字和图标，浅色下白字压在上面也到 4.5:1 */
+  --user:light-dark(#FF5A1F,#FF6A33); --user-ink:light-dark(#D5430C,#FF7A45); --user-soft:light-dark(#FFEEE6,#3A2219);
+  --bad:light-dark(#C8283F,#F07080); --bad-soft:light-dark(#FBE9EC,#3B1F24);
+  --shadow:0 1px 2px light-dark(rgba(20,20,20,.04),rgba(0,0,0,.3)),0 8px 28px light-dark(rgba(20,20,20,.05),rgba(0,0,0,.25));
+  --drawer-shadow:-12px 0 40px light-dark(rgba(20,20,20,.08),rgba(0,0,0,.4));
   --sans:"Mona Sans VF",-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans Backtick Fix","Noto Sans",Helvetica,Arial,sans-serif,"Apple Color Emoji","Segoe UI Emoji";
-  --mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+  --mono:ui-monospace,"SF Mono",SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
 }
-@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
-  color-scheme:dark;
-  --base:#161917; --island:#1F2320; --raise:#262B28; --hover:#2A2F2C;
-  --ink:#E7EAE8; --ink2:#A4ACA7; --ink3:#6E7671; --line:#30352F;
-  --accent:#6FC2B4; --accent-soft:#1F3431;
-  --wait:#E0A84E; --wait-soft:#3A2F1D; --bad:#E77B72; --bad-soft:#3B2321; --ok:#6BC28E;
-  --shadow:0 1px 2px rgba(0,0,0,.3),0 8px 28px rgba(0,0,0,.25);
-  --drawer-shadow:-12px 0 40px rgba(0,0,0,.4);
-}}
-:root[data-theme="dark"]{
-  color-scheme:dark;
-  --base:#161917; --island:#1F2320; --raise:#262B28; --hover:#2A2F2C;
-  --ink:#E7EAE8; --ink2:#A4ACA7; --ink3:#6E7671; --line:#30352F;
-  --accent:#6FC2B4; --accent-soft:#1F3431;
-  --wait:#E0A84E; --wait-soft:#3A2F1D; --bad:#E77B72; --bad-soft:#3B2321; --ok:#6BC28E;
-  --shadow:0 1px 2px rgba(0,0,0,.3),0 8px 28px rgba(0,0,0,.25);
-  --drawer-shadow:-12px 0 40px rgba(0,0,0,.4);
-}
+:root[data-theme="light"]{color-scheme:light}
+:root[data-theme="dark"]{color-scheme:dark}
 *{box-sizing:border-box}
 html,body{height:100%}
 body{margin:0;background:var(--base);color:var(--ink);font:14px/1.55 var(--sans);-webkit-font-smoothing:antialiased}
 button{font:inherit;color:inherit;background:none;border:0;cursor:pointer;padding:0}
 a{color:inherit;text-decoration:none}
-:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:6px}
+:focus-visible{outline:2px solid var(--ink);outline-offset:2px;border-radius:6px}
 .id{font:12px/1 var(--mono);color:var(--ink3);letter-spacing:.01em}
-.num{font-family:var(--mono);font-variant-numeric:tabular-nums}
+.num{font-variant-numeric:tabular-nums} /* 数字、时间、计数用正文字体的等宽数字；等宽字体只留给编号、命令、代码 */
 
 /* 设计稿 ~/Atrium/design/atrium-ui.html 的只读版。 */
 /* 外壳：侧栏铺在底板上，主岛浮起 */
 .app{display:flex;height:100%;padding:8px 8px 8px 0}
 .side{width:236px;flex:none;display:flex;flex-direction:column;padding:14px 10px 10px 14px;gap:18px;overflow-y:auto}
-.brand{display:flex;align-items:center;gap:10px;padding:2px 6px;font-weight:600;letter-spacing:.02em}
-.brand i{width:22px;height:22px;border-radius:7px;background:var(--accent);display:grid;place-items:center;color:var(--island);font-style:normal;font-size:12px}
+.brand{display:flex;align-items:center;gap:10px;padding:2px 6px;font-size:15px;font-weight:600}
+.brand img,.mobile-top img{width:20px;height:20px;flex:none;display:block} /* logo 中心和导航图标同一条竖线 */
 .nav{display:flex;flex-direction:column;gap:2px}
 .nav a{display:flex;align-items:center;gap:10px;padding:7px 8px;border-radius:8px;color:var(--ink)}
 .nav a:hover{background:var(--hover)}
 .nav a.on{background:var(--island);box-shadow:var(--shadow)}
 .nav svg{width:16px;height:16px;flex:none;color:var(--ink2)}
-.nav .count{margin-left:auto;font:500 11px/1 var(--mono);color:var(--island);background:var(--wait);border-radius:10px;padding:3px 6px}
+.nav .count{margin-left:auto;font:600 11px/1 var(--sans);color:var(--island);background:var(--user-ink);border-radius:10px;padding:3px 6px}
 .group{font-size:12px;color:var(--ink3);padding:0 8px 4px}
 .tree a{padding:5px 8px}
 .tree .l1{padding-left:24px}.tree .l2{padding-left:40px}
@@ -61,16 +48,17 @@ a{color:inherit;text-decoration:none}
 
 /* 状态点 */
 .dot{width:8px;height:8px;border-radius:50%;flex:none;display:inline-block;background:var(--ink3)}
-.dot.run{background:var(--accent);box-shadow:0 0 0 0 var(--accent);animation:pulse 2.4s infinite}
-.dot.draft{background:transparent;border:1.5px dashed var(--ink3)}
-.dot.wait{background:var(--wait)}.dot.bad{background:var(--bad)}.dot.idle{background:transparent;border:1.5px solid var(--ink3)}
-@keyframes pulse{0%{box-shadow:0 0 0 0 color-mix(in srgb,var(--accent) 45%,transparent)}70%{box-shadow:0 0 0 7px transparent}100%{box-shadow:0 0 0 0 transparent}}
+/* 靠形状区分，不靠颜色：待派空心圈、草稿虚线圈、在跑带间隙的半满圆、完成对勾 */
+.dot.run{width:12px;height:12px;padding:1.5px;background:conic-gradient(var(--ink) 0 50%,transparent 0) content-box;border:1.5px solid var(--ink);animation:pulse 2.4s infinite}
+.dot.draft{width:10px;height:10px;background:transparent;border:1.5px dashed var(--ink3)}
+.dot.wait{background:var(--user)}.dot.bad{background:var(--bad)}.dot.idle{width:10px;height:10px;background:transparent;border:1.5px solid var(--ink3)}
+@keyframes pulse{0%{box-shadow:0 0 0 0 color-mix(in srgb,var(--ink) 25%,transparent)}70%{box-shadow:0 0 0 6px transparent}100%{box-shadow:0 0 0 0 transparent}}
 @media (prefers-reduced-motion:reduce){.dot.run{animation:none}}
 
 /* 今天 */
-.hello{font-size:26px;font-weight:600;letter-spacing:.01em;margin:0;text-wrap:balance}
+.hello{font-size:28px;font-weight:600;margin:0;text-wrap:balance}
 .pulse-line{margin:8px 0 0;color:var(--ink2)}
-.pulse-line .paused{color:var(--wait);font-weight:500;white-space:nowrap}.pulse-line .paused svg{width:13px;height:13px;margin-right:5px;vertical-align:-1px}
+.pulse-line .paused{color:var(--user-ink);font-weight:500;white-space:nowrap}.pulse-line .paused svg{width:13px;height:13px;margin-right:5px;vertical-align:-1px}
 a.quiet{color:inherit}a.quiet:hover{color:var(--ink)}
 .group-h{padding-top:22px}.group-h .num{color:var(--ink3)}
 .draft-detail{margin:16px 0 0;font-size:13px;line-height:1.7;white-space:pre-wrap}
@@ -95,9 +83,8 @@ a.quiet{color:inherit}a.quiet:hover{color:var(--ink)}
 .ask:hover{background:var(--hover)}
 .ask .kind{width:30px;height:30px;border-radius:9px;display:grid;place-items:center;flex:none}
 .ask .kind svg{width:16px;height:16px}
-.ask.choose .kind,.ask.accept .kind{background:var(--wait-soft);color:var(--wait)}
+.ask.choose .kind,.ask.accept .kind,.ask.escalate .kind{background:var(--user-soft);color:var(--user-ink)}
 .ask.stuck .kind,.ask.worker .kind{background:var(--bad-soft);color:var(--bad)}
-.ask.escalate .kind{background:var(--wait-soft);color:var(--wait)}
 .ask .t{font-weight:500}
 .ask .s{color:var(--ink2);font-size:13px}
 .ask .meta{margin-left:auto;text-align:right;flex:none;color:var(--ink3);font-size:12px}
@@ -120,7 +107,7 @@ a.quiet{color:inherit}a.quiet:hover{color:var(--ink)}
 .kfold:hover{color:var(--ink2)}
 .kfold .chev{justify-self:center}
 .kfold[aria-expanded="true"] .chev{transform:rotate(90deg)}
-.check{color:var(--ok);width:14px;height:14px}
+.check{color:var(--ink3);width:14px;height:14px}
 .chev{width:12px;height:12px;flex:none;transition:transform .15s}
 .more{color:var(--ink3);font-size:13px;padding:8px 0 0}
 
@@ -128,10 +115,10 @@ a.quiet{color:inherit}a.quiet:hover{color:var(--ink)}
 /* 部门 */
 .crumb{font-size:13px;color:var(--ink3);display:flex;gap:6px;flex-wrap:wrap}
 .crumb a:hover{color:var(--ink)}
-.dept-title{font-size:30px;font-weight:600;margin:10px 0 6px;letter-spacing:.01em}
+.dept-title{font-size:28px;font-weight:600;margin:10px 0 6px}
 .dept-what{color:var(--ink2);max-width:600px;margin:0}
 .lead{display:inline-flex;align-items:center;gap:10px;margin-top:18px;padding:6px 12px 6px 6px;border-radius:20px;background:var(--raise);font-size:13px}
-.lead b{width:24px;height:24px;border-radius:50%;background:var(--accent-soft);color:var(--accent);display:grid;place-items:center;font-weight:600;font-size:11px}
+.lead b{width:24px;height:24px;border-radius:50%;background:var(--hover);color:var(--ink);display:grid;place-items:center;font-weight:600;font-size:11px}
 .lead span{color:var(--ink2)}
 button.lead:hover{background:var(--hover)}
 .lead .chev{color:var(--ink3)}
@@ -145,7 +132,7 @@ button.lead:hover{background:var(--hover)}
 .tabs button{padding:6px 12px;border-radius:8px;color:var(--ink2)}
 .tabs button:hover{background:var(--raise)}
 .tabs button.on{background:var(--raise);color:var(--ink);font-weight:500}
-.tabs .cap{margin-left:auto;align-self:center;font:12px var(--mono);color:var(--ink3)}
+.tabs .cap{margin-left:auto;align-self:center;font-size:12px;font-variant-numeric:tabular-nums;color:var(--ink3)}
 .rule{display:grid;grid-template-columns:22px 1fr auto;gap:10px;padding:10px 0}
 .rule .i{font:12px/22px var(--mono);color:var(--ink3)}
 .rule .w{color:var(--ink3);font-size:12px}
@@ -161,6 +148,7 @@ button.lead:hover{background:var(--hover)}
 @media (prefers-reduced-motion:reduce){.drawer,.scrim{transition:none}}
 .dhead{display:flex;align-items:center;gap:10px;padding:18px 20px 0}
 .dhead .id{flex:1}
+.dhead .id b{font:inherit;font-family:var(--sans);font-weight:400} /* 编号等宽，部门名用正文字体 */
 .dhead .x,.dhead .tool{color:var(--ink3);width:28px;height:28px;border-radius:8px;display:grid;place-items:center}
 .dhead .x:hover,.dhead .tool:hover{background:var(--raise);color:var(--ink)}
 .dbody{padding:10px 20px 20px;overflow-y:auto;flex:1}
@@ -174,14 +162,13 @@ button.lead:hover{background:var(--hover)}
 .step::before{content:"";position:absolute;top:5px;left:-50%;right:50%;height:2px;background:var(--line)}
 .step:first-child::before{display:none}
 .step i{width:12px;height:12px;border-radius:50%;background:var(--island);border:2px solid var(--line);position:relative;z-index:1}
-.step.past{color:var(--ink2)}.step.past i{background:var(--accent);border-color:var(--accent)}.step.past::before{background:var(--accent)}
-.step.now{color:var(--ink);font-weight:500}.step.now i{border-color:var(--accent);box-shadow:0 0 0 4px var(--accent-soft)}.step.now::before{background:var(--accent)}
+.step.past{color:var(--ink2)}.step.past i{background:var(--ink);border-color:var(--ink)}.step.past::before{background:var(--ink)}
+.step.now{color:var(--ink);font-weight:500}.step.now i{border-color:var(--ink);box-shadow:0 0 0 4px var(--hover)}.step.now::before{background:var(--ink)}
 .step.now.stuck i{border-color:var(--bad);box-shadow:0 0 0 4px var(--bad-soft)}
 .holder{margin:14px 0 0;padding:12px 14px;border-radius:10px;background:var(--raise);font-size:13px}
 .holder b{font-weight:500}
 .facts{display:grid;grid-template-columns:72px 1fr;gap:8px 12px;margin:20px 0;font-size:13px}
 .facts dt{color:var(--ink3)}.facts dd{margin:0}
-.facts a{color:var(--accent)}
 .log{background:var(--raise);border-radius:10px;padding:12px 14px;font:12px/1.7 var(--mono);color:var(--ink2);white-space:pre-wrap;overflow-x:auto}
 
 /* 经过：按执行者说的话分段，每段下面是命令原文 */
@@ -191,10 +178,9 @@ button.lead:hover{background:var(--hover)}
 .phase{display:grid;grid-template-columns:14px 1fr;column-gap:12px;padding-bottom:18px}
 .phase>div{min-width:0}
 .pd{width:8px;height:8px;border-radius:50%;background:var(--ink3);margin-top:8px;justify-self:center}
-.phase.run .pd{background:var(--accent);animation:pulse 2.4s infinite}
+.phase.run .pd{background:var(--ink);animation:pulse 2.4s infinite}
 .say{word-break:break-word;white-space:pre-line}
 .say.quiet{color:var(--ink2)}
-.say a,.result a{color:var(--accent)}
 .say code,.result code,.nowrun code{font:12.5px var(--mono);background:var(--raise);padding:1px 5px;border-radius:5px}
 .grp{display:flex;align-items:center;gap:8px;margin-top:6px;font-size:13px;color:var(--ink3);padding:3px 8px;margin-left:-8px;border-radius:7px;width:max-content;max-width:100%;white-space:nowrap;text-align:left}
 .grp .errn{color:var(--bad)}
@@ -203,9 +189,9 @@ button.lead:hover{background:var(--hover)}
 .fold{margin:0 0 14px -8px}
 .pips{display:flex;align-items:center;gap:3px;flex-wrap:wrap;min-width:0}
 .pips b{margin-left:3px;font-size:12px;font-weight:400;line-height:1}
-.pips i{width:6px;height:6px;border-radius:2px;background:color-mix(in srgb,var(--ok) 55%,transparent)}
-.pips i.err{background:var(--bad)}.pips i.none{background:var(--ink3);opacity:.5}.pips i.run{background:var(--accent);animation:pulse 2.4s infinite}
-.nowrun{margin-top:6px;font-size:13px;color:var(--accent)}
+.pips i{width:6px;height:6px;border-radius:2px;background:color-mix(in srgb,var(--ink3) 55%,transparent)}
+.pips i.err{background:var(--bad)}.pips i.none{background:var(--ink3);opacity:.5}.pips i.run{background:var(--ink);animation:pulse 2.4s infinite}
+.nowrun{margin-top:6px;font-size:13px;color:var(--ink)}
 .cmds{margin-top:4px;display:flex;flex-direction:column}
 .cmd>button{display:grid;grid-template-columns:1fr auto;gap:8px;align-items:center;width:100%;padding:5px 8px;margin-left:-8px;border-radius:8px;text-align:left}
 .cmd>button:hover{background:var(--raise)}
@@ -214,7 +200,7 @@ button.lead:hover{background:var(--hover)}
 .cmd .lbl,.cmd .detail,.nowrun code{font-variant-ligatures:none} /* 命令是原文：不把 >= == 连写成符号 */
 .cmd .st{font-size:12px;color:var(--ink3)}
 .cmd.err .lbl,.cmd.err .st{color:var(--bad)}
-.cmd.run .lbl{color:var(--accent)}
+.cmd.run .lbl{color:var(--ink)}
 .cmd .detail{margin:4px 0 8px;background:var(--raise);border-radius:10px;padding:10px 12px;font:12px/1.65 var(--mono);color:var(--ink2);white-space:pre-wrap;word-break:break-all;max-height:260px;overflow:auto}
 .detail .c{color:var(--ink)}
 .detail .o{margin-top:8px;color:var(--ink3)}
@@ -224,7 +210,7 @@ button.lead:hover{background:var(--hover)}
 .opts{display:flex;flex-direction:column;gap:8px;margin:20px 0}
 .opt{display:grid;grid-template-columns:20px 1fr;gap:12px;padding:14px;border-radius:12px;background:var(--raise);text-align:left;border:1.5px solid transparent}
 .opt:hover{background:var(--hover)}
-.opt.on{border-color:var(--accent);background:var(--accent-soft)}
+.opt.on{border-color:var(--user);background:var(--user-soft)} /* 你选的项 */
 .opt .t{font-weight:500;display:flex;gap:8px;align-items:baseline;flex-wrap:wrap}
 .opt .g{color:var(--ink2);font-size:13px;margin-top:2px}
 .opt .cost{font:12px var(--sans);color:var(--ink3);margin-top:6px}
@@ -237,7 +223,7 @@ button.lead:hover{background:var(--hover)}
 .acct .logo{width:16px;height:16px;flex:none;color:var(--ink2)}
 b.logo{display:grid;place-items:center;border-radius:4px;background:var(--raise);font:500 10px/1 var(--sans)} /* 没有图标的账号：首字母 */
 .bar{height:8px;border-radius:4px;background:var(--raise);position:relative;overflow:hidden}
-.bar i{position:absolute;inset:0 auto 0 0;border-radius:4px;background:var(--accent)}
+.bar i{position:absolute;inset:0 auto 0 0;border-radius:4px;background:var(--ink)}
 .bar .reserve{position:absolute;top:0;bottom:0;right:0;width:20%;background:repeating-linear-gradient(135deg,transparent 0 3px,color-mix(in srgb,var(--ink3) 35%,transparent) 3px 4px)}
 .acct .r{font-size:12px;color:var(--ink3);text-align:right}
 .hosts{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px}
@@ -246,19 +232,19 @@ b.logo{display:grid;place-items:center;border-radius:4px;background:var(--raise)
 .host .s{color:var(--ink2);font-size:13px;margin-top:4px}
 .slots{display:flex;gap:3px;margin-top:10px}
 .slots i{width:10px;height:10px;border-radius:3px;background:var(--hover)}
-.slots i.on{background:var(--accent)}
+.slots i.on{background:var(--ink)}
 table.perf{width:100%;border-collapse:collapse;font-size:13px}
 .perf th{text-align:left;font-weight:500;color:var(--ink3);font-size:12px;padding:0 0 8px}
 .perf td{padding:8px 0}
 .perf th:not(:last-child),.perf td:not(:last-child){padding-right:12px}
 .perf .mark{display:block;font-size:12px;color:var(--bad)}
 .pips.runs i{width:8px;height:8px}
-.pips i.bounce{background:var(--wait)}
+.pips i.bounce{background:var(--ink2)}
 .pips i.quota,.pips i.setup,.pips i.fail{background:var(--bad)}
 .legend{display:flex;align-items:center;gap:6px;margin-top:10px;font-size:12px;color:var(--ink3)}
-.legend i{width:8px;height:8px;border-radius:2px;margin-left:8px;background:color-mix(in srgb,var(--ok) 55%,transparent)}
+.legend i{width:8px;height:8px;border-radius:2px;margin-left:8px;background:color-mix(in srgb,var(--ink3) 55%,transparent)}
 .legend i:first-child{margin-left:0}
-.legend i.bounce{background:var(--wait)}.legend i.fail{background:var(--bad)}
+.legend i.bounce{background:var(--ink2)}.legend i.fail{background:var(--bad)}
 .tablewrap{overflow-x:auto}
 
 .mobile-top{display:none}
@@ -290,24 +276,24 @@ table.perf{width:100%;border-collapse:collapse;font-size:13px}
 .rule .t .why{display:block;color:var(--ink3);font-size:12px;margin-top:2px}
 .tabs .cap.over{color:var(--bad)}
 .opt{grid-template-columns:20px 1fr}
-.opt .pick{font-size:11px;color:var(--accent);font-weight:500}
+.opt .pick{font-size:11px;color:var(--user-ink);font-weight:500}
 .status-line{margin:14px 0 0;color:var(--ink2);font-size:13px}
 .dot.off{background:transparent;border:1.5px solid var(--line)}
 .drawer{box-shadow:none;visibility:hidden;transition:transform .22s ease,visibility 0s .22s}
 .open .drawer{box-shadow:var(--drawer-shadow);visibility:visible;transition:transform .22s ease}
 @media (prefers-reduced-motion:reduce){.drawer,.open .drawer{transition:none}}
-.opt .rec{font-size:11px;color:var(--accent);font-weight:500}
+.opt .rec{font-size:11px;color:var(--ink);font-weight:500}
 .opt details{margin-top:6px}
 .opt summary{color:var(--ink3);font-size:12px;cursor:pointer;list-style:none}
 .opt summary::-webkit-details-marker{display:none}
-.opt summary:hover{color:var(--accent)}
+.opt summary:hover{color:var(--ink)}
 .opt .whyt{margin-top:6px;font-size:13px;color:var(--ink2)}
 
 /* 周期任务：行、部门页一节、今天页「接下来 7 天」、抽屉 */
 .rep{width:14px;height:14px;color:var(--ink3);justify-self:center}
 .row.sched .time{width:auto;min-width:52px;white-space:nowrap}
 .warn{color:var(--bad)}
-.section h2 .cap{margin-left:auto;font:12px var(--mono);color:var(--ink3)}
+.section h2 .cap{margin-left:auto;font-size:12px;font-variant-numeric:tabular-nums;color:var(--ink3)}
 .quiet-line{color:var(--ink3);font-size:13px;padding:4px 0}
 .status-line.warn{color:var(--bad)}
 details.full{margin-top:22px}
@@ -358,8 +344,9 @@ details.full .result{margin-top:8px;font-size:13px;color:var(--ink2)}
 .doc p,.doc ul,.doc ol,.doc table,.doc pre,.doc blockquote{margin:0 0 1em}
 .doc ul,.doc ol{padding-left:1.5em}
 .doc li+li{margin-top:.25em}
-.doc a{color:var(--accent);text-decoration:underline;text-decoration-color:color-mix(in srgb,var(--accent) 35%,transparent);text-underline-offset:3px}
-.doc a:hover{text-decoration-color:var(--accent)}
+/* 链接：正文色加下划线，不另占一种颜色 */
+.facts a,.say a,.result a,.doc a{text-decoration:underline;text-decoration-color:color-mix(in srgb,var(--ink) 30%,transparent);text-underline-offset:3px}
+.facts a:hover,.say a:hover,.result a:hover,.doc a:hover{text-decoration-color:var(--ink)}
 .doc img{max-width:100%;border-radius:8px}
 .doc code{font:.86em var(--mono);background:var(--raise);padding:1px 5px;border-radius:5px}
 .doc pre{padding:12px 14px;border-radius:10px;background:var(--raise);overflow-x:auto;line-height:1.6}

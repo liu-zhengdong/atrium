@@ -151,13 +151,9 @@ func HolderOf(f Facts) Holder {
 	switch t.Stage {
 	case ledger.StageNone:
 		h := Holder{Kind: "worker", Who: t.Worker, Text: "执行者在做"}
-		h.Short, _, _ = strings.Cut(t.Worker, "+") // 短标签只放工具名与机器，完整组合在详情里
+		h.Short, _, _ = strings.Cut(t.Worker, "+") // 短标签只放工具名；完整组合与机器在详情里
 		if t.Host != "" {
 			h.Text += "（" + t.Host + "）"
-			if h.Short != "" {
-				h.Short += " · "
-			}
-			h.Short += t.Host
 		}
 		if h.Short == "" {
 			h.Short = "在做"

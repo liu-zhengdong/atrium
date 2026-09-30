@@ -41,7 +41,7 @@ const brandMark = name => brand[name]
   ? `<svg class="logo" viewBox="${brand[name][0]}" fill="currentColor" aria-hidden="true"><path d="${brand[name][1]}"/></svg>`
   : `<b class="logo" aria-hidden="true">${esc(name.slice(0, 1).toUpperCase())}</b>`;
 
-let nav = { depts: [], asks: 0 };
+let nav = { depts: [], names: {}, asks: 0 };
 let sortMode = "部门";
 
 // last：每个接口上次取到的数据。切页时先拿它画，新数据到了再换。
@@ -84,7 +84,8 @@ function ahead(ms) {
   if (day < 7) return "周" + WD[t.getDay()] + " " + clock(ms);
   return date(ms);
 }
-const deptName = id => nav.depts.find(d => d.id === id)?.name || id;
+// nameOf：页面上提到部门、身份（你、秘书、负责人）、机器时一律写名字，不写短号；没登记的原样给短号
+const nameOf = id => nav.depts.find(d => d.id === id)?.name || nav.names[id] || id;
 
 /* 地址 */
 function parseHash() {
@@ -154,10 +155,11 @@ function draftsLink(n) {
   return root ? `<a class="quiet" href="#${esc(root.id)}/tasks" data-drafts>草稿 ${n} 件</a>` : `草稿 ${n} 件`;
 }
 
-/* 今天页标题下一行开头的暂停说明；部门写名字，机器写 hN */
+/* 今天页标题下一行开头的暂停说明；部门写名字，机器写「机器 名字」（机器名单看分不出是机器） */
+const pausedName = s => (s[0] === "h" ? "机器 " : "") + nameOf(s);
 function pausedNote(paused) {
   if (!paused.length) return "";
-  const what = paused.includes("all") ? "已全部暂停" : "部分暂停：" + esc(paused.map(deptName).join("、"));
+  const what = paused.includes("all") ? "已全部暂停" : "部分暂停：" + esc(paused.map(pausedName).join("、"));
   return `<span class="paused">${icon.pause}${what}</span>`;
 }
 
@@ -186,19 +188,29 @@ function renderToday(d) {
     <div class="today">
     <section class="section"><h2>等你${count(d.asks.length)}</h2>${asks}</section>
     <section class="section"><h2>在做${count(d.running.length)}${d.running.length > 1 ? `<button class="sort" id="sort">按${sortMode}${icon.sort}</button>` : ""}</h2>
-      ${live.length ? `<div class="rows">${live.map(r => taskRow(r, ago, 0, r.who, deptName(r.dept))).join("")}</div>` : `<div class="empty">没有在做的</div>`}</section>
+      ${live.length ? `<div class="rows">${live.map(r => taskRow(r, ago, 0, r.who, nameOf(r.dept))).join("")}</div>` : `<div class="empty">没有在做的</div>`}</section>
     <section class="section"><h2>接下来 7 天${count(d.soon.rows.length)}</h2>${soonHTML(d.soon)}</section>
     ${d.shipped.length ? `<section class="section"><h2>今天完成${count(d.shipped.length + d.shipped_more)}</h2><div class="rows">${shippedRows(d.shipped, d.shipped_more)}</div></section>` : ""}
-    <section class="section"><h2>三个目标</h2><dl class="facts"><dt>近 7 天</dt><dd>${esc(d.goals.week.text)}</dd><dt>累计</dt><dd>${esc(d.goals.all.text)}</dd></dl></section>
+    <section class="section"><h2>三个目标</h2>${goalsHTML(d.goals)}</section>
     </div>`;
 }
+
+/* 三个目标：一个目标一行，写目标名和数的意思（ledger.Measure 的三个数），近 7 天与累计各一列；数下面的小字是补充 */
+const goalRows = [
+  ["像你一样判断", "你纠正了几次", w => [`${w.corrections} 次`, w.done ? `每完成 10 件 ${(w.corrections * 10 / w.done).toFixed(1)} 次` : ""]],
+  ["自己找事", "提给你的方向你选了几项", w => w.offered ? [`${w.picked}/${w.offered}`] : ["—", "还没拍板过"]],
+  ["越做越好", "解决过的同类问题又出现", w => [`${w.recurrences} 次`]],
+];
+const goalVal = ([v, sub]) => `<span class="num">${esc(v)}${sub ? `<span class="why">${esc(sub)}</span>` : ""}</span>`;
+const goalsHTML = g => `<div class="goals"><span></span><span class="h">近 7 天</span><span class="h">累计</span>${goalRows.map(([name, what, val]) =>
+  `<span>${name}<span class="why">${what}</span></span>${goalVal(val(g.week))}${goalVal(val(g.all))}`).join("")}</div>`;
 
 /* 今天完成（含完成未上线的）：先摆最近 5 件，其余折成一行（与任务树里「已结束 N 件」同一种折法）；对勾已说明做完，行尾不写状态字。
    接口只列最近一批，more 是超出上限没列出的件数：折起时算进「还有 N 件」，展开后在末尾写明 */
 const shipFold = 5;
 function shippedRows(rows, more) {
   const open = openKids.has("shipped"), rest = rows.length - shipFold;
-  return rows.slice(0, rest > 1 && !open ? shipFold : rows.length).map(r => taskRow(r, clock, 0, "", deptName(r.dept))).join("")
+  return rows.slice(0, rest > 1 && !open ? shipFold : rows.length).map(r => taskRow(r, clock, 0, "", nameOf(r.dept))).join("")
     + (open && more ? `<div class="more">另有 ${more} 件更早完成的没列出</div>` : "")
     + (rest > 1 ? `<button class="row kfold" data-kids="shipped" aria-expanded="${open}">${icon.chev}<div class="title">${open ? "收起" : `还有 ${rest + more} 件`}</div></button>` : "");
 }
@@ -215,8 +227,8 @@ function soonHTML(soon) {
 function deptHead(id) {
   const up = [];
   for (let p = nav.depts.find(d => d.id === id)?.parent; p; p = nav.depts.find(d => d.id === p)?.parent) up.unshift(p);
-  return `<div class="crumb">${up.map(p => `<a href="#${esc(p)}">${esc(deptName(p))}</a><span>/</span>`).join("")}</div>
-    <h1 class="dept-title">${esc(deptName(id))}</h1>`;
+  return `<div class="crumb">${up.map(p => `<a href="#${esc(p)}">${esc(nameOf(p))}</a><span>/</span>`).join("")}</div>
+    <h1 class="dept-title">${esc(nameOf(id))}</h1>`;
 }
 function renderDept(d, id, tab) {
   tab = ["tasks", "rules", "files"].includes(tab) ? tab : "tasks";
@@ -238,13 +250,13 @@ function renderDept(d, id, tab) {
   if (tab === "rules") {
     const rule = (r, i) => `<div class="rule ${i === null ? "inh" : ""}"><span class="i">${i === null ? "" : i + 1}</span>
       <span class="t">${esc(r.text)}${r.why ? `<span class="why">${esc(r.why)}</span>` : ""}</span>
-      <span class="w">${esc(i === null ? r.dept_name : r.by)}</span></div>`;
+      <span class="w">${esc(i === null ? r.dept_name : r.by.replace(/^\S+/, nameOf))}</span></div>`;
     body = (d.rules.length ? d.rules.map((r, i) => rule(r, i)).join("") : `<div class="empty">本部门没有自己的规矩</div>`) +
       (d.inherited.length ? `<div class="inh-h">从上级继承</div>${d.inherited.map(r => rule(r, null)).join("")}` : "");
   }
-  // 一条资料一行：目录资料显示文件数，说明跟在标题后面（目录名常常看不出是什么；标题取自说明开头的不重复）
+  // 一条资料一行，写说明（matName）；目录资料显示文件数
   if (tab === "files") body = d.materials.length ? `<div class="rows">${d.materials.map(m => `
-    <div class="row" data-open="${esc(m.id)}" tabindex="0">${m.files.length > 1 ? icon.folder : icon.file}<div class="title"><span class="id">${esc(m.id)}</span>${esc(m.title)}${m.note && !m.note.startsWith(m.title) ? `<span class="note">${esc(m.note)}</span>` : ""}</div>
+    <div class="row" data-open="${esc(m.id)}" tabindex="0">${m.files.length > 1 ? icon.folder : icon.file}<div class="title"><span class="id">${esc(m.id)}</span>${esc(matName(m))}</div>
     <div class="who">${m.kind === "overview" ? "总览 · " : ""}v${m.rev} · ${matAmount(m)}</div><div class="time num">${date(m.created_at)}</div></div>`).join("")}</div>`
     : `<div class="empty">还没有资料</div>`;
   const cap = d.rules.length > d.rule_max ? "cap over" : "cap";
@@ -278,7 +290,7 @@ function renderLegion(d) {
   }).join("")}</div>` : `<div class="empty">还没有额度读数</div>`;
   const hosts = d.hosts.length ? `<div class="hosts">${d.hosts.map(h => `
     <div class="host"><div class="n"><span class="dot ${h.online ? (h.busy ? "run" : "idle") : "off"}"></span><span class="id">${esc(h.id)}</span>${esc(h.name)}</div>
-    <div class="s">${esc(h.status)} · ${h.busy}/${h.slots} 在用</div>
+    <div class="s">${h.paused ? `<span class="paused">已暂停</span> · ` : ""}${esc(h.status)} · ${h.busy}/${h.slots} 在用</div>
     <div class="slots">${Array.from({ length: Math.min(h.slots, 32) }, (_, i) => `<i class="${i < h.busy ? "on" : ""}"></i>`).join("")}</div></div>`).join("")}</div>`
     : `<div class="empty">还没有登记机器</div>`;
   const catalog = d.workers.filter(p => !p.problem), extra = d.workers.filter(p => p.problem);
@@ -291,30 +303,36 @@ function renderLegion(d) {
 }
 
 const outName = { ok: "交付", bounce: "被交回", quota: "额度", setup: "起不来", fail: "其他失败" };
-const trustName = v => ({ high: "高", medium: "中", low: "低", unknown: "未知" }[v] || "未知");
-const markText = m => `${m.host} ${m.reason} · ${m.until ? day(m.until) + " " + clock(m.until) + " 恢复" : m.kind === "probe" ? "自检跑通后自动解除" : "等人处理"}`;
+const trustName = v => ({ high: "高", medium: "中", low: "低", unknown: "未评" }[v] || "未评");
+// 交付检查名（gates/judge.go 的 Check*）写成它查什么；web 引用不到 gates，名字以那边为准，没列的原样给
+const checkName = { finished: "推送了新提交", pr_exists: "开了 PR", file_growth: "单个文件新增不超上限", claims_verified: "PR 写了端到端验证" };
+const markText = m => `${nameOf(m.host)} ${m.reason} · ${m.until ? day(m.until) + " " + clock(m.until) + " 恢复" : m.kind === "probe" ? "自检跑通后自动解除" : "等人处理"}`;
 const workerMarks = marks => (marks || []).map(m => `<div class="mark" title="${esc(m.evidence || "")}">不可用 ${esc(markText(m))}</div>`).join("");
 const outcomePips = recent => `<span class="pips runs">${(recent || []).map(o => `<i class="${esc(o)}" title="${esc(outName[o])}"></i>`).join("")}</span>`;
 function comboRows(rows, window) {
-  return `<div class="combos">${rows.map(p => `<a class="combo-row" href="#legion/${encodeURIComponent(p.id)}">
+  return `<div class="combos"><div class="combo-row head"><span></span><span>信任</span><span>近 ${window} 次拉起</span><span class="num">交付</span></div>${rows.map(p => `<a class="combo-row" href="#legion/${encodeURIComponent(p.id)}">
     <span class="combo-name">${esc(p.id)}${workerMarks(p.marks)}</span><span class="trust">${p.trust ? trustName(p.trust) : ""}</span>
     <span title="近 ${window} 次拉起，新的在左">${p.stat.launches ? outcomePips(p.recent) : '<span class="quiet">还没拉起过</span>'}</span><span class="num">${p.stat.launches ? p.stat.ok + "/" + p.stat.launches : ""}</span></a>`).join("")}
     <div class="legend"><i class="ok"></i>交付<i class="bounce"></i>被交回<i class="fail"></i>没拉起来（额度、起不来、其他）</div></div>`;
+}
+// mdBlock：执行者档案正文是 Markdown，渲染成文档（与资料同一个库，HTML 标签按文字显示）；库按需加载，没到时先摆原文，到了抽屉还是它就重画
+function mdBlock(text, redraw, id) {
+  if (window.marked) return new marked.Marked({ gfm: true, renderer: { html: t => esc(t.text) } }).parse(text);
+  lib("marked").then(() => { if (drawerId === id) redraw(); });
+  return `<div class="md-wait">${esc(text)}</div>`;
 }
 function renderWorker(d) {
   const r = d.resolved, rules = r.rules, st = d.stat;
   drawer(r.id, "组合", `<h3>${esc(r.id)}</h3>${workerMarks(d.marks)}
     <dl class="facts"><dt>信任</dt><dd>${trustName(d.trust)}</dd><dt>接到</dt><dd>${trustName(d.max_risk)}风险</dd>
     <dt>模型</dt><dd>${esc(r.cli_model || "不传，跟随工具自带的缺省")}</dd>
-    <dt>档案层</dt><dd>${esc(r.layers.join("、") || "没有档案，全用缺省")}</dd>
-    ${rules.checks ? `<dt>检查</dt><dd>${esc(rules.checks.join("、") || "不加检查")}</dd>` : ""}
-    ${rules.limits && Object.keys(rules.limits).length ? `<dt>限制</dt><dd>${esc(JSON.stringify(rules.limits))}</dd>` : ""}
+    ${rules.checks ? `<dt>交付检查</dt><dd>${esc(rules.checks.map(c => checkName[c] || c).join("、") || "不加检查")}</dd>` : ""}
     ${rules.endpoint ? `<dt>端点</dt><dd>${esc(rules.endpoint)}（${esc(rules.endpoint_api || "")}）</dd>` : ""}</dl>
     <section class="worker-section"><h4>拉起</h4><p class="quiet">${st.launches ? `近 ${st.launches} 次：交付 ${st.ok} · 被交回 ${st.bounce} · 额度 ${st.quota} · 起不来 ${st.setup} · 其他失败 ${st.fail}` : "还没有拉起记录"}</p>
     <p class="quiet">${esc(d.timing)}</p>
     ${outcomePips((d.attempts || []).map(a => a.outcome))}
-    <div class="worker-runs">${(d.attempts || []).map(a => `<div><div class="run-ref"><span class="quiet">${date(a.at)} ${clock(a.at)}</span><a href="#today/${esc(a.task)}">${esc(a.task)}</a> 第 ${a.n} 次 ${esc(a.worker)}@${esc(a.host)}${a.model ? `（${esc(a.model)}）` : ""}</div><span class="run-outcome ${a.outcome === "ok" ? "quiet" : "mark"}">${esc(outName[a.outcome])}${a.reason && a.outcome !== "ok" ? "：" + esc(a.reason) : ""}</span></div>`).join("")}</div></section>
-    <section class="worker-section"><h4>正文</h4><div class="worker-body">${esc(r.body || "没有正文")}</div></section>
+    <div class="worker-runs">${(d.attempts || []).map(a => `<div><div class="run-ref"><span class="quiet">${date(a.at)} ${clock(a.at)}</span><a href="#today/${esc(a.task)}">${esc(a.task)}</a> 第 ${a.n} 次 ${esc(a.worker)}（${esc(nameOf(a.host))}）${a.model ? `（${esc(a.model)}）` : ""}</div><span class="run-outcome ${a.outcome === "ok" ? "quiet" : "mark"}">${esc(outName[a.outcome])}${a.reason && a.outcome !== "ok" ? "：" + esc(a.reason) : ""}</span></div>`).join("")}</div></section>
+    <section class="worker-section"><h4>正文</h4>${r.body ? `<article class="doc worker-body">${mdBlock(r.body, () => renderWorker(d), r.id)}</article>` : `<p class="quiet">没有正文</p>`}</section>
     <section class="worker-section"><h4>各层原文</h4>${d.layers.map(p => `<details class="layer"><summary>${icon.chev}${esc(p.name)}<span class="quiet">${date(p.updated_at)}</span></summary><pre>${esc(p.source)}</pre><code>atrium workers edit ${esc(p.name)} --file &lt;档案&gt;</code></details>`).join("") || '<p class="quiet">没有档案</p>'}</section>`);
 }
 
@@ -385,7 +403,7 @@ function traceHTML(d) {
 /* 抽屉里的上下级与依赖：一节一组行，点一行换成那件任务；和这件不在一个部门的，行尾加部门名 */
 function relHTML(d) {
   const org = d.task.org;
-  const rel = r => taskRow(r, ago, 0, r.dept && r.dept !== org ? `${r.who ? r.who + " · " : ""}${deptName(r.dept)}` : r.who);
+  const rel = r => taskRow(r, ago, 0, r.dept && r.dept !== org ? `${r.who ? r.who + " · " : ""}${nameOf(r.dept)}` : r.who);
   const part = (name, rows, note = "") => rows.length ? `<div class="jh"><b>${name}</b>${note ? `<span>${note}</span>` : ""}</div><div class="rows">${rows}</div>` : "";
   const done = d.kids.filter(r => r.state === "done").length;
   return part("子任务", kidRows(d.kids, 0, "d:" + d.task.id, r => rel(r)), d.kids.length ? `${done}/${d.kids.length} 完成` : "")
@@ -451,7 +469,7 @@ function renderSchedule(s) {
   const facts = [[s.once ? "做什么" : "每轮", kindDoes[s.kind] || firstPara(s.detail)], ["技能", s.skill]].filter(x => x[1]);
   const day = r => (r.title.match(/（(\d\d-\d\d)）$/) || [])[1];
   drawer(s.id, s.dept_name, `<h3>${esc(s.title)}</h3>
-      <p class="sub-t">${esc([s.cadence, s.kind].filter(Boolean).join(" · "))} · ${esc({ secretary: "秘书", u1: "你" }[s.by] || s.by)} ${esc(date(s.created_at))} 建</p>
+      <p class="sub-t">${esc([s.cadence, s.kind].filter(Boolean).join(" · "))} · ${esc(nameOf(s.by))} ${esc(date(s.created_at))} 建</p>
       <div class="holder"><b>${s.once ? "到点" : "下一轮"}</b>　${esc(when)}</div>
       ${facts.length ? `<dl class="facts">${facts.map(f => `<dt>${f[0]}</dt><dd>${esc(f[1])}</dd>`).join("")}</dl>` : ""}
       ${s.once ? `<div class="quiet-line">到点生成一件任务并派发，之后这条自动删除</div>` : `<div class="jh"><b>最近几轮</b>${s.skips ? `<span>跳过过 ${s.skips} 轮</span>` : ""}</div>
@@ -483,6 +501,8 @@ const kinds = { md: "md", markdown: "md", html: "html", htm: "html", pdf: "pdf",
 const extKind = p => kinds[(p.match(/\.([^./]+)$/)?.[1] || "").toLowerCase()];
 const kindOf = m => !m.entry ? "set" : extKind(m.entry) || (m.files.find(f => f.path === m.entry)?.binary ? "file" : "text");
 const baseName = p => p.split("/").pop();
+// matName：资料在网页上叫它的说明（交资料时必填、写给人看的「里面有什么」）；标题是交资料时的文件名或目录名（delivery、shots 这类），看不出是什么
+const matName = m => m.note || m.title;
 const matAmount = m => [m.files.length > 1 ? m.files.length + " 个文件" : "", size(m.size)].filter(Boolean).join(" · ");
 // 以文件路径结尾的地址：html 里的相对路径由浏览器落到同一条资料里；新窗口打开、另存也带着文件名
 const pathURL = p => p.split("/").map(encodeURIComponent).join("/");
@@ -546,9 +566,9 @@ const viewers = {
     const [text] = await Promise.all([fetchMat(m, "text"), lib("marked")]);
     return `<article class="doc">${mdDoc(text, m)}</article>`;
   },
-  html: (el, m) => `<iframe class="frame" sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox" src="${esc(frameURL(m))}" title="${esc(m.title)}"></iframe>`,
-  pdf: (el, m) => `<iframe class="frame" src="${esc(matURL(m))}" title="${esc(m.title)}"></iframe>`,
-  img: (el, m) => `<img class="pic" src="${esc(matURL(m))}" alt="${esc(m.title)}">`,
+  html: (el, m) => `<iframe class="frame" sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox" src="${esc(frameURL(m))}" title="${esc(matName(m))}"></iframe>`,
+  pdf: (el, m) => `<iframe class="frame" src="${esc(matURL(m))}" title="${esc(matName(m))}"></iframe>`,
+  img: (el, m) => `<img class="pic" src="${esc(matURL(m))}" alt="${esc(matName(m))}">`,
   text: async (el, m) => `<pre class="plain">${esc(await fetchMat(m, "text"))}</pre>`,
   async docx(el, m) {
     const [buf] = await Promise.all([fetchMat(m, "arrayBuffer"), lib("jszip", "docx-preview")]);
@@ -583,11 +603,11 @@ function renderMaterial(deptPage, id) {
     + (["file", "docx", "xlsx", "set"].includes(kind) ? "" // 浏览器自己打不开的，新窗口只会变成下载
       : `<a class="tool" href="${esc(kind === "html" ? frameURL(m) : namedURL(m))}" target="_blank" rel="noopener" ${tip("新窗口打开")}>${icon.out}</a>`)
     + (kind === "set" ? "" : `<a class="tool" href="${esc(matURL(m))}" download="${esc(baseName(m.entry))}" ${tip("下载正文")}>${icon.down}</a>`);
-  const meta = [m.kind === "overview" ? "总览" : "", "v" + m.rev, matAmount(m), date(m.created_at), m.note !== m.title && m.note].filter(Boolean);
+  const meta = [m.kind === "overview" ? "总览" : "", "v" + m.rev, matAmount(m), date(m.created_at)].filter(Boolean);
   // 有正文的目录资料：正文下面折起全部文件（图源、没被正文引用的图也找得到）
   const all = kind !== "set" && m.files.length > 1
     ? `<details class="full"><summary>${icon.chev}这条资料里的 ${m.files.length} 个文件</summary>${fileList(m)}</details>` : "";
-  drawer(id, deptPage.dept.name, `<h3>${esc(m.title)}</h3><p class="sub-t">${esc(meta.join(" · "))}</p>
+  drawer(id, deptPage.dept.name, `<h3>${esc(matName(m))}</h3><p class="sub-t">${esc(meta.join(" · "))}</p>
     <div class="viewer ${kind}" id="viewer"><div class="quiet-line">正在打开…</div></div>${all}`, tools);
   const el = $("#viewer"), still = () => drawerId === id && shownMat === key;
   Promise.resolve().then(() => viewers[kind](el, m))

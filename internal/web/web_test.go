@@ -483,7 +483,7 @@ func TestTaskTree(t *testing.T) {
 	}
 }
 
-// 周期任务：部门页只列本部门的并挂上一轮；今天页列 7 天内到点的、更远的只给条数；暂停沿树继承；分派任务失败标出来。
+// 定时任务：部门页只列本部门的并挂上一轮；今天页列 7 天内到点的、更远的只给条数；暂停沿树继承；分派任务失败标出来。
 func TestSchedules(t *testing.T) {
 	ctx := context.Background()
 	db, err := store.Open(filepath.Join(t.TempDir(), "atrium.db"))
@@ -531,7 +531,7 @@ func TestSchedules(t *testing.T) {
 		t.Errorf("暂停中、上一轮分派任务失败没结束：%+v %+v", s, s.Last)
 	}
 	if page, _ = loadDept(ctx, db, t.TempDir(), sub.ID); len(page.Schedules) != 0 {
-		t.Errorf("下属部门的周期任务不算在上级页：%+v", page.Schedules)
+		t.Errorf("下属部门的定时任务不算在上级页：%+v", page.Schedules)
 	}
 
 	today, err := loadToday(ctx, db, time.UnixMilli(now))
@@ -557,11 +557,11 @@ func TestSchedules(t *testing.T) {
 		t.Fatalf("抽屉：%+v %v", d, err)
 	}
 	if _, err := loadSchedule(ctx, db, "s999"); err == nil {
-		t.Error("没有的周期任务应报错")
+		t.Error("没有的定时任务应报错")
 	}
 }
 
-// 部门页头的验收人（沿用上级的写出处，缺省 auto 不给）与资料上限；任务抽屉来自哪条周期任务、牵着哪份选项单。
+// 部门页头的验收人（沿用上级的写出处，缺省 auto 不给）与资料上限；任务抽屉来自哪条定时任务、牵着哪份选项单。
 func TestDeptHeadAndTaskLinks(t *testing.T) {
 	ctx := context.Background()
 	db, err := store.Open(filepath.Join(t.TempDir(), "atrium.db"))
@@ -612,9 +612,9 @@ func TestDeptHeadAndTaskLinks(t *testing.T) {
 	}
 	plain, _ := ledger.Add(ctx, db, ledger.NewTask{Title: "秘书建的", Org: sub.ID}, "secretary")
 	for _, w := range []struct{ id, schedule, choice string }{
-		{round.ID, x.ID, c.ID},        // 周期任务生成的调研轮，交出了选项单
+		{round.ID, x.ID, c.ID},        // 定时任务生成的调研轮，交出了选项单
 		{c.Options[1].Task, "", c.ID}, // 从选项单选出来的
-		{plain.ID, "", ""},            // 建它的是 secretary，不当成周期任务
+		{plain.ID, "", ""},            // 建它的是 secretary，不当成定时任务
 	} {
 		d, err := loadTask(ctx, db, w.id)
 		if err != nil || d.Schedule != w.schedule || d.Choice != w.choice {

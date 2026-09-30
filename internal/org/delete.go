@@ -101,7 +101,7 @@ func deptMovables() []movable {
 	return []movable{
 		{refQuery{"下属部门", "departments", "id", "parent = ?", fix}, `UPDATE departments SET parent = ? WHERE parent = ?`},
 		{refQuery{"任务", "tasks", "id", "department = ? AND status NOT IN ('queued', 'running')", fix}, `UPDATE tasks SET department = ? WHERE department = ?`},
-		{refQuery{"周期任务", "schedules", "id", "department = ?", fix}, `UPDATE schedules SET department = ? WHERE department = ?`},
+		{refQuery{"定时任务", "schedules", "id", "department = ?", fix}, `UPDATE schedules SET department = ? WHERE department = ?`},
 		{refQuery{"已拍板的选项单", "choices", "id", "department = ? AND status != 'open'", fix}, `UPDATE choices SET department = ? WHERE department = ?`},
 		{refQuery{"选项单里归它的选项", "choice_option_orgs", "choice", "department = ?", fix},
 			`UPDATE choice_option_orgs SET department = ? WHERE department = ?`},

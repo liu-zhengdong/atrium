@@ -247,11 +247,11 @@ func TestDeleteInto(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []Moved{{"下属部门", 1}, {"任务", 2}, {"周期任务", 1}, {"已拍板的选项单", 2}, {"选项单里归它的选项", 1}, {"资料", 2}}
+	want := []Moved{{"下属部门", 1}, {"任务", 2}, {"定时任务", 1}, {"已拍板的选项单", 2}, {"选项单里归它的选项", 1}, {"资料", 2}}
 	if r.ID != a.ID || r.Into != root.ID || !reflect.DeepEqual(r.Moved, want) {
 		t.Errorf("回执：%+v", r)
 	}
-	if line := removedLine(r); !strings.Contains(line, "并入 "+root.ID+"：下属部门 1、任务 2、周期任务 1") {
+	if line := removedLine(r); !strings.Contains(line, "并入 "+root.ID+"：下属部门 1、任务 2、定时任务 1") {
 		t.Errorf("回执一行：%s", line)
 	}
 	var n int

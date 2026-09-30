@@ -104,7 +104,7 @@ func localRepo(repo, origin string) bool {
 }
 
 // PromptRules 是分派任务时提示词里怎么交（dispatch 附进「通用约束」）；origin 见 Origin。分派任务时还没有改动，有仓库按要改代码写
-// （规则里说了不用改代码时怎么交）；choice 与 message 分派任务时分不出来，提示词相同，要不要写 choice.json 由任务详述（调研周期任务）说。
+// （规则里说了不用改代码时怎么交）；choice 与 message 分派任务时分不出来，提示词相同，要不要写 choice.json 由任务详述（调研定时任务）说。
 func PromptRules(repo, dir, origin, branch string) []string {
 	d := pick(repo, dir, origin, true, false)
 	out := make([]string, len(d.Rules), len(d.Rules)+1)

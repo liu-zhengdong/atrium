@@ -14,13 +14,14 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/store"
 )
 
-// 周期任务 sN：到点在部门下生成一件普通任务并按 task run 派发；上一轮没结束就跳过记一笔；停机错过只补一轮。
+// 定时任务 sN：到点在部门下生成一件普通任务并按 task run 派发；上一轮没结束就跳过记一笔；停机错过只补一轮。
+// 一次性的（--on）到点生成一次，生成后这条删掉（生成的任务不动）。
 
 // Enqueue 把一件任务送进分派任务队列（即 task run）。由 dispatch 在装配时接上：
 //
 //	agenda.Enqueue = func(ctx context.Context, env *app.Env, task, actor string) error { … }
 //
-// 没接上时周期任务照样生成任务，但那一轮记「分派任务未接入」并报错。
+// 没接上时定时任务照样生成任务，但那一轮记「分派任务未接入」并报错。
 var Enqueue func(ctx context.Context, env *app.Env, task, actor string) error
 
 var Kinds = map[string]string{"task": "自定义", "patrol": "体验巡检", "research": "调研"}
@@ -45,7 +46,8 @@ type Schedule struct {
 	Org       string `json:"org"`
 	Kind      string `json:"kind"`
 	Every     string `json:"every"`
-	EveryMs   int64  `json:"every_ms"`
+	EveryMs   int64  `json:"every_ms"` // 0 是一次性的
+	Once      bool   `json:"once,omitempty"`
 	At        string `json:"at,omitempty"`
 	Title     string `json:"title"`
 	Detail    string `json:"detail,omitempty"`
@@ -66,6 +68,7 @@ type NewSchedule struct {
 	Title  string `json:"title"`
 	Kind   string `json:"kind"`
 	Every  string `json:"every"`
+	On     string `json:"on"`
 	At     string `json:"at"`
 	Detail string `json:"detail"`
 	Skill  string `json:"skill"`
@@ -79,7 +82,9 @@ func scanSchedule(s interface{ Scan(...any) error }) (Schedule, error) {
 	var at, last sql.NullInt64
 	err := s.Scan(&x.ID, &x.Org, &x.Kind, &x.EveryMs, &at, &x.Title, &x.Detail, &x.Skill, &x.NextAt, &last,
 		&x.LastTask, &x.Skips, &x.LastNote, &x.CreatedBy, &x.CreatedAt)
-	x.Every = EveryText(x.EveryMs)
+	if x.Once = x.EveryMs == 0; !x.Once {
+		x.Every = EveryText(x.EveryMs)
+	}
 	if at.Valid {
 		m := int(at.Int64)
 		x.atMinute, x.At = &m, AtText(m)
@@ -93,7 +98,7 @@ func scanSchedule(s interface{ Scan(...any) error }) (Schedule, error) {
 func GetSchedule(ctx context.Context, q store.Querier, id string) (Schedule, error) {
 	x, err := scanSchedule(q.QueryRowContext(ctx, `SELECT `+scheduleCols+` FROM schedules WHERE id = ?`, id))
 	if store.IsNotFound(err) {
-		return Schedule{}, api.NotFound("周期任务 %s 不存在", id).WithNext("atrium schedule ls")
+		return Schedule{}, api.NotFound("定时任务 %s 不存在", id).WithNext("atrium schedule ls")
 	}
 	return x, err
 }
@@ -119,7 +124,7 @@ func Schedules(ctx context.Context, q store.Querier, dept string) ([]Schedule, e
 	return out, rows.Err()
 }
 
-// AddSchedule 建一条周期任务；第一轮按 FirstDue。
+// AddSchedule 建一条定时任务：--every 的第一轮按 FirstDue；--on 的按 ParseOn。
 func AddSchedule(ctx context.Context, db *store.DB, in NewSchedule, actor string, now int64, loc *time.Location) (Schedule, error) {
 	if in.Kind == "" {
 		in.Kind = "task"
@@ -133,17 +138,9 @@ func AddSchedule(ctx context.Context, db *store.DB, in NewSchedule, actor string
 	if n := len([]rune(in.Detail)); n > maxScheduleDetail {
 		return Schedule{}, api.Usage("--detail: 最多 %d 字，收到 %d 字", maxScheduleDetail, n)
 	}
-	every, err := ParseEvery(in.Every)
+	every, at, next, err := scheduleTime(in, now, loc)
 	if err != nil {
 		return Schedule{}, err
-	}
-	var at *int
-	if in.At != "" {
-		m, err := ParseAt(in.At, every)
-		if err != nil {
-			return Schedule{}, err
-		}
-		at = &m
 	}
 	var id string
 	err = db.Tx(ctx, func(tx *sql.Tx) error {
@@ -172,7 +169,7 @@ func AddSchedule(ctx context.Context, db *store.DB, in NewSchedule, actor string
 		}
 		_, err = tx.ExecContext(ctx, `INSERT INTO schedules (id, department, kind, every_ms, at_minute, title, detail, skill, next_at,
 			created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, id, in.Org, in.Kind, every, atCol,
-			strings.TrimSpace(in.Title), in.Detail, in.Skill, FirstDue(now, every, at, loc), actor, now)
+			strings.TrimSpace(in.Title), in.Detail, in.Skill, next, actor, now)
 		return err
 	})
 	if err != nil {
@@ -180,6 +177,34 @@ func AddSchedule(ctx context.Context, db *store.DB, in NewSchedule, actor string
 	}
 	wake()
 	return GetSchedule(ctx, db, id)
+}
+
+// scheduleTime 由 --every／--on 与 --at 算出周期、钟点与第一次到点；一次性的周期为 0、不存钟点（时刻就是 next）。
+func scheduleTime(in NewSchedule, now int64, loc *time.Location) (every int64, at *int, next int64, err error) {
+	switch {
+	case in.On != "" && in.Every != "":
+		return 0, nil, 0, api.Usage("--on: 和 --every 只能给一个：--on 指定那天触发一次，--every 按周期反复")
+	case in.On != "":
+		// 体验巡检只派本机靠 LocalOnly 查这条记录，一次性的生成任务后就删了，派发时已查不到。
+		if in.Kind == "patrol" {
+			return 0, nil, 0, api.Usage("--kind: 一次性的（--on）只支持 task、research；体验巡检用 --every")
+		}
+		next, err = ParseOn(in.On, in.At, now, loc)
+		return 0, nil, next, err
+	case in.Every == "":
+		return 0, nil, 0, api.Usage("--every: 不能为空（如 7d）；只触发一次用 --on 2026-10-08")
+	}
+	if every, err = ParseEvery(in.Every); err != nil {
+		return 0, nil, 0, err
+	}
+	if in.At != "" {
+		m, err := ParseAt(in.At, every)
+		if err != nil {
+			return 0, nil, 0, err
+		}
+		at = &m
+	}
+	return every, at, FirstDue(now, every, at, loc), nil
 }
 
 func RemoveSchedule(ctx context.Context, db *store.DB, id string) (Schedule, error) {
@@ -191,7 +216,7 @@ func RemoveSchedule(ctx context.Context, db *store.DB, id string) (Schedule, err
 	return x, err
 }
 
-// Rounds 是周期任务最近生成的 n 轮任务（created 经历的 actor 是 sN，含手动生成的），新的在前。
+// Rounds 是定时任务最近生成的 n 轮任务（created 经历的 actor 是 sN，含手动生成的），新的在前。
 func Rounds(ctx context.Context, q store.Querier, id string, n int) ([]ledger.Task, error) {
 	rows, err := q.QueryContext(ctx, `SELECT task FROM task_events WHERE kind = 'created' AND actor = ? ORDER BY id DESC LIMIT ?`, id, n)
 	if err != nil {
@@ -221,7 +246,7 @@ func Rounds(ctx context.Context, q store.Querier, id string, n int) ([]ledger.Ta
 	return out, nil
 }
 
-// ScheduleOf 是 Rounds 的反查：任务是哪条周期任务生成的一轮；不是（或那条已删）为空。
+// ScheduleOf 是 Rounds 的反查：任务是哪条定时任务生成的一轮；不是（或那条已删）为空。
 func ScheduleOf(ctx context.Context, q store.Querier, task string) (string, error) {
 	var id string
 	err := q.QueryRowContext(ctx, `SELECT s.id FROM task_events e JOIN schedules s ON s.id = e.actor
@@ -235,7 +260,7 @@ func ScheduleOf(ctx context.Context, q store.Querier, task string) (string, erro
 // kindLocal 是每轮只能派到服务所在本机的种类与原因。
 var kindLocal = map[string]string{"patrol": "体验巡检要打开服务的只读网页，网页只认本机地址"}
 
-// LocalOnly 是任务只能派到本机的原因：它是这些种类的周期任务生成的一轮；不是（或那条已删）为空。
+// LocalOnly 是任务只能派到本机的原因：它是这些种类的定时任务生成的一轮；不是（或那条已删）为空。
 func LocalOnly(ctx context.Context, q store.Querier, task string) (string, error) {
 	var kind string
 	err := q.QueryRowContext(ctx, `SELECT s.kind FROM task_events e JOIN schedules s ON s.id = e.actor
@@ -274,7 +299,11 @@ func RoundTask(x Schedule, unpicked []string, now int64, loc *time.Location) (ti
 	if len(unpicked) > 0 {
 		parts = append(parts, "最近几份选项单里用户没选的（别原样再提；要再提，写清什么变了）：\n- "+strings.Join(unpicked, "\n- "))
 	}
-	parts = append(parts, fmt.Sprintf("（周期任务 %s 每 %s 生成的一轮）", x.ID, x.Every))
+	if x.Once {
+		parts = append(parts, fmt.Sprintf("（定时任务 %s 定在 %s 的一次）", x.ID, time.UnixMilli(x.NextAt).In(loc).Format("01-02 15:04")))
+	} else {
+		parts = append(parts, fmt.Sprintf("（定时任务 %s 每 %s 生成的一轮）", x.ID, x.Every))
+	}
 	return title, strings.Join(parts, "\n\n")
 }
 
@@ -311,7 +340,8 @@ func recentUnpicked(ctx context.Context, q store.Querier, dept string) ([]string
 	return out, nil
 }
 
-// runRound 生成一轮：建任务、送进分派任务队列、记在周期任务上。next 为 0 表示不改下一轮（手动 run）。
+// runRound 生成一轮：建任务、送进分派任务队列、记在定时任务上。next 为 0 表示不改下一轮（手动 run）。
+// 一次性的只要任务建成就删掉这条（分派任务失败的由任务自己转受阻带出原因），不会再生成第二次。
 func runRound(ctx context.Context, env *app.Env, x Schedule, next int64, note string, now int64, loc *time.Location) (ledger.Task, error) {
 	var unpicked []string
 	if x.Kind == "research" {
@@ -337,14 +367,19 @@ func runRound(ctx context.Context, env *app.Env, x Schedule, next int64, note st
 	if runErr != nil {
 		note = strings.TrimSpace(note + " " + DispatchFailed + "：" + runErr.Error())
 	}
-	if _, err := env.DB.ExecContext(ctx, `UPDATE schedules SET last_task = ?, last_run_at = ?, next_at = ?, last_note = ? WHERE id = ?`,
-		t.ID, now, next, note, x.ID); err != nil {
+	if x.Once {
+		_, err = env.DB.ExecContext(ctx, `DELETE FROM schedules WHERE id = ?`, x.ID)
+	} else {
+		_, err = env.DB.ExecContext(ctx, `UPDATE schedules SET last_task = ?, last_run_at = ?, next_at = ?, last_note = ? WHERE id = ?`,
+			t.ID, now, next, note, x.ID)
+	}
+	if err != nil {
 		return t, err
 	}
 	return t, runErr
 }
 
-// RunNow 是 schedule run：马上生成一轮（不改下一轮的时间）；上一轮没结束就拒绝。
+// RunNow 是 schedule run：马上生成一轮（不改下一轮的时间；一次性的生成后删掉）；上一轮没结束就拒绝。
 func RunNow(ctx context.Context, env *app.Env, id string, loc *time.Location) (ledger.Task, error) {
 	x, err := GetSchedule(ctx, env.DB, id)
 	if err != nil {

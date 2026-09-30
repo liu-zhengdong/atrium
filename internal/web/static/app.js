@@ -12,6 +12,7 @@ const icon = {
   worker: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="2.5" y="3" width="11" height="8" rx="1.5"/><path d="M6 14h4M8 11v3"/></svg>',
   check: '<svg class="check" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 8.5 6.5 12 13 4.5"/></svg>',
   repeat: '<svg class="rep" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12.5 6.5A4.8 4.8 0 0 0 3.6 5.2M3.5 9.5a4.8 4.8 0 0 0 8.9 1.3"/><path d="M3.3 2.6v2.8h2.8M12.7 13.4v-2.8H9.9"/></svg>',
+  once: '<svg class="rep" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="5.5"/><path d="M8 5v3.2l2.2 1.4"/></svg>',
   chev: '<svg class="chev" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M6 3.5 10.5 8 6 12.5"/></svg>',
   sort: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M5 13V3M2.5 5.5 5 3l2.5 2.5M11 3v10M8.5 10.5 11 13l2.5-2.5"/></svg>',
   newline: '<svg class="nl" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12.5 3.5v4a2 2 0 0 1-2 2h-7M6 7 3.5 9.5 6 12"/></svg>',
@@ -107,14 +108,14 @@ function taskRow(r, timeFn = ago, depth = 0, who = r.who, dept) {
     ${dept === undefined ? "" : `<div class="dept">${esc(dept)}</div>`}<div class="who">${esc(who)}</div><div class="time num">${esc(timeFn(r.at))}</div></div>`;
 }
 
-/* 周期任务一行：多久一轮写在行尾标签，下一轮写在时间列；暂停范围内写「暂停中」。窄屏时间列隐藏，改用下一轮顶替标签（见 app.css）。
+/* 定时任务一行：多久一轮（一次性的写「一次 10-08 10:00」，图标换成钟）写在行尾标签，下一轮写在时间列；暂停范围内写「暂停中」。窄屏时间列隐藏，改用下一轮顶替标签（见 app.css）。
    dept：部门页，下面挂上一轮（点开是那件任务）；today：今天页，不挂上一轮，只在出了问题时把问题写在行尾。 */
 // 下一轮总写到钟点：窄屏只剩这一列，省了钟点就看不出几点跑。
 const schedWhen = s => s.paused ? "暂停中" : ahead(s.next_at);
 function schedRow(s, where) {
   const tag = where === "today" ? s.cadence : [s.cadence, s.kind].filter(Boolean).join(" · "); // 今天页那一列只放多久一轮，类型在抽屉里
   const warn = where === "today" && s.trouble;
-  const head = `<div class="row sched${warn ? " trouble" : ""}" data-sched="${esc(s.id)}" tabindex="0">${icon.repeat}
+  const head = `<div class="row sched${warn ? " trouble" : ""}" data-sched="${esc(s.id)}" tabindex="0">${s.once ? icon.once : icon.repeat}
     <div class="title"><span class="id">${esc(s.id)}</span>${esc(s.title)}</div>
     ${where === "today" ? `<div class="dept">${esc(s.dept_name)}</div>` : ""}<div class="who">${warn ? `<span class="warn">上一轮分派任务失败</span>` : esc(tag)}</div><div class="time num">${esc(schedWhen(s))}</div></div>`;
   if (where !== "dept" || !s.last) return head;
@@ -228,7 +229,7 @@ function renderDept(d, id, tab) {
   const intro = [["怎么用", dept.uses], ["现状", dept.now], ["下一步", dept.next],
     ["验收", acc && (d.accept.from !== dept.id ? `${acc}（沿用 ${d.accept.from_name}）` : acc)],
     ["仓库", dept.repos.map(r => r.split("/").filter(Boolean).pop()).join("、")]].filter(x => x[1]);
-  const sched = d.schedules.length ? `<section class="section"><h2>周期任务<span class="cap">${d.schedules.length}/${d.schedule_max}</span></h2>
+  const sched = d.schedules.length ? `<section class="section"><h2>定时任务<span class="cap">${d.schedules.length}/${d.schedule_max}</span></h2>
     <div class="rows">${d.schedules.map(s => schedRow(s, "dept")).join("")}</div></section>` : "";
   let body = "";
   if (tab === "tasks") body = d.tasks.length ? taskGroups(d.tasks) : `<div class="empty">这个部门现在没有任务</div>`;
@@ -419,7 +420,7 @@ function renderTask(d) {
       <h3>${esc(t.title)}</h3>
       ${draft ? "" : `<div class="steps">${d.steps.map((s, i) => `<div class="step ${i < d.step ? "past" : i === d.step ? "now" + (stuck ? " stuck" : "") : ""}"><i></i>${s}</div>`).join("")}</div>`}
       <div class="holder"><b>${label}</b>　${esc(draft ? "还没想清楚，不分派任务、不计时" : d.holder)} · ${esc(ago(t.updated_at))}</div>
-      ${draft ? `<p class="draft-detail">${t.detail ? esc(t.detail) : "没有详述"}</p>` : `<dl class="facts"><dt>执行者</dt><dd>${esc(t.worker || "还没派")}</dd><dt>机器</dt><dd>${t.host ? esc(t.host + (d.host_name ? " " + d.host_name : "")) : "还没派"}</dd><dt>PR</dt><dd>${pr}</dd>${t.skill ? `<dt>技能</dt><dd>${esc(t.skill)}</dd>` : ""}${d.schedule ? `<dt>来自</dt><dd><a href="${esc(hashWith(d.schedule))}">周期任务 ${esc(d.schedule)}</a></dd>` : ""}${d.choice ? `<dt>选项单</dt><dd><a href="${esc(hashWith(d.choice))}">${esc(d.choice)}</a></dd>` : ""}</dl>`}
+      ${draft ? `<p class="draft-detail">${t.detail ? esc(t.detail) : "没有详述"}</p>` : `<dl class="facts"><dt>执行者</dt><dd>${esc(t.worker || "还没派")}</dd><dt>机器</dt><dd>${t.host ? esc(t.host + (d.host_name ? " " + d.host_name : "")) : "还没派"}</dd><dt>PR</dt><dd>${pr}</dd>${t.skill ? `<dt>技能</dt><dd>${esc(t.skill)}</dd>` : ""}${d.schedule ? `<dt>来自</dt><dd><a href="${esc(hashWith(d.schedule))}">定时任务 ${esc(d.schedule)}</a></dd>` : ""}${d.choice ? `<dt>选项单</dt><dd><a href="${esc(hashWith(d.choice))}">${esc(d.choice)}</a></dd>` : ""}</dl>`}
       ${t.source || t.class ? `<dl class="facts"><dt>来源</dt><dd>${esc(sourceLabel[t.source] || "没写")}${byHTML(d)}</dd><dt>类</dt><dd>${esc(t.class || "没归类")}</dd></dl>` : ""}
       ${relHTML(d)}
       ${traceHTML(d)}`);
@@ -439,20 +440,20 @@ function renderChoice(c) {
       ${c.note ? `<p class="status-line">${esc(c.note)}</p>` : ""}
       ${c.status === "open" ? `<p class="status-line">选哪几个，在终端里告诉秘书。</p>` : ""}`);
 }
-/* 周期任务抽屉：下一轮的完整时刻、每轮做什么、最近几轮（点开是那件任务）、最近一笔记录，详述折起 */
+/* 定时任务抽屉：下一轮的完整时刻、每轮做什么、最近几轮（点开是那件任务）、最近一笔记录，详述折起；一次性的没有「最近几轮」（生成后这条就删了） */
 const kindDoes = { "调研": "写一张选项单给你挑", "体验巡检": "把主路径走一遍，能修的开 PR" };
 function renderSchedule(s) {
   const w = ahead(s.next_at), next = new Date(s.next_at);
-  const when = s.paused ? "暂停中：到点不生成，恢复后只补一轮"
+  const when = s.paused ? `暂停中：到点不生成，恢复后${s.once ? "补这一次" : "只补一轮"}`
     : /^\d\d-/.test(w) ? `${w} ${clock(s.next_at)}` : `${/^\d\d:/.test(w) ? "今天 " : ""}${w}（${pad(next.getMonth() + 1)}-${pad(next.getDate())}）`;
-  const facts = [["每轮", kindDoes[s.kind] || firstPara(s.detail)], ["技能", s.skill]].filter(x => x[1]);
+  const facts = [[s.once ? "做什么" : "每轮", kindDoes[s.kind] || firstPara(s.detail)], ["技能", s.skill]].filter(x => x[1]);
   const day = r => (r.title.match(/（(\d\d-\d\d)）$/) || [])[1];
   drawer(s.id, s.dept_name, `<h3>${esc(s.title)}</h3>
       <p class="sub-t">${esc([s.cadence, s.kind].filter(Boolean).join(" · "))} · ${esc({ secretary: "秘书", u1: "你" }[s.by] || s.by)} ${esc(date(s.created_at))} 建</p>
-      <div class="holder"><b>下一轮</b>　${esc(when)}</div>
+      <div class="holder"><b>${s.once ? "到点" : "下一轮"}</b>　${esc(when)}</div>
       ${facts.length ? `<dl class="facts">${facts.map(f => `<dt>${f[0]}</dt><dd>${esc(f[1])}</dd>`).join("")}</dl>` : ""}
-      <div class="jh"><b>最近几轮</b>${s.skips ? `<span>跳过过 ${s.skips} 轮</span>` : ""}</div>
-      ${s.rounds.length ? `<div class="rows">${s.rounds.map(r => taskRow({ ...r, title: day(r) ? day(r) + " 这一轮" : r.title })).join("")}</div>` : `<div class="quiet-line">还没跑过</div>`}
+      ${s.once ? `<div class="quiet-line">到点生成一件任务并派发，之后这条自动删除</div>` : `<div class="jh"><b>最近几轮</b>${s.skips ? `<span>跳过过 ${s.skips} 轮</span>` : ""}</div>
+      ${s.rounds.length ? `<div class="rows">${s.rounds.map(r => taskRow({ ...r, title: day(r) ? day(r) + " 这一轮" : r.title })).join("")}</div>` : `<div class="quiet-line">还没跑过</div>`}`}
       ${s.note ? `<p class="status-line${s.trouble ? " warn" : ""}">${esc(s.note)}</p>` : ""}
       ${s.detail ? `<details class="full"><summary>详述</summary><div class="result">${md(s.detail.trim())}</div></details>` : ""}`);
 }

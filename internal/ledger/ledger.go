@@ -94,7 +94,7 @@ type NewTask struct {
 	// Source、Class：草稿记的发现从哪来、归哪一类（只给草稿）。
 	Source Source `json:"source"`
 	Class  string `json:"class"`
-	// By 是任务分派人，缺省为建任务的身份；周期任务记建周期任务的人。不从请求体读。
+	// By 是任务分派人，缺省为建任务的身份；定时任务记建定时任务的人。不从请求体读。
 	By string `json:"-"`
 }
 
@@ -242,7 +242,7 @@ func DeptRepo(t Task, repos []string) string {
 }
 
 // UseDeptRepo 是 task run 入口用的：按 DeptRepo 给任务写上部门的仓库。草稿、后来才定部门的、交给负责人的，
-// 派出去时都在这一处补上；运行时自己派的（审阅、周期任务）不经这里，照旧没有仓库。
+// 派出去时都在这一处补上；运行时自己派的（审阅、定时任务）不经这里，照旧没有仓库。
 func UseDeptRepo(ctx context.Context, db *store.DB, id, actor string) error {
 	t, err := Get(ctx, db, id)
 	if err != nil || t.Org == "" {

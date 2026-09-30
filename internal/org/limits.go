@@ -33,7 +33,7 @@ const (
 	MinOptions       = 3     // 每份选项单至少几项
 	MaxOptions       = 5     // 每份选项单至多几项
 	MaxChoices       = 5     // 每部门待拍板的选项单
-	MaxSchedules     = 10    // 每部门周期任务
+	MaxSchedules     = 10    // 每部门定时任务
 	MaxSecrets       = 20    // 每部门凭据
 	MaxDrafts        = 7     // 每部门草稿任务（负责人一次能过完的量）
 )
@@ -74,7 +74,7 @@ var Limits = []Limit{
 		"归档过时的资料（atrium material archive mN）", "atrium material ls --node {dept}"},
 	{"options", "每份选项单", MaxOptions, "项", "出选项单的人", "只留最值得的几项", "atrium choice ls"},
 	{"choices", "每部门待拍板的选项单", MaxChoices, "份", "用户", "先拍板或放弃已有的（atrium choice pick cN <第几项> 或 --none）", "atrium choice ls"},
-	{"schedules", "每部门周期任务", MaxSchedules, "条", "部门负责人", "合并相近的、删掉不值的（atrium schedule rm sN）", "atrium schedule ls --node {dept}"},
+	{"schedules", "每部门定时任务", MaxSchedules, "条", "部门负责人", "合并相近的、删掉不值的（atrium schedule rm sN）", "atrium schedule ls --node {dept}"},
 	{"drafts", "每部门草稿", MaxDrafts, "件", "部门负责人",
 		"想清楚的转待派（atrium task set tN --status todo），不做的取消（--status cancelled），相近的合并，别部门的事改过去（--org oN）",
 		"atrium task ls --org {dept} --status draft"},

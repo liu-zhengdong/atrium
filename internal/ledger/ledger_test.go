@@ -121,7 +121,7 @@ func TestLedgerLifecycle(t *testing.T) {
 	}
 }
 
-// 结果投处理人（缺省分派任务的人）：秘书派的失败要处理地投秘书，过程不投秘书；--owner 改投指定的人；周期任务记建周期任务的人。
+// 结果投处理人（缺省分派任务的人）：秘书派的失败要处理地投秘书，过程不投秘书；--owner 改投指定的人；定时任务记建定时任务的人。
 func TestResultGoesToOwner(t *testing.T) {
 	db, ctx := openDB(t), context.Background()
 	if _, err := db.Exec(`INSERT INTO identities (id, kind, name, created_at) VALUES ('a1', 'leader', '甲', 0), ('a2', 'leader', '乙', 0)`); err != nil {
@@ -516,7 +516,7 @@ func TestDeptRepo(t *testing.T) {
 	}
 }
 
-// 分派任务入口补部门的仓库：建任务时不补（运行时建的审阅、周期任务也不补），UseDeptRepo 才写上并记经历。
+// 分派任务入口补部门的仓库：建任务时不补（运行时建的审阅、定时任务也不补），UseDeptRepo 才写上并记经历。
 func TestUseDeptRepo(t *testing.T) {
 	db, ctx := openDB(t), context.Background()
 	if _, err := db.Exec(`INSERT INTO identities (id, kind, name, created_at) VALUES ('a1', 'leader', '甲', 0)`); err != nil {

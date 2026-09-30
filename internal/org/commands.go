@@ -131,7 +131,7 @@ func Commands(t *cli.Table) {
 			{Name: "repo-add", Value: "仓库", Multi: true, Help: "加仓库"},
 			{Name: "repo-rm", Value: "仓库", Multi: true, Help: "去掉仓库"},
 			{Name: "delete", Bool: true, Help: "删掉这个部门（连同要点、仓库清单、验收人与暂停）；还有下属、任务、资料等引用时拒绝并列出"},
-			{Name: "into", Value: "oM", Help: "和 --delete 一起：先把下属部门、任务、周期任务、已拍板的选项单、资料（总览改作细节）并入 oM（常用上级）再删；" +
+			{Name: "into", Value: "oM", Help: "和 --delete 一起：先把下属部门、任务、定时任务、已拍板的选项单、资料（总览改作细节）并入 oM（常用上级）再删；" +
 				"进行中的任务、待拍板的选项单、凭据、没确认的事件仍要先处理"},
 		}, introFlags...),
 		Run: func(c *cli.Ctx) error {

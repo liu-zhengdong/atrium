@@ -161,8 +161,8 @@ CREATE TABLE IF NOT EXISTS queue (
   by          TEXT NOT NULL DEFAULT ''
 );
 
--- 周期任务：到点在部门下生成一件普通任务（kind：task patrol research）。
--- every_ms 周期；at_minute 本机钟点（当天第几分钟，只给整天的周期）；skips 累计跳过轮数，last_note 最近一笔。
+-- 定时任务：到点在部门下生成一件普通任务（kind：task patrol research）。
+-- every_ms 周期，0 是一次性的（next_at 触发一次，生成任务后删掉这条）；at_minute 本机钟点（当天第几分钟，只给整天的周期）；skips 累计跳过轮数，last_note 最近一笔。
 CREATE TABLE IF NOT EXISTS schedules (
   id          TEXT PRIMARY KEY,
   department  TEXT NOT NULL REFERENCES departments (id),

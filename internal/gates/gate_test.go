@@ -16,6 +16,7 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/org"
 	"github.com/liu-zhengdong/atrium/internal/pause"
 	"github.com/liu-zhengdong/atrium/internal/store"
+	"github.com/liu-zhengdong/atrium/internal/workers"
 )
 
 type env struct {
@@ -84,8 +85,12 @@ func (e *env) start(id, worker string) {
 	}
 }
 
+// exit 模拟执行者正常退出：dispatch 先记它最后的回复（测试没另记的按「交付结论：完成」），再转关卡。
 func (e *env) exit(id string) ledger.Task {
 	e.t.Helper()
+	if e.count(id, gates.KindResult) == 0 {
+		ledger.Record(e.ctx, e.db, id, gates.KindResult, "dispatch", "做完了\n交付结论：完成")
+	}
 	t, err := ledger.Apply(e.ctx, e.db, id, ledger.Event{Kind: ledger.ExitOK}, "dispatch", "")
 	if err != nil {
 		e.t.Fatal(err)
@@ -216,6 +221,55 @@ func TestGateNoChanges(t *testing.T) {
 			e.sweep()
 			if got := e.get(task.ID); got.Status != c.want || !strings.Contains(e.lastNote(task.ID), c.note) {
 				t.Fatalf("状态 %s，期望 %s 且经历含 %q：%s", got.Status, c.want, c.note, e.lastNote(task.ID))
+			}
+		})
+	}
+}
+
+// 没有改动可查的交付（message、dir）按执行者这一轮最后一行的交付结论判：完成才完成；没做成、没写转受阻交处理人，
+// 不交回重跑；上一轮的回复不算这一轮的（t486 没做成、t463 停下等决定都曾被判成 done）。
+func TestGateEnding(t *testing.T) {
+	cases := []struct {
+		name  string
+		repo  bool // 有仓库但工作树没改动；否则没有仓库
+		reply string
+		stale bool // 回复记在这一轮拉起之前
+		want  ledger.Status
+		note  string
+	}{
+		{"没改动、完成", true, "装好了\n交付结论：完成", false, ledger.Done, "没有改动"},
+		{"没改动、没做成", true, "h3 上读不到设计稿\n交付结论：没做成", false, ledger.Blocked, "没做成（h3 上读不到设计稿）"},
+		{"没仓库、停下等决定", false, "两个方案等负责人定\n交付结论：没做成", false, ledger.Blocked, "没做成（两个方案等负责人定）"},
+		{"没仓库、没写结论", false, "没做成，没改代码也没开 PR", false, ledger.Blocked, "没写「交付结论"},
+		{"上一轮的完成不算", false, "交付结论：完成", true, ledger.Blocked, "没写「交付结论"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			e := setup(t)
+			task, _ := ledger.Add(e.ctx, e.db, ledger.NewTask{Title: "调研"}, "u1")
+			dir := t.TempDir()
+			if c.repo {
+				task, _ = ledger.Add(e.ctx, e.db, ledger.NewTask{Title: "在 h3 装工具", Repo: "o/r"}, "u1")
+				dir = filepath.Join(t.TempDir(), "wt")
+				e.gh.Must(filepath.Dir(dir), "clone", "--quiet", e.gh.Bare, dir)
+				e.gh.Must(dir, "checkout", "--quiet", "-b", "t1-work")
+			}
+			e.start(task.ID, "claude+opus")
+			ledger.Record(e.ctx, e.db, task.ID, gates.KindWorktree, "dispatch", `{"host":"h1","dir":"`+filepath.ToSlash(dir)+`"}`)
+			if c.stale {
+				ledger.Record(e.ctx, e.db, task.ID, gates.KindResult, "dispatch", c.reply)
+				ledger.Record(e.ctx, e.db, task.ID, workers.RunKind, "dispatch", "{}")
+			} else {
+				ledger.Record(e.ctx, e.db, task.ID, workers.RunKind, "dispatch", "{}")
+				ledger.Record(e.ctx, e.db, task.ID, gates.KindResult, "dispatch", c.reply)
+			}
+			e.exit(task.ID)
+			e.sweep()
+			if got := e.get(task.ID); got.Status != c.want || !strings.Contains(e.lastNote(task.ID), c.note) {
+				t.Fatalf("状态 %s，期望 %s 且经历含 %q：%s", got.Status, c.want, c.note, e.lastNote(task.ID))
+			}
+			if e.queued(task.ID) {
+				t.Fatal("没做成不该交回重跑")
 			}
 		})
 	}

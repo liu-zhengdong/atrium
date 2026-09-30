@@ -61,6 +61,8 @@ func setup(t *testing.T) (*app.Env, *dispatcher) {
 		}
 	}
 	t.Setenv("PATH", bin+":/usr/bin:/bin")
+	t.Setenv("HOME", dir) // 假主目录：全局原则读这里的 AGENTS.md，不读开发者本机的
+	os.WriteFile(filepath.Join(dir, "AGENTS.md"), []byte("先给结论"), 0o600)
 	t.Setenv("ANTHROPIC_API_KEY", "leak")
 	db, err := store.Open(filepath.Join(dir, "data", "atrium.db"))
 	if err != nil {
@@ -171,7 +173,8 @@ func TestFlowClaudeToGate(t *testing.T) {
 		}
 	}
 	prompt, _ := os.ReadFile(filepath.Join(TaskDir(env.Paths.Data, tk.ID), "prompt-1.md"))
-	if !strings.Contains(string(prompt), "改 README") || !strings.Contains(string(prompt), "task-"+tk.ID) {
+	if !strings.Contains(string(prompt), "改 README") || !strings.Contains(string(prompt), "task-"+tk.ID) ||
+		!strings.Contains(string(prompt), "## 用户的全局原则（~/AGENTS.md，优先于部门要点）\n\n先给结论\n") {
 		t.Errorf("提示词：%s", prompt)
 	}
 	c, err := ReadLog(ctx, env, tk.ID, -1, 0)

@@ -332,6 +332,9 @@ func buildPrompt(ctx context.Context, q store.Querier, who org.Identity, ids []i
 	if err != nil {
 		return "", err
 	}
+	if in.Global, err = org.Principles(); err != nil {
+		return "", err
+	}
 	lm, err := org.LeaderMap(ctx, q)
 	if err != nil {
 		return "", err

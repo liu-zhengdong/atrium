@@ -157,7 +157,7 @@ func TestTries(t *testing.T) {
 }
 
 func TestBuildPrompt(t *testing.T) {
-	p := BuildPrompt(PromptInput{Task: "t3", Title: "修登录", Detail: "详述", Points: []string{"k1（o1）简洁——整体更简单"},
+	p := BuildPrompt(PromptInput{Task: "t3", Title: "修登录", Detail: "详述", Global: "## 用户的全局原则\n\n先给结论\n", Points: []string{"k1（o1）简洁——整体更简单"},
 		Skill: "/data/skills/fix/SKILL.md", Profile: "先跑相关测试", Tells: []string{"改用 A 方案"}, Bounces: []string{"没有 PR"},
 		Repo: "a/b", Branch: "task-t3", Guide: "不要用 git stash"})
 	for _, want := range []string{"# 任务 t3：修登录", "- k1（o1）简洁——整体更简单", "/data/skills/fix/SKILL.md", "先跑相关测试", "atrium material ls mN 取全文",
@@ -168,6 +168,9 @@ func TestBuildPrompt(t *testing.T) {
 	}
 	if !strings.HasPrefix(p, "# 任务 t3：修登录\n\n"+langRule+"\n") {
 		t.Errorf("语言要求要紧跟标题：\n%s", p)
+	}
+	if !strings.Contains(p, "详述\n\n## 用户的全局原则\n\n先给结论\n\n## 部门要点") {
+		t.Errorf("全局原则要在详述之后、部门要点之前：\n%s", p)
 	}
 	if strings.Contains(p, "4310") || strings.Contains(p, "碰到哪些已有能力") {
 		t.Errorf("通用约束不该写死某个仓库：\n%s", p)

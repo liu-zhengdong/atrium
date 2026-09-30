@@ -158,6 +158,7 @@ type DeptBrief struct {
 // PromptInput 是一次唤醒提示词的全部材料。
 type PromptInput struct {
 	Leader   org.Identity
+	Global   string // 用户的全局原则（org.Principles 拼好的一节）；没有为空
 	Depts    []DeptBrief
 	Memo     string
 	Events   []Event
@@ -175,6 +176,9 @@ func Prompt(in PromptInput) string {
 	w("你是 Atrium 组织里的负责人 %s（%s）。你是一次性进程：处理完下面这批事件、确认后退出。", in.Leader.ID, in.Leader.Name)
 	w("你的连续性存在 Atrium（要点、任务备注、你的备忘），不靠这次的记忆。你不写代码、不改仓库：活派给执行者，你负责判断、派、盯、收。")
 	w("")
+	if in.Global != "" {
+		w("%s", in.Global)
+	}
 	w("## 你负责的部门")
 	if len(in.Depts) == 0 {
 		w("（还没有部门指派给你）")

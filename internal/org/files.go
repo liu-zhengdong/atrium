@@ -1,6 +1,7 @@
 package org
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -37,6 +38,27 @@ func writeFile(path string, data []byte, perm os.FileMode) error {
 		return err
 	}
 	return os.Rename(tmp, path)
+}
+
+// Principles 现读本机（服务主机）主目录的 AGENTS.md——用户的全局原则，原文拼成提示词里的一节；文件不存在返回空。
+// 执行者（含审阅者）、负责人、秘书的提示词都从这里取，放在部门要点之前：全局原则优先于部门要点。
+func Principles() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	b, err := os.ReadFile(filepath.Join(home, "AGENTS.md"))
+	if errors.Is(err, os.ErrNotExist) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	body := strings.TrimSpace(string(b))
+	if body == "" {
+		return "", nil
+	}
+	return "## 用户的全局原则（~/AGENTS.md，优先于部门要点）\n\n" + body + "\n", nil
 }
 
 var segment = regexp.MustCompile(`^[A-Za-z0-9_\p{Han}][A-Za-z0-9._\-\p{Han}]*$`)

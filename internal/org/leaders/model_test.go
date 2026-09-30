@@ -183,6 +183,7 @@ func TestCheckEscalate(t *testing.T) {
 func TestPrompt(t *testing.T) {
 	in := PromptInput{
 		Leader: org.Identity{ID: "a2", Name: "运行时"},
+		Global: "## 用户的全局原则\n\n先给结论\n",
 		Depts: []DeptBrief{{Dept: org.Dept{ID: "o3", Name: "服务", What: "单实例后台服务", Now: "在迁 Go"},
 			Path: []string{"o1", "o2", "o3"}, Chain: []org.Point{{ID: "k1", Org: "o1", Text: "简洁优先", Why: "长期成本"}},
 			Materials: "总览正文", Covered: []org.Dept{{ID: "o22", Name: "网页"}, {ID: "o23", Name: "导入"}}}},
@@ -196,6 +197,9 @@ func TestPrompt(t *testing.T) {
 		if !strings.Contains(p, want) {
 			t.Errorf("提示词缺 %q", want)
 		}
+	}
+	if !strings.Contains(p, "收。\n\n## 用户的全局原则\n\n先给结论\n\n## 你负责的部门") {
+		t.Errorf("全局原则要在开场之后、部门与要点之前：\n%s", p)
 	}
 	if strings.Contains(p, "交给你去拆的任务") {
 		t.Error("没有 task.assigned 不附拆活做法")

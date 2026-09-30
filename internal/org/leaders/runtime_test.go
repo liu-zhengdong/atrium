@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -29,6 +30,9 @@ import (
 func fixture(t *testing.T) (*app.Env, *hub, *httptest.Server) {
 	t.Helper()
 	dir := t.TempDir()
+	t.Setenv("HOME", dir) // 假主目录：全局原则读这里的 AGENTS.md，不读开发者本机的
+	t.Setenv("USERPROFILE", dir)
+	os.WriteFile(filepath.Join(dir, "AGENTS.md"), []byte("先给结论"), 0o600)
 	db, err := store.Open(filepath.Join(dir, "atrium.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -298,7 +302,7 @@ func TestWake(t *testing.T) {
 	}
 	l := f.seen[0]
 	if l.Profile != "fake" || l.Env["ATRIUM_WORKER"] != "" || l.Env["ATRIUM_DATA"] != env.Paths.Data ||
-		!strings.Contains(l.Prompt, "k1（o1）简洁优先") || !strings.Contains(l.Prompt, "#1") || !strings.Contains(l.Prompt, "投给 a1") ||
+		!strings.Contains(l.Prompt, "k1（o1）简洁优先") || !strings.Contains(l.Prompt, "## 用户的全局原则（~/AGENTS.md，优先于部门要点）\n\n先给结论") || !strings.Contains(l.Prompt, "#1") || !strings.Contains(l.Prompt, "投给 a1") ||
 		!strings.Contains(l.Prompt, "也归你管的下属部门：o4 网页") {
 		t.Fatalf("唤醒输入不对：%+v", l)
 	}

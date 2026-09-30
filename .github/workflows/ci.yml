@@ -60,6 +60,9 @@ jobs:
       - name: Windows 冒烟依赖
         if: runner.os == 'Windows'
         run: choco install jq ffmpeg --yes --no-progress
+      - name: 平台包测试
+        # check 只在 Linux 跑测试；权限、进程这类按平台分文件的测试要在各自平台上跑。
+        run: go test ./internal/platform/
       - name: 隔离实例端到端冒烟
         env:
           TMPDIR: ${{ runner.temp }}

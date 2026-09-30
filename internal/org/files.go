@@ -17,7 +17,7 @@ import (
 //
 //	skills/<名字>/r<rev>/SKILL.md 与附属文件（每一版）
 //	materials/<mN>/r<rev>/<相对路径>（一条资料的正文与附属文件）
-//	secrets/<oN>/<名称>（0600）
+//	secrets/<oN>/<名称>（凭据，按 platform.WritePrivateFile 写）
 func skillDir(data, name string, rev int) string {
 	return filepath.Join(data, "skills", name, "r"+strconv.Itoa(rev))
 }
@@ -28,13 +28,13 @@ func materialFile(data, id string, rev int, rel string) string {
 
 func secretFile(data, dept, name string) string { return filepath.Join(data, "secrets", dept, name) }
 
-// writeFile 先写临时文件再改名；目录 0700。
-func writeFile(path string, data []byte, perm os.FileMode) error {
+// writeFile 先写临时文件（0600）再改名；目录 0700。
+func writeFile(path string, data []byte) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
 	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, perm); err != nil {
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
 		return err
 	}
 	return os.Rename(tmp, path)

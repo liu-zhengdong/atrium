@@ -564,7 +564,7 @@ func TestMergeFlatMaterials(t *testing.T) {
 			id, rev, dept.ID, title, note, base, len(body), units, binary, arch, by, at); err != nil {
 			t.Fatal(err)
 		}
-		if err := writeFile(materialFile(data, id, rev, base), []byte(body), 0o600); err != nil {
+		if err := writeFile(materialFile(data, id, rev, base), []byte(body)); err != nil {
 			t.Fatal(err)
 		}
 	}

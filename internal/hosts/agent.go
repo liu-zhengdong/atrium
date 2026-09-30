@@ -68,11 +68,7 @@ func writeSecret(path string, v any) error {
 	if err != nil {
 		return err
 	}
-	tmp := path + ".tmp"
-	if err := platform.WritePrivateFile(tmp, raw); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
+	return platform.WritePrivateFile(path, raw)
 }
 
 func ReadAgentConfig(dir string) (AgentConfig, error) {

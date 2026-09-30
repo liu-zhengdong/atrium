@@ -458,7 +458,7 @@ func AddMaterial(ctx context.Context, db *store.DB, data string, in MaterialInpu
 			return err
 		}
 		for _, f := range in.Files {
-			if err := writeFile(materialFile(data, s.id, s.rev, f.Name), f.Content, 0o600); err != nil {
+			if err := writeFile(materialFile(data, s.id, s.rev, f.Name), f.Content); err != nil {
 				return err
 			}
 		}

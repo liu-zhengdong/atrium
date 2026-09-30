@@ -31,7 +31,7 @@ func TestRecountMaterials(t *testing.T) {
 		s := materialSlot{id: "m1", rev: rev, kind: "detail", title: "旧资料", entry: "report.html", units: 400}
 		for _, f := range files {
 			s.files = append(s.files, MaterialFileInfo{Path: f.Name, Size: len(f.Content), Units: 100})
-			if err := writeFile(materialFile(data, "m1", rev, f.Name), f.Content, 0o600); err != nil {
+			if err := writeFile(materialFile(data, "m1", rev, f.Name), f.Content); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -53,7 +53,7 @@ func TestRecountMaterials(t *testing.T) {
 	if err != nil || old.Units != 400 || old.Files[0].Binary {
 		t.Fatalf("失败应回滚：%+v %v", old, err)
 	}
-	if err := writeFile(missing, files[3].Content, 0o600); err != nil {
+	if err := writeFile(missing, files[3].Content); err != nil {
 		t.Fatal(err)
 	}
 	if err := recountMaterials(ctx, db, data); err != nil {

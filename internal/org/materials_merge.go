@@ -145,7 +145,7 @@ func mergeFlatMaterials(ctx context.Context, db *store.DB, data string) (int, er
 				if err != nil {
 					return err
 				}
-				if err := writeFile(materialFile(data, s.id, s.rev, r.title), raw, 0o600); err != nil {
+				if err := writeFile(materialFile(data, s.id, s.rev, r.title), raw); err != nil {
 					return err
 				}
 				at = max(at, r.at)

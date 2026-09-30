@@ -125,7 +125,7 @@ func Workdir(ctx context.Context, data, task, repo, place string) (dir, branch s
 			return "", "", err
 		}
 		if cur != branch {
-			return "", "", api.Conflict("工作树 %s 在分支 %s 上，不是 %s；先清掉再派", dir, cur, branch)
+			return "", "", api.Conflict("任务 %s 的工作树 %s 在分支 %s 上，不是 %s；拉起前停止，由负责人核对分支归属；不要进入其他任务工作树或删除现有改动", task, dir, cur, branch)
 		}
 		return dir, branch, nil
 	}
@@ -153,11 +153,7 @@ func Workdir(ctx context.Context, data, task, repo, place string) (dir, branch s
 	if err := os.MkdirAll(td, 0o700); err != nil {
 		return "", "", err
 	}
-	base, err = worktree.Base(ctx, main, branch, base, run)
-	if err != nil {
-		return "", "", err
-	}
-	if _, err := run(ctx, main, "git", "worktree", "add", "--quiet", "-B", branch, dir, base); err != nil {
+	if err := worktree.Create(ctx, main, dir, branch, base, run); err != nil {
 		return "", "", err
 	}
 	return dir, branch, nil

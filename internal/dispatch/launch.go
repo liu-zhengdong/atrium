@@ -78,6 +78,9 @@ func (d *dispatcher) launch(ctx context.Context, t ledger.Task, o launchOpts) er
 	if err != nil {
 		return err
 	}
+	if t.PR != "" {
+		in.Detail += "\n\n已有 PR：" + t.PR + "；在当前任务分支上续做并更新这个 PR。"
+	}
 	if in.Bounces, err = bounceNotes(ctx, db, t.ID); err != nil {
 		return err
 	}

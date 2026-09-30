@@ -202,10 +202,11 @@ func TestAcceptDir(t *testing.T) {
 	}
 }
 
-// 提示词里怎么交由交付方式定：GitHub 仓库要开 PR，本机仓库只提交不推送，没有仓库不提 PR。
+// 提示词里怎么交由交付方式定：GitHub 仓库更新或新开 PR，本机仓库只提交不推送，没有仓库不提 PR。
 func TestPromptRules(t *testing.T) {
 	pr := strings.Join(gates.PromptRules("o/r", "", "", "task-t1"), "\n")
-	if !strings.Contains(pr, "在分支 task-t1 上提交、推送并开 PR") {
+	if !strings.Contains(pr, "当前任务工作树的分支 task-t1 上提交、推送") ||
+		!strings.Contains(pr, "已有 PR 就更新它") || !strings.Contains(pr, "不要进入其他任务的工作树") {
 		t.Fatalf("pr：%s", pr)
 	}
 	local := strings.Join(gates.PromptRules(filepath.Join(t.TempDir(), "site"), "", "", "task-t1"), "\n")

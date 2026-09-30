@@ -253,6 +253,7 @@ func Prompt(in PromptInput) string {
 	w("## 可用命令（都是 atrium，已按你的身份连到服务；加 --json 得结构化结果）")
 	w("- 看：task show tN；task log tN；task ls --org %s；org show oN", home)
 	w("- 派与管：task add 标题 --org %s；task run tN；task tell tN 补充；task stop tN；task set tN --status …；task note tN 取舍与原因", home)
+	w("- %s。等验收时保留的工作树由原任务继续使用，旧验收阶段撤销，提交推送后重新过关卡与验收；已回收的从已推送的原任务分支重建。分支被其他工作树占用时先核对归属，由负责人处理，不能指定其他任务的工作地点或让执行者去其他任务目录绕。", ledger.ContinuePRHowTo)
 	w("- 验收（部门的验收人是负责人时，等验收的事件发给你）：task accept tN；task reject tN --reason 哪里不行")
 	w("- 规矩写成要点：point add oN 一句话 --why 为什么；point edit kN …")
 	w("- 记草稿：%s", ledger.DraftHowTo)

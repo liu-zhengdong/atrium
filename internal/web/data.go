@@ -782,20 +782,21 @@ func runningByHost(ctx context.Context, q store.Querier) (map[string]int, error)
 
 // TaskDetail 是任务抽屉。
 type TaskDetail struct {
-	Task     ledger.Task    `json:"task"`
-	DeptName string         `json:"dept_name"`
-	Steps    []string       `json:"steps"`
-	Step     int            `json:"step"`
-	State    string         `json:"state"`
-	Holder   string         `json:"holder"`
-	HostName string         `json:"host_name"`
-	Trace    *workers.Trace `json:"trace"`   // 最近一次拉起的经过（与 task log 同一份解析）；还没拉起过为空
-	Live     bool           `json:"live"`    // 执行者正在干（执行这一步）
-	RunAt    int64          `json:"run_at"`  // 最近一次拉起的时刻
-	Parent   *Row           `json:"parent"`  // 挂在谁下面；没有为空
-	Kids     []Row          `json:"kids"`    // 直接的子任务（按建立先后）
-	Waits    []Row          `json:"waits"`   // 它要等的（依赖，含已结束的）
-	Waiters  []Row          `json:"waiters"` // 在等它的
+	UsageText string         `json:"usage_text,omitempty"`
+	Task      ledger.Task    `json:"task"`
+	DeptName  string         `json:"dept_name"`
+	Steps     []string       `json:"steps"`
+	Step      int            `json:"step"`
+	State     string         `json:"state"`
+	Holder    string         `json:"holder"`
+	HostName  string         `json:"host_name"`
+	Trace     *workers.Trace `json:"trace"`   // 最近一次拉起的经过（与 task log 同一份解析）；还没拉起过为空
+	Live      bool           `json:"live"`    // 执行者正在干（执行这一步）
+	RunAt     int64          `json:"run_at"`  // 最近一次拉起的时刻
+	Parent    *Row           `json:"parent"`  // 挂在谁下面；没有为空
+	Kids      []Row          `json:"kids"`    // 直接的子任务（按建立先后）
+	Waits     []Row          `json:"waits"`   // 它要等的（依赖，含已结束的）
+	Waiters   []Row          `json:"waiters"` // 在等它的
 	// 由哪条周期任务生成（sN），它交出的或它选自的选项单（cN）；没有为空。
 	Schedule string `json:"schedule,omitempty"`
 	Choice   string `json:"choice,omitempty"`
@@ -852,7 +853,11 @@ func loadTask(ctx context.Context, q store.Querier, id string) (TaskDetail, erro
 		return out, err
 	}
 	tr, err := workers.ReadTrace(run.Worker, run.Log)
+	if err != nil {
+		return out, err
+	}
 	out.Trace, out.RunAt, out.Live = &tr, run.At, t.Status == ledger.Running && t.Stage == ledger.StageNone
+	err = taskUsage(ctx, q, id, *run, &out)
 	return out, err
 }
 

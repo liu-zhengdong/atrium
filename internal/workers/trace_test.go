@@ -143,6 +143,7 @@ func TestTraceCodexLog(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := Trace{
+		Usage: Usage{Tokens: Tokens{Input: token(100), Output: token(20), CacheRead: token(0)}},
 		Segments: []Segment{
 			{Cmds: []Command{{Cmd: "ls internal", State: CmdOK, Out: "api\napp\ncli"}, {Cmd: "rg -n 'ReadLog' internal/web", State: CmdNone}}},
 			{Say: "先改解析，再补测试。", Cmds: []Command{
@@ -297,6 +298,7 @@ func TestTraceOpencodeLog(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := Trace{
+		Usage: Usage{Tokens: Tokens{Input: token(6200), Output: token(190), CacheRead: token(0), CacheWrite: token(0)}},
 		Segments: []Segment{
 			{Cmds: []Command{
 				{Cmd: "ls internal", State: CmdOK, Out: "api\napp\ncli"},

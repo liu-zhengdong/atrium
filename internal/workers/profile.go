@@ -24,6 +24,8 @@ var (
 
 // Rules 是档案 frontmatter 的规则。三层叠加后以最具体的一层为准（整项覆盖，checks 写 [] 表示不加查）。
 type Rules struct {
+	Billing     string         `yaml:"billing,omitempty" json:"billing,omitempty"`
+	Prices      *Prices        `yaml:"prices,omitempty" json:"prices,omitempty"`
 	Auto        *bool          `yaml:"auto,omitempty" json:"auto,omitempty"` // nil：缺省参与自动挑人
 	Trust       string         `yaml:"trust,omitempty" json:"trust,omitempty"`
 	MaxRisk     string         `yaml:"max_risk,omitempty" json:"max_risk,omitempty"`
@@ -154,6 +156,7 @@ func CheckProfile(name string, keys map[string]any) error {
 	}
 	layer, rest, _ := strings.Cut(name, "/")
 	var p []string
+	p = append(p, r.billingProblems()...)
 	if r.Trust != "" && TrustLevel(r.Trust) < 0 {
 		p = append(p, "trust 只能是 "+strings.Join(Trusts, "、"))
 	}

@@ -21,6 +21,7 @@ func readClaude(p *Parser, e event, _ string) bool {
 	case "system":
 		if e.str("subtype") == "init" {
 			p.dir, p.t.Model = e.str("cwd"), e.str("model")
+			p.t.Session = e.str("session_id")
 		}
 	case "assistant":
 		for _, c := range content {
@@ -52,6 +53,15 @@ func readClaude(p *Parser, e event, _ string) bool {
 			p.result(m.str("tool_use_id"), code, out)
 		}
 	case "result":
+		u := snakeUsage(e.obj("usage"))
+		u.Cost, u.Currency = reportedCost(e, "total_cost_usd"), "USD"
+		p.addUsage(u)
+		// Claude 收尾花费是会话累计值，多轮只留最后一份。
+		p.t.Usage.Cost = u.Cost
+		p.t.Usage.Source, p.t.Usage.Currency = "", ""
+		if u.Cost != nil {
+			p.t.Usage.Source, p.t.Usage.Currency = "tool", "USD"
+		}
 		ms, _ := e["duration_ms"].(float64)
 		p.end(e.str("result"), int64(ms))
 	case "rate_limit_event", "tool_progress", "command_lifecycle", "stream_event":
@@ -131,6 +141,23 @@ func readCodex(p *Parser, e event, line string) bool {
 			}
 		}
 	case "turn.completed":
+		u := snakeUsage(e.obj("usage"))
+		u.CacheRead = number(e.obj("usage"), "cached_input_tokens")
+		u.CacheWrite = number(e.obj("usage"), "cache_write_input_tokens")
+		if u.Input != nil && u.CacheRead != nil {
+			n := *u.Input - *u.CacheRead
+			if u.CacheWrite != nil {
+				n -= *u.CacheWrite
+			}
+			if n >= 0 {
+				u.Input = &n
+			} else {
+				u.Input = nil
+			}
+		} else {
+			u.Input = nil // 缓存读缺失时，不能把总输入当成未缓存输入。
+		}
+		p.addUsage(u)
 		p.end(p.lastSay, 0)
 	case "error", "turn.failed":
 		p.raw(line)
@@ -187,6 +214,10 @@ func readAgy(p *Parser, e event, line string) bool {
 		case "agent_response":
 			p.pending[id] += s.str("text_delta")
 			if s.str("state") == "DONE" {
+				u := snakeUsage(s.obj("usage"))
+				u.CacheRead = number(s.obj("usage"), "cache_read_tokens")
+				u.CacheWrite = number(s.obj("usage"), "cache_write_tokens")
+				p.addUsage(u)
 				p.say(p.pending[id])
 				delete(p.pending, id)
 			}
@@ -283,6 +314,9 @@ func readCursor(p *Parser, e event, _ string) bool {
 			summary = e.str("result")
 		}
 		ms, _ := e["duration_ms"].(float64)
+		us := e.obj("usage")
+		u := Usage{Tokens: Tokens{Input: number(us, "inputTokens"), Output: number(us, "outputTokens"), CacheRead: number(us, "cacheReadTokens"), CacheWrite: number(us, "cacheWriteTokens")}, Cost: reportedCost(e, "total_cost_usd"), Currency: "USD"}
+		p.addUsage(u)
 		p.end(summary, int64(ms))
 	default:
 		return false
@@ -347,6 +381,12 @@ func readOpencode(p *Parser, e event, line string) bool {
 		}
 		p.result(id, code, out)
 	case "step_finish":
+		tk := part.obj("tokens")
+		u := Usage{Tokens: Tokens{Input: number(tk, "input"), Output: number(tk, "output"), CacheRead: number(tk.obj("cache"), "read"), CacheWrite: number(tk.obj("cache"), "write")}, Cost: reportedCost(part, "cost"), Currency: "USD"}
+		if reasoning := number(tk, "reasoning"); reasoning != nil {
+			u.Output = sumToken(u.Output, reasoning)
+		}
+		p.addUsage(u)
 		if part.str("reason") == "stop" {
 			p.end(p.lastSay, 0)
 		}

@@ -353,10 +353,11 @@ function traceHTML(d) {
   const tr = d.trace;
   if (!tr) return "";
   const tid = d.task.id, segs = tr.segments, n = cmdsOf(segs).length;
+  const usage = d.usage_text ? `<div class="jh"><b>拉起用量</b></div><p>${esc(d.usage_text)}</p>` : "";
   const lines = (tr.unknown ? `<div class="jh"><b>没认出</b><span>${tr.unknown} 行事件，工具的日志格式可能变了</span></div>` : "")
     + (tr.lines?.length ? `<div class="log">${esc(tr.lines.join("\n"))}</div>` : "");
   const fold = (key, label, open) => `<button class="grp fold" data-g="${tid}:${key}" aria-expanded="${open}">${icon.chev}<span>${label}</span></button>`;
-  if (!segs.length && !tr.ended) return lines ? `<div class="jh"><b>日志</b></div>${lines}` : "";
+  if (!segs.length && !tr.ended) return usage + (lines ? `<div class="jh"><b>日志</b></div>${lines}` : "");
   if (d.live) { // 进行中：只留最近两段，当前段展开，更早的折起
     const older = segs.slice(0, Math.max(0, segs.length - 2)), showOld = unfolded.has(tid + ":old");
     return `<div class="jh"><b>经过</b><span>${n} 条命令 · 已跑 ${since(d.run_at)}</span></div>`
@@ -364,7 +365,7 @@ function traceHTML(d) {
       + (showOld ? older.map((s, i) => segHTML(tid, s, i, false)).join("") : "")
       + segs.slice(older.length).map((s, k) => segHTML(tid, s, older.length + k, older.length + k === segs.length - 1)).join("") + lines;
   }
-  let out = "";
+  let out = usage;
   if (tr.ended && tr.result) { // 已完成：先给结果第一段，其余折进「全文」；经过整体折起
     const full = unfolded.has(tid + ":full"), more = firstPara(tr.result) !== tr.result.trim();
     out += `<div class="jh"><b>结果</b>${tr.ms ? `<span>用时 ${Math.max(1, Math.round(tr.ms / 60e3))} 分钟</span>` : ""}</div>

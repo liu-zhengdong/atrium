@@ -22,7 +22,7 @@ func (d *dispatcher) exited(ctx context.Context, p *proc, code int) error {
 		return err
 	}
 	if t.Status != ledger.Running || t.Stage != ledger.StageNone || last == nil || last.N != p.run.N {
-		return nil
+		return recordExit(ctx, db, p.task, p.run, workers.Exit{N: p.run.N, Reason: "任务已停止或进入下一阶段"})
 	}
 	tail, err := workers.Tail(p.run.Log, workers.TailBytes)
 	if err != nil && !os.IsNotExist(err) {
@@ -63,7 +63,7 @@ func (d *dispatcher) exited(ctx context.Context, p *proc, code int) error {
 	}
 	note += marked
 	exit := workers.Exit{N: p.run.N, Model: workers.ModelOf(p.run.Worker, head), Outcome: workers.OutcomeOf(sig, route.Do != "fail"), Reason: note}
-	if err := recordExit(ctx, db, p.task, exit); err != nil {
+	if err := recordExit(ctx, db, p.task, p.run, exit); err != nil {
 		return err
 	}
 	apply := func(kind ledger.EventKind, why string) error {

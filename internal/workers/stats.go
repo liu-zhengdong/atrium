@@ -34,6 +34,7 @@ func OutText(out string) string { return outText[out] }
 
 // Exit 是经历 kind "exit" 的正文：第几次拉起、实际用的模型、结果与原因。
 type Exit struct {
+	Usage   Usage  `json:"usage"`
 	N       int    `json:"n"`
 	Model   string `json:"model,omitempty"` // 工具在日志里报的实际模型（ModelOf）；没写模型、跟随工具缺省时看它解析到了哪个
 	Outcome string `json:"outcome"`
@@ -58,6 +59,7 @@ func Failed(out string) bool { return out == OutQuota || out == OutSetup || out 
 
 // Attempt 是一次拉起及其结果。
 type Attempt struct {
+	Usage      Usage  `json:"usage"`
 	Task       string `json:"task"`
 	N          int    `json:"n"`
 	Worker     string `json:"worker"`          // 当时的执行者标识（含强度）
@@ -71,19 +73,20 @@ type Attempt struct {
 
 // Stat 是一个组合近几次有结果的拉起的结果数与用时。
 type Stat struct {
-	Launches int    `json:"launches"`
-	OK       int    `json:"ok"`
-	Bounce   int    `json:"bounce"`
-	Quota    int    `json:"quota"`
-	Setup    int    `json:"setup"`
-	Fail     int    `json:"fail"`
-	MedianMS *int64 `json:"median_ms"` // 排除启动失败的中位数
-	MaxMS    *int64 `json:"max_ms"`    // 所有有效用时中的最长
+	Usage    []UsageMetric `json:"usage"`
+	Launches int           `json:"launches"`
+	OK       int           `json:"ok"`
+	Bounce   int           `json:"bounce"`
+	Quota    int           `json:"quota"`
+	Setup    int           `json:"setup"`
+	Fail     int           `json:"fail"`
+	MedianMS *int64        `json:"median_ms"` // 排除启动失败的中位数
+	MaxMS    *int64        `json:"max_ms"`    // 所有有效用时中的最长
 }
 
 // Count 汇总结果数与用时（纯函数）；启动失败不进入中位数，最长保留所有有效用时。
 func Count(ls []Attempt) Stat {
-	s := Stat{Launches: len(ls)}
+	s := Stat{Launches: len(ls), Usage: usageStats(ls)}
 	var durations []int64
 	for _, l := range ls {
 		if l.Outcome != "" && l.DurationMS != nil {
@@ -116,7 +119,7 @@ func (s Stat) String() string {
 	if s.Launches == 0 {
 		return "还没有拉起记录 · " + s.Timing()
 	}
-	return fmt.Sprintf("近 %d 次拉起：交付 %d · 被交回 %d · 额度 %d · 起不来 %d · 其他失败 %d", s.Launches, s.OK, s.Bounce, s.Quota, s.Setup, s.Fail) + " · " + s.Timing()
+	return fmt.Sprintf("近 %d 次拉起：交付 %d · 被交回 %d · 额度 %d · 起不来 %d · 其他失败 %d", s.Launches, s.OK, s.Bounce, s.Quota, s.Setup, s.Fail) + " · " + s.Timing() + " · " + s.UsageText()
 }
 
 // Fails 数最近 n 次有结果的拉起里启动失败几次（纯函数，ls 新的在前）。
@@ -171,6 +174,7 @@ func Settle(task string, evs []Event) ([]Attempt, error) {
 		}
 		if exit != nil {
 			cur.Model = exit.Model
+			cur.Usage = exit.Usage
 		}
 		out = append(out, *cur)
 	}
@@ -190,7 +194,7 @@ func Settle(task string, evs []Event) ([]Attempt, error) {
 				return nil, fmt.Errorf("任务 %s 的退出记录坏了：%w", task, err)
 			}
 			if exit == nil {
-				exit = &Attempt{Outcome: x.Outcome, Reason: x.Reason, Model: x.Model, At: e.At}
+				exit = &Attempt{Outcome: x.Outcome, Reason: x.Reason, Model: x.Model, At: e.At, Usage: x.Usage}
 			}
 		case "exit_ok", "exit_fail", "bounce":
 			var b struct {

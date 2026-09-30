@@ -490,12 +490,6 @@ func noteUnknown(ctx context.Context, db *store.DB, task string, run workers.Run
 	return err
 }
 
-// recordExit 记这次拉起的结果（workers 按拉起统计用）。
-func recordExit(ctx context.Context, q store.Querier, task string, x workers.Exit) error {
-	raw, _ := json.Marshal(x)
-	return ledger.Record(ctx, q, task, workers.ExitKind, actor, string(raw))
-}
-
 // markUnavailable 按退出信号把这一轮的「工具+模型@机器」标成不可用，返回写进任务备注的一句；不是可用性信号返回空。
 func markUnavailable(ctx context.Context, db *store.DB, run workers.Run, sig workers.Signal) (string, error) {
 	w, err := workers.ParseWorker(run.Worker)

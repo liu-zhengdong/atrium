@@ -1,0 +1,2 @@
+{"type":"step_finish","part":{"id":"sample-0","reason":"tool-calls","cost":0.0006089048,"tokens":{"total":150967,"input":553,"output":111,"reasoning":287,"cache":{"write":0,"read":150016}}}}
+{"type":"step_finish","part":{"id":"sample-1","reason":"stop","cost":0.0010448984,"tokens":{"total":153546,"input":1583,"output":1391,"reasoning":44,"cache":{"write":0,"read":150528}}}}

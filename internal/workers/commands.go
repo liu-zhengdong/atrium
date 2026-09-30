@@ -13,6 +13,7 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/api"
 	"github.com/liu-zhengdong/atrium/internal/app"
 	"github.com/liu-zhengdong/atrium/internal/cli"
+	"github.com/liu-zhengdong/atrium/internal/ledger"
 	"github.com/liu-zhengdong/atrium/internal/platform"
 	"github.com/liu-zhengdong/atrium/internal/quota"
 	"github.com/liu-zhengdong/atrium/internal/store"
@@ -234,6 +235,7 @@ func Routes(r *api.Router, env *app.Env) {
 
 // Commands 注册 workers：列与看只读（执行者连着用户的服务也能跑），改档案与解除标记在 workers edit。
 func Commands(t *cli.Table) {
+	ledger.HistoryText[ExitKind] = ExitText
 	t.Group("workers", "执行者：可派的组合、档案与近期拉起统计")
 	t.Add(cli.Command{Path: "workers", Args: "[执行者或 层/名]",
 		Summary: "列执行者（组合、信任、近 20 次拉起的结果、哪台上不可用）；给名字看叠加后的档案与每次拉起的明细，或一层原文",
@@ -379,7 +381,7 @@ func showCmd(c *cli.Ctx, name string) error {
 		if a.Model != "" {
 			fmt.Fprintf(&b, "（%s）", a.Model)
 		}
-		fmt.Fprintf(&b, "  %s · 用时 %s", OutText(a.Outcome), DurationText(a.DurationMS))
+		fmt.Fprintf(&b, "  %s · 用时 %s · %s", OutText(a.Outcome), DurationText(a.DurationMS), a.Usage.String())
 		if a.Reason != "" && a.Outcome != OutOK {
 			fmt.Fprintf(&b, "：%s", clipRunes(oneLine(a.Reason), 80))
 		}

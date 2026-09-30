@@ -27,6 +27,8 @@ const (
 
 // Trace 是一次拉起的「经过」（纯数据）：按执行者自己说的话切段，每段带这段里跑的命令。网页任务抽屉与 task log 共用。
 type Trace struct {
+	Session  string    `json:"-"`
+	Usage    Usage     `json:"usage"`
 	Segments []Segment `json:"segments"`
 	Ended    bool      `json:"ended"`             // 走到了收尾
 	Result   string    `json:"result,omitempty"`  // 收尾总结全文
@@ -68,12 +70,13 @@ func Traceable(worker string) bool { return readerOf(worker) != nil }
 
 // Parser 逐行读执行者日志攒成 Trace（无 IO）：工具带解析的按事件读，其余逐行留原文。
 type Parser struct {
-	read    reader
-	t       Trace
-	open    map[string][2]int // 还没结果的工具调用 → 段、命令下标
-	lastSay string
-	dir     string            // 工作目录（工具在开头报了才有）：步骤里的路径去掉这个前缀
-	pending map[string]string // 按片段送来、还没说完的话（agy）
+	read     reader
+	t        Trace
+	open     map[string][2]int // 还没结果的工具调用 → 段、命令下标
+	lastSay  string
+	dir      string            // 工作目录（工具在开头报了才有）：步骤里的路径去掉这个前缀
+	pending  map[string]string // 按片段送来、还没说完的话（agy）
+	hasUsage bool
 }
 
 func NewParser(worker string) *Parser {

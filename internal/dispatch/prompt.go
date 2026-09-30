@@ -13,6 +13,7 @@ type PromptInput struct {
 	Task    string
 	Title   string
 	Detail  string
+	Global  string   // 用户的全局原则（org.Principles 拼好的一节）；没有为空
 	Points  []string // 部门要点链，每条一行（org.ChainLine）
 	Skill   string   // 技能 SKILL.md 路径
 	Profile string   // 执行者档案正文
@@ -39,7 +40,7 @@ var commonRules = []string{
 		"交付说明开头写这个目录的绝对路径和入口文件，负责人收进部门资料。网页资料预览只认相对路径：站点按相对路径构建（如 base 设成 ./），做不到就交截图。",
 }
 
-// BuildPrompt 拼提示词（纯函数）：标题 + 语言要求 + 详述 + 部门要点链 + 技能路径 + 执行者档案正文 + 仓库约定 + 捎话与交回原因 + 通用约束。
+// BuildPrompt 拼提示词（纯函数）：标题 + 语言要求 + 详述 + 用户全局原则 + 部门要点链 + 技能路径 + 执行者档案正文 + 仓库约定 + 捎话与交回原因 + 通用约束。
 func BuildPrompt(in PromptInput) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# 任务 %s：%s\n\n%s\n", in.Task, in.Title, langRule)
@@ -54,6 +55,9 @@ func BuildPrompt(in PromptInput) string {
 		for _, l := range lines {
 			fmt.Fprintf(&b, "- %s\n", strings.ReplaceAll(strings.TrimSpace(l), "\n", " "))
 		}
+	}
+	if in.Global != "" {
+		fmt.Fprintf(&b, "\n%s", in.Global)
 	}
 	section("部门要点（沿组织树继承，靠前的优先）", in.Points)
 	if in.Skill != "" {

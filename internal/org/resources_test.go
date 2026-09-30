@@ -302,3 +302,22 @@ func TestResourcesStore(t *testing.T) {
 		t.Fatalf("全局计数 %+v", g)
 	}
 }
+
+// 用户全局原则：现读假主目录的 AGENTS.md，原文带标题；没有文件或只有空白都不出这一节。
+func TestPrinciples(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	if got, err := Principles(); err != nil || got != "" {
+		t.Fatalf("没有文件应为空：%q %v", got, err)
+	}
+	os.WriteFile(filepath.Join(home, "AGENTS.md"), []byte(" \n"), 0o600)
+	if got, err := Principles(); err != nil || got != "" {
+		t.Fatalf("只有空白应为空：%q %v", got, err)
+	}
+	os.WriteFile(filepath.Join(home, "AGENTS.md"), []byte("## 表达\n\n- 先给结论\n"), 0o600)
+	got, err := Principles()
+	if err != nil || got != "## 用户的全局原则（~/AGENTS.md，优先于部门要点）\n\n## 表达\n\n- 先给结论\n" {
+		t.Fatalf("原文应带标题放进来：%q %v", got, err)
+	}
+}

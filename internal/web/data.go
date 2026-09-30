@@ -37,9 +37,9 @@ type Row struct {
 	Kids  []Row  `json:"kids,omitempty"` // 子任务（按建立先后）；只有部门页排成树
 }
 
-// toRow 是一件任务的列表行；waiting 是它还没完成的依赖（只有没派的任务用得上）。
-func toRow(t ledger.Task, parents map[string]string, waiting []string) Row {
-	r := Row{ID: t.ID, Title: t.Title, Dept: t.Org, State: state(t), Who: who(t, waiting), At: t.UpdatedAt}
+// toRow 是一件任务的列表行；deps 是它的依赖（只有没派的任务用得上）。
+func toRow(t ledger.Task, parents map[string]string, deps []ledger.DepState) Row {
+	r := Row{ID: t.ID, Title: t.Title, Dept: t.Org, State: state(t), Who: who(t, deps), At: t.UpdatedAt}
 	if t.FinishedAt != nil {
 		r.At = *t.FinishedAt
 	}
@@ -58,8 +58,7 @@ func rowOf(ctx context.Context, q store.Querier, t ledger.Task, parents map[stri
 	if err != nil {
 		return Row{}, err
 	}
-	_, waiting := ledger.Ready(t.Status, deps)
-	return toRow(t, parents, waiting), nil
+	return toRow(t, parents, deps), nil
 }
 
 // DeptBrief 是侧栏与卡片里的部门。
@@ -961,12 +960,11 @@ func holderText(ctx context.Context, q store.Querier, t ledger.Task) (string, er
 	if err != nil {
 		return "", err
 	}
-	_, waiting := ledger.Ready(t.Status, deps)
 	open, children, err := ledger.Children(ctx, q, t.ID)
 	if err != nil {
 		return "", err
 	}
-	h := watch.HolderOf(watch.Facts{Task: t, Owner: owner, WaitingOn: waiting, OpenChildren: open, Children: children})
+	h := watch.HolderOf(watch.Facts{Task: t, Owner: owner, Deps: deps, OpenChildren: open, Children: children})
 	if h.Who == "" {
 		return h.Text, nil
 	}

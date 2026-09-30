@@ -79,8 +79,8 @@ func finishedText(t ledger.Task) string {
 	return "已完成"
 }
 
-// who 是列表行尾的短标签：交付阶段优先，否则是执行者与机器；没派的还有没完成的依赖（waiting）时写在等谁。
-func who(t ledger.Task, waiting []string) string {
+// who 是列表行尾的短标签：交付阶段优先，否则是执行者与机器；没派的有依赖时写在等谁、哪件等不到了（见 ledger.DepGate）。
+func who(t ledger.Task, deps []ledger.DepState) string {
 	switch t.Status {
 	case ledger.Blocked:
 		return "卡住"
@@ -89,7 +89,12 @@ func who(t ledger.Task, waiting []string) string {
 	case ledger.Queued:
 		return "排队"
 	case ledger.Todo:
+		waiting, broken := ledger.DepGate(deps)
 		switch n := len(waiting); {
+		case len(broken) == 1:
+			return "依赖的 " + ledger.BrokenText(broken)
+		case len(broken) > 1:
+			return fmt.Sprintf("%d 件依赖等不到了", len(broken))
 		case n == 0:
 			return "没派"
 		case n <= 2: // 两个短号还放得下；再多写件数，点开抽屉看是哪几件

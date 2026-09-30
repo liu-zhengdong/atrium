@@ -3,6 +3,7 @@ package ledger
 import (
 	"fmt"
 	"sort"
+	"strings"
 )
 
 // Priority：紧急、修复、普通、闲时。派活队列按 Rank 从小到大取。
@@ -33,14 +34,32 @@ type DepState struct {
 	Status Status `json:"status"`
 }
 
-// Ready 判定一件任务能否派：自己是 todo，且全部依赖已完成。waiting 是还没完成的依赖。
-func Ready(s Status, deps []DepState) (ready bool, waiting []string) {
+// DepGate 判定一件任务的依赖：失败或取消的是 broken（等不到了）；别的没完成的是 waiting（还在等）；两个都空才算依赖齐了。
+// 派活队列、task run、任务树、task show、持球判定、网页共用这一份。
+func DepGate(deps []DepState) (waiting []string, broken []DepState) {
 	for _, d := range deps {
-		if d.Status != Done {
+		switch d.Status {
+		case Done:
+		case Failed, Cancelled:
+			broken = append(broken, d)
+		default:
 			waiting = append(waiting, d.ID)
 		}
 	}
-	return s == Todo && len(waiting) == 0, waiting
+	return waiting, broken
+}
+
+// BrokenText 是断掉的依赖的人话：「t449 已取消」「t449 已取消、t450 失败了」。
+func BrokenText(broken []DepState) string {
+	parts := make([]string, len(broken))
+	for i, d := range broken {
+		label := "失败了"
+		if d.Status == Cancelled {
+			label = "已取消"
+		}
+		parts[i] = d.ID + " " + label
+	}
+	return strings.Join(parts, "、")
 }
 
 // Summary 是一组任务（通常是某任务的全部子孙）的状态计数。

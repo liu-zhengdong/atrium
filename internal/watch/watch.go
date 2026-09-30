@@ -126,11 +126,9 @@ func FactsOf(ctx context.Context, q store.Querier, t ledger.Task) (Facts, error)
 		}
 	}
 	if t.Status == ledger.Todo || t.Status == ledger.Queued {
-		deps, err := ledger.Deps(ctx, q, t.ID)
-		if err != nil {
+		if f.Deps, err = ledger.Deps(ctx, q, t.ID); err != nil {
 			return f, err
 		}
-		_, f.WaitingOn = ledger.Ready(t.Status, deps)
 	}
 	if t.Status == ledger.Todo {
 		if f.OpenChildren, f.Children, err = ledger.Children(ctx, q, t.ID); err != nil {

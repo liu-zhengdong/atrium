@@ -160,10 +160,11 @@ func (d *dispatcher) pump(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		waiting, broken := depGate(deps)
+		// 有失败或取消的依赖就转受阻（等不到了）；还有没完成的留在队列里，这一轮跳过。
+		waiting, broken := ledger.DepGate(deps)
 		switch {
-		case broken != nil:
-			err = d.block(ctx, it.Task.ID, fmt.Sprintf("依赖的 %s %s，不再自动派", broken.ID, brokenLabel[broken.Status]))
+		case len(broken) > 0:
+			err = d.block(ctx, it.Task.ID, "依赖的 "+ledger.BrokenText(broken)+"，不再自动派")
 		case len(waiting) > 0:
 			continue
 		default:

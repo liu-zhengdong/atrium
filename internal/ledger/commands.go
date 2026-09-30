@@ -128,6 +128,7 @@ func Commands(t *cli.Table) {
 			var h struct {
 				Holder struct {
 					Text string `json:"text"`
+					Next string `json:"next"`
 				} `json:"holder"`
 			}
 			if !t.Status.Finished() {
@@ -179,6 +180,8 @@ func Commands(t *cli.Table) {
 				next = "atrium task set " + t.ID + " --status done" // 子任务都结束了：收尾
 			case t.Status == Todo && d.Ready:
 				next = "atrium task run " + t.ID
+			case t.Status == Todo && len(d.Broken) > 0:
+				next = h.Holder.Next // 依赖等不到了：改依赖（与持球判定同一条）
 			case t.Stage == StageAccept && t.Status == Running:
 				next = "atrium task accept " + t.ID
 			case (t.Status == Todo || t.Status == Queued) && len(d.WaitingOn) > 0:
@@ -302,6 +305,8 @@ func Commands(t *cli.Table) {
 					if !strings.HasPrefix(next, "atrium task run") {
 						next = "atrium task run " + n.ID
 					}
+				case len(n.Broken) > 0:
+					b.WriteString("  依赖的 " + BrokenText(n.Broken))
 				case len(n.WaitingOn) > 0:
 					b.WriteString("  等 " + strings.Join(n.WaitingOn, "、"))
 				}

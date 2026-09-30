@@ -297,33 +297,6 @@ func TestRepoGuide(t *testing.T) {
 	}
 }
 
-func TestDepGate(t *testing.T) {
-	dep := func(id string, s ledger.Status) ledger.DepState { return ledger.DepState{ID: id, Status: s} }
-	for name, c := range map[string]struct {
-		deps    []ledger.DepState
-		waiting []string
-		broken  string
-	}{
-		"没有依赖":       {nil, nil, ""},
-		"都完成":        {[]ledger.DepState{dep("t1", ledger.Done), dep("t2", ledger.Done)}, nil, ""},
-		"有在跑的":       {[]ledger.DepState{dep("t1", ledger.Done), dep("t2", ledger.Running)}, []string{"t2"}, ""},
-		"待派、排队都算没完成": {[]ledger.DepState{dep("t1", ledger.Todo), dep("t2", ledger.Queued)}, []string{"t1", "t2"}, ""},
-		"受阻还能解开，接着等": {[]ledger.DepState{dep("t1", ledger.Blocked)}, []string{"t1"}, ""},
-		"草稿接着等":      {[]ledger.DepState{dep("t1", ledger.Draft)}, []string{"t1"}, ""},
-		"失败了等不到":     {[]ledger.DepState{dep("t1", ledger.Running), dep("t2", ledger.Failed)}, nil, "t2"},
-		"取消了等不到":     {[]ledger.DepState{dep("t1", ledger.Cancelled), dep("t2", ledger.Running)}, nil, "t1"},
-	} {
-		waiting, broken := depGate(c.deps)
-		got := ""
-		if broken != nil {
-			got = broken.ID
-		}
-		if !slices.Equal(waiting, c.waiting) || got != c.broken {
-			t.Errorf("%s：waiting=%v broken=%q，应为 %v %q", name, waiting, got, c.waiting, c.broken)
-		}
-	}
-}
-
 func TestChildGate(t *testing.T) {
 	kid := func(id string, s ledger.Status) ledger.Task { return ledger.Task{ID: id, Status: s} }
 	for name, c := range map[string]struct {

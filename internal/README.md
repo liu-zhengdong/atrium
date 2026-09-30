@@ -9,7 +9,7 @@ Go 代码怎么分包、包之间怎么调用、并行开发时各自改哪里�
 3. **命令注册在自己包里**：`Commands(t *cli.Table)` 里 `t.Group(...)` 声明自己的组（每组只声明一次），`t.Add(...)` 加命令。`task` 组由 ledger 声明，别的包直接往里加 `task run` 之类，不再声明。
 4. **共享文件只有三个**，改时只动自己那一段，合并冲突按段解决：
    - `internal/store/schema.sql`：每张表一段，归属见下表。开发期不做迁移，改表就改这里，本地删库重建。
-   - `go.mod` / `go.sum`：依赖只用标准库、`modernc.org/sqlite`、`gopkg.in/yaml.v3`（workers 解析档案时再加）。冲突时 `go mod tidy`。
+   - `go.mod` / `go.sum`：依赖使用标准库、`modernc.org/sqlite`、`gopkg.in/yaml.v3`（档案）、`github.com/pelletier/go-toml/v2`（执行者工具配置）。冲突时 `go mod tidy`。
    - `scripts/smoke.sh`：主路径冒烟，加步骤只往末尾 `stop` 之前追加自己的一段。
 5. **快检查**：`.agents/check`（gofmt、vet 与 Windows/Linux 交叉编译、build、全部测试、`--help` 冒烟）。端到端：`scripts/smoke.sh`。单包测试超过 30 秒在 PR 里说明。
 6. **开发期不写兜底**：不做自愈、旧写法兼容、自动回滚；出错就返回错误停下。
@@ -168,7 +168,7 @@ type Module struct {
 - **可用性**：用没登录、额度用尽、模型名无效的日志样本验证 `workers/signals.go` 的 `Classify` 与 `workers/marks.go` 的 `MarkOf`，确认失败能分类并挡住后续分派任务。
 - **额度**：由 `workers.Resolved.Account()` 唯一给出额度账号，调用方直接使用，自带读取接在 `quota/readers.go` 并登记 `quota/merge.go` 的 `Accounts`，或核对 OpenQuota 的 `providerId` 与账号一致（`quota/openquota.go`、`quota/merge.go`），在执行者详情用假读数确认 `quota.Last` 的已用、周期进度与富余；缺周期依据不能把剩余百分比当富余。无法读取账号用量或余额时，在档案正文明确写「无读数」、原因及自动挑人的处理（如 `auto=false` 只接点名派活，无法保证用户留份额）。
 - **远程能力**：确认 `workers/tools.go` 的 `ToolCatalog` 包含命令，`hosts/agent.go` 能取得目录并经 `hosts/probe.go` 上报可用性，登录判定在 `hosts/info.go`。
-- **工具集**：执行者会话的工具由 Atrium 给出，不继承用户个人配置（MCP、插件、hooks）；要什么在适配器里显式带上，并在 `workers/computeruse.go` 开头的说明里写清带了什么、各做什么（如 codex 带本机的 computer use，claude 一个 MCP 都不带）。
+- **工具集**：执行者会话的工具由 Atrium 给出，不继承用户个人配置中的 MCP；要什么在适配器里显式带上，并在 `workers/computeruse.go` 开头的说明里写清带了什么、各做什么。
 - **补充说明与并发**：核对 `workers/adapter.go` 的 `Tell`、会话续接与 `Exclusive`（通用命令行档案在 `workers/cli.go`），确认 `dispatch/actions.go` 的补充说明和 `dispatch/pick.go` 的并发约束适用。
 - **自动挑人**：在档案明确 `auto`、`trust`、`max_risk`，用 `workers/profile.go`、`workers/refusal.go` 与 `dispatch/select.go` 核对是否参与自动挑人及能接的风险。
 

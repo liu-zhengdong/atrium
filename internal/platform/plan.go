@@ -5,6 +5,7 @@ package platform
 
 import (
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
@@ -264,4 +265,19 @@ func Browsers(goos string) []string {
 			`C:\Program Files (x86)\Google\Chrome\Application\chrome.exe`, `C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe`)
 	}
 	return names
+}
+
+// ChromeActivePortPath 返回 Chrome 默认资料目录的远程调试标记。
+func ChromeActivePortPath(goos, home, localAppData, xdgConfig string) string {
+	switch goos {
+	case "darwin":
+		return filepath.Join(home, "Library", "Application Support", "Google", "Chrome", "DevToolsActivePort")
+	case "windows":
+		return filepath.Join(localAppData, "Google", "Chrome", "User Data", "DevToolsActivePort")
+	default:
+		if xdgConfig == "" {
+			xdgConfig = filepath.Join(home, ".config")
+		}
+		return filepath.Join(xdgConfig, "google-chrome", "DevToolsActivePort")
+	}
 }

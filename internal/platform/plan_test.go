@@ -1,6 +1,7 @@
 package platform
 
 import (
+	"path/filepath"
 	"reflect"
 	"testing"
 )
@@ -229,5 +230,18 @@ func TestWorkerTaskTemp(t *testing.T) {
 				t.Fatal("继承了凭据")
 			}
 		})
+	}
+}
+
+func TestChromeActivePortPath(t *testing.T) {
+	for _, c := range []struct{ goos, home, local, xdg, want string }{
+		{"darwin", "home", "local", "xdg", filepath.Join("home", "Library", "Application Support", "Google", "Chrome", "DevToolsActivePort")},
+		{"windows", "home", "local", "xdg", filepath.Join("local", "Google", "Chrome", "User Data", "DevToolsActivePort")},
+		{"linux", "home", "local", "xdg", filepath.Join("xdg", "google-chrome", "DevToolsActivePort")},
+		{"linux", "home", "local", "", filepath.Join("home", ".config", "google-chrome", "DevToolsActivePort")},
+	} {
+		if got := ChromeActivePortPath(c.goos, c.home, c.local, c.xdg); got != c.want {
+			t.Fatalf("%s: %s", c.goos, got)
+		}
 	}
 }

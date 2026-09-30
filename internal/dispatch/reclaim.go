@@ -26,7 +26,7 @@ type reclaimItem struct {
 	remoteRun        int
 }
 
-// reclaim 与派活串行：先停执行者，再回收，最后才能重建并派活。启动也走这条扫描，不另写补清路径。
+// reclaim 与分派任务串行：先停执行者，再回收，最后才能重建并分派任务。启动也走这条扫描，不另写补清路径。
 func (d *dispatcher) reclaim(ctx context.Context) error {
 	if d.reclaimAfter == 0 {
 		d.reclaimDeferred = false
@@ -100,7 +100,7 @@ func (d *dispatcher) reclaim(ctx context.Context) error {
 	return nil
 }
 
-// reclaimPending 等服务重启窗口里的执行者退出；远程仍按任务轮号接管并停下。
+// reclaimPending 等服务重启窗口里的执行者退出；远程仍按任务轮号继续跟进并停下。
 // 本机历史 PID 可能被复用，不能仅凭旧拉起记录结束一个当前进程。
 func (d *dispatcher) reclaimPending(ctx context.Context, it reclaimItem) (bool, error) {
 	if it.launch == "" {

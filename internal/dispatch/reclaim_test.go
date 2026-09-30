@@ -141,7 +141,7 @@ func TestReclaimEndingsAndReopen(t *testing.T) {
 			if _, err := ledger.Edit(ctx, d.env.DB, tk.ID, ledger.Patch{Repo: &gh.Work}, "u1"); err != nil {
 				t.Fatal(err)
 			}
-			// 测试二进制充当执行者，实际派活、拉起、退出，不调用模型。
+			// 测试二进制充当执行者，实际分派任务、拉起、退出，不调用模型。
 			exe, err := os.Executable()
 			if err != nil {
 				t.Fatal(err)
@@ -176,7 +176,7 @@ func TestReclaimEndingsAndReopen(t *testing.T) {
 			if b, err := os.ReadFile(filepath.Join(rebuilt, "continued.txt")); err != nil || string(b) != "继续干" {
 				t.Fatalf("重开执行者未继续工作：%s %v", b, err)
 			}
-			t.Logf("%s：工作树与本地分支已回收，prompt/run 保留，重开已接回改动并继续写入", ending)
+			t.Logf("%s：工作树与本地分支已回收，prompt/run 保留，重开已恢复改动并继续写入", ending)
 		})
 	}
 }
@@ -208,10 +208,10 @@ func runReclaimLoop(t *testing.T, d *dispatcher, parent context.Context) func() 
 		select {
 		case err := <-done:
 			if err != nil {
-				t.Errorf("隔离派活循环：%v", err)
+				t.Errorf("隔离分派任务循环：%v", err)
 			}
 		case <-time.After(5 * time.Second):
-			t.Error("隔离派活循环未退出")
+			t.Error("隔离分派任务循环未退出")
 		}
 	}
 	t.Cleanup(stop)

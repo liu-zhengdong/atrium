@@ -59,7 +59,7 @@ func (e *env) file(dir, name string) string {
 	return string(b)
 }
 
-// landedOn 核对交付检查的应用交付结果职责：主分支有了任务改动，工作树留给 dispatch 在终态统一回收。
+// landedOn 核对本机交付后的合入结果：主分支有了任务改动，工作树留给 dispatch 在终态统一回收。
 func (e *env) landedOn(repo, wt, id, name, body string) {
 	e.t.Helper()
 	if got := e.file(repo, name); got != body {

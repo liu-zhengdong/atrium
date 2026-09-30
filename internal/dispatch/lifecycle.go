@@ -12,7 +12,7 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/workers"
 )
 
-// Run 是派活循环：先接管服务重启前在跑的执行者，再等账本变化或定时，每次按队列顺序派。
+// Run 是分派任务循环：先继续跟进服务重启前在跑的执行者，再等账本变化或定时，每次按队列顺序派。
 func Run(ctx context.Context, env *app.Env) error {
 	d := get(env)
 	defer d.retired.Store(true)
@@ -100,7 +100,7 @@ func (d *dispatcher) reap(ctx context.Context) error {
 	})
 }
 
-// adoptProc 跟着已存在的进程等退出，本机与远程共用启动接管和终态补清的路径。
+// adoptProc 跟着已存在的进程等退出，本机与远程共用启动继续跟进和终态补清的路径。
 func (d *dispatcher) adoptProc(p *proc) {
 	if p.remote {
 		d.track(p, d.remoteWaiter(p, p.run.RemoteRun))

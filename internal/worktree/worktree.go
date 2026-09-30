@@ -12,7 +12,7 @@ import (
 
 type Runner func(context.Context, string, string, ...string) (string, error)
 
-// LocalMutation 沿用本机落地的串行锁：合入主分支与回收不能同时使用、删除同一个工作树。
+// LocalMutation 沿用本机合入的串行锁：合入主分支与回收不能同时使用、删除同一个工作树。
 var LocalMutation sync.Mutex
 
 // Remove 同时删除工作树（含未跟踪的依赖）与本地任务分支。目录不存在时仍清掉 Git 登记和分支。
@@ -112,7 +112,7 @@ func resolvedPath(path string) (string, error) {
 	return filepath.Join(resolved, filepath.Base(path)), nil
 }
 
-// Base 在重建时优先接回已推送的任务分支；不存在时从默认基线重新开始。
+// Base 在重建时优先恢复已推送的任务分支；不存在时从默认基线重新开始。
 func Base(ctx context.Context, clone, branch, fallback string, run Runner) (string, error) {
 	ref := "origin/" + branch
 	full := "refs/remotes/" + ref

@@ -6,6 +6,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/liu-zhengdong/atrium/internal/org"
 )
 
 // 本文件全是纯判定：吃运行时查到的事实，不碰进程、库与时间。
@@ -329,23 +331,19 @@ func ReviewBrief(task, title, repo string, pr PR, dir, base, why, diff, detail s
 		fmt.Fprintf(&b, "\n## 原任务详述\n\n%s\n", strings.TrimSpace(detail))
 	}
 	fmt.Fprintf(&b, `
-## 怎么看
-
-- `+"`gh pr diff %d -R %s`"+`%s。
-- 只读：不修改、提交、推送，不在 PR 上评论、批准或合入。
-
 ## 清单
 
-1. 做到原任务要求了吗，有没有越出范围的改动。
-2. 正确性：边界、错误处理、并发与重启后的状态。
-3. 安全：凭据不进日志与输出、SQL 参数化、外部输入校验、子进程环境。
-4. 测试：新分支有没有测试、断言了行为没有；PR「端到端验证」一节要有隔离实例里实测的命令与输出，对不上就打回。
-5. 可维护性：符合仓库 AGENTS.md 约定，没有明显重复或无用代码。
+%s
+
+## 怎么看
+
+- 先写上述标准，再读 `+"`gh pr diff %d -R %s`"+`%s。
+- 只读：不修改、提交、推送，不在 PR 上评论、批准或合入。
 
 ## 结论格式
 
 打回时先逐条写问题（文件:行、现象、怎么改），只写必须改的。
 最后一行单独写 `+"`审阅结论：通过`"+` 或 `+"`审阅结论：打回`"+`。
-`, pr.Number, repo, local)
+`, org.ReviewChecklist, pr.Number, repo, local)
 	return b.String()
 }

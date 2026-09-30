@@ -227,6 +227,9 @@ func TestPrompt(t *testing.T) {
 		Upstream: "a1",
 	}
 	p := Prompt(in)
+	if strings.Count(p, org.ReviewChecklist) != 1 || strings.Index(p, org.ReviewChecklist) > strings.Index(p, "## 可用命令") {
+		t.Fatal("验收须在操作命令前引用同一清单一次")
+	}
 	for _, want := range []string{"负责人 a2（运行时）", "o3 服务（o1 / o2 / o3）", "是什么：单实例后台服务", "k1（o1）简洁优先——长期成本",
 		"总览正文", "也归你管的下属部门：o22 网页、o23 导入", "等 t5 合入", "#11", "t5（o3）", "atrium events ack 11 12", "发给 a1", "--kind cross", "--kind beyond", "--kind stuck", "完成结果自动发回任务分派人", "自己建、自己收的任务在网页今天页的完成列表查看", "权限边界", "material ls 按部门列全部资料", "说明里写 mN、不写本机路径",
 		"管辖分派任务部门（" + ProfileDept + "）的负责人还能改执行者档案、解除不可用标记"} {

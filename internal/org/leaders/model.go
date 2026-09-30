@@ -246,6 +246,10 @@ func Prompt(in PromptInput) string {
 		w("正文带 tell 的是交给你之后的补充（补充说明或改了说明），以它和 task show tN 的最新说明为准；没取走时合并成最新一条，之前的补充在 task show 的经历里。已按旧说明派出的子任务用 task tell / task set --detail 跟上，做偏了的 task stop。")
 		w("")
 	}
+	w("## 验收标准（与审阅共用）")
+	w("先用 task show tN 取目标与最新补充，读取所挂技能的口味；看交付前按下列清单写标准，再对照产物决定 task accept 或 task reject。")
+	w("%s", org.ReviewChecklist)
+	w("")
 	w("## 可用命令（都是 atrium，已按你的身份连到服务；加 --json 得结构化结果）")
 	w("- 看：task show tN；task log tN；task ls --org %s；org show oN", home)
 	w("- 派与管：task add 标题 --org %s；task run tN；task tell tN 补充；task stop tN；task set tN --status …；task note tN 取舍与原因", home)

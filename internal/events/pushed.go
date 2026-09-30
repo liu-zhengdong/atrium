@@ -18,6 +18,10 @@ func Pushed(a api.Actor, secretaryListening bool) bool {
 
 // AsyncNext 给异步回执定结尾：会推送时在 text 后加 PushedNote、不给等待命令；否则原样返回 wait。
 func AsyncNext(c *cli.Ctx, text, wait string) (string, string, error) {
+	// 执行者不是事件订阅者，保留等待命令，不查询推送状态。
+	if c.Env.Getenv("ATRIUM_WORKER") == "1" {
+		return text, wait, nil
+	}
 	var out struct {
 		Pushed bool `json:"pushed"`
 	}

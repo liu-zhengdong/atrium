@@ -145,8 +145,9 @@ func (ix *orgIndex) subtree(id string) []string {
 
 // Nav 是侧栏：部门树与等你的件数。
 type Nav struct {
-	Depts []DeptBrief `json:"depts"`
-	Asks  int         `json:"asks"`
+	Depts     []DeptBrief `json:"depts"`
+	Asks      int         `json:"asks"`
+	ShippedID int64       `json:"shipped_id"` // 最近 shipped 上交事件号；跨页面共用，不把任务结束算作上线
 }
 
 func loadNav(ctx context.Context, q store.Querier) (Nav, error) {
@@ -158,7 +159,12 @@ func loadNav(ctx context.Context, q store.Querier) (Nav, error) {
 	if err != nil {
 		return Nav{}, err
 	}
-	return Nav{Depts: nonNil(ix.list), Asks: len(asks)}, nil
+	var shippedID int64
+	if err := q.QueryRowContext(ctx, `SELECT COALESCE(MAX(id), 0) FROM events
+		WHERE kind = ? AND json_extract(body, '$.kind') = ?`, events.LeaderEscalate, "shipped").Scan(&shippedID); err != nil {
+		return Nav{}, err
+	}
+	return Nav{Depts: nonNil(ix.list), Asks: len(asks), ShippedID: shippedID}, nil
 }
 
 // Ask 是「等你」的一件：选项单等你挑，交付等你验收（部门的验收人是你），卡住的任务递到了你这层（往上没有负责人），

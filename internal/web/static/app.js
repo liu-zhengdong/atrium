@@ -48,6 +48,7 @@ const last = new Map();
 async function api(path) {
   const body = await (await fetch("/ui/api/" + path)).json();
   if (!body.ok) throw new Error(body.error?.message || "读取失败");
+  if (path === "nav") atriumLogo.shipped(body.result.shipped_id);
   last.set(path, body.result);
   return body.result;
 }
@@ -663,7 +664,7 @@ async function route() {
     if (open) showDrawer(open, page);
     if (toDrafts) { toDrafts = false; $("#drafts")?.scrollIntoView({ block: "start" }); }
     if (page !== "legion" && open?.[0] === "t" && last.get("task/" + open).live) liveTimer = setTimeout(refresh, 5000); // 执行者在干时日志一直在长，抽屉每 5 秒重取
-  } catch (err) { if (n === seq) fail(err); }
+  } catch (err) { if (n === seq && !atriumLogo.reconnecting) fail(err); }
 }
 function refresh() {
   clearTimeout(rendering);
@@ -732,4 +733,11 @@ $("#theme").onclick = () => {
 };
 
 route();
-new EventSource("/ui/stream").onmessage = e => { if (e.data === "changed") refresh(); };
+const stream = new EventSource("/ui/stream");
+stream.onerror = () => atriumLogo.connection(false);
+stream.onopen = () => {
+  const reconnected = atriumLogo.reconnecting;
+  atriumLogo.connection(true);
+  if (reconnected) refresh();
+};
+stream.onmessage = e => { if (e.data === "changed") refresh(); };

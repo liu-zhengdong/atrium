@@ -158,8 +158,8 @@ func TestMaterialRoute(t *testing.T) {
 	if res, _ := get("/ui/material/"+md.ID, "evil.example:"+strconv.Itoa(port)); res.StatusCode != 403 {
 		t.Errorf("外来 Host 应 403，得到 %d", res.StatusCode)
 	}
-	// 网页本身的 CSP 放行 data: 图片（docx 预览的内嵌图），脚本仍只许本站
-	if res, _ := get("/", ""); !strings.Contains(res.Header.Get("Content-Security-Policy"), "img-src 'self' data:;") {
+	// 网页本身的 CSP 放行 data: 内嵌图与 blob: 本地 logo 动画，脚本仍只许本站
+	if res, _ := get("/", ""); !strings.Contains(res.Header.Get("Content-Security-Policy"), "img-src 'self' data: blob:;") {
 		t.Errorf("首页 CSP：%q", res.Header.Get("Content-Security-Policy"))
 	}
 }

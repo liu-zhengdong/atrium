@@ -52,7 +52,14 @@ func TestReclaimHistoricalServiceStartup(t *testing.T) {
 			t.Fatal(err)
 		}
 		applyReclaim(t, d, ctx, tk.ID, ledger.Event{Kind: ledger.Set, To: ledger.Done})
-		dirs = append(dirs, dir)
+		temp := filepath.Join(TaskDir(d.env.Paths.Data, tk.ID), "tmp")
+		if err := os.MkdirAll(temp, 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(temp, "readonly"), []byte("历史只读文件"), 0400); err != nil {
+			t.Fatal(err)
+		}
+		dirs = append(dirs, dir, temp)
 	}
 	t.Setenv("ATRIUM_DATA", d.env.Paths.Data)
 	t.Setenv("ATRIUM_PORT", "")

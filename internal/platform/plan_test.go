@@ -211,3 +211,23 @@ func TestBatchCommandLine(t *testing.T) {
 		}
 	}
 }
+
+func TestWorkerTaskTemp(t *testing.T) {
+	for _, goos := range []string{"darwin", "linux", "windows"} {
+		t.Run(goos, func(t *testing.T) {
+			base := map[string]string{"TMPDIR": "old", "TMP": "old", "TEMP": "old", "OPENAI_API_KEY": "secret"}
+			env := WorkerEnv(goos, base, "/data/tasks/t1/tmp")
+			for _, key := range []string{"TMPDIR", "TMP", "TEMP"} {
+				if env[key] != "/data/tasks/t1/tmp" {
+					t.Fatalf("%s=%q", key, env[key])
+				}
+				if base[key] != "old" {
+					t.Fatal("修改原环境")
+				}
+			}
+			if env["OPENAI_API_KEY"] != "" {
+				t.Fatal("继承了凭据")
+			}
+		})
+	}
+}

@@ -31,6 +31,13 @@ func TestMain(m *testing.M) {
 	case "":
 		os.Exit(m.Run())
 	case "echo":
+		temp := os.Getenv("TMPDIR")
+		if temp == "" || os.Getenv("TMP") != temp || os.Getenv("TEMP") != temp {
+			os.Exit(2)
+		}
+		if err := os.WriteFile(filepath.Join(temp, "readonly"), []byte("只读缓存"), 0o400); err != nil {
+			os.Exit(2)
+		}
 		wd, _ := os.Getwd()
 		fmt.Printf("开工 %s\n", filepath.Base(wd))
 		if _, err := os.Stat("README"); err == nil {

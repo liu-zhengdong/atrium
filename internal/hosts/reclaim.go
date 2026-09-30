@@ -62,11 +62,9 @@ func (a *Agent) reclaim(ctx context.Context, r *ReclaimRequest) error {
 	if !reclaimTaskRE.MatchString(r.Task) {
 		return fmt.Errorf("回收任务短号无效")
 	}
-	// 无仓库任务的 work 不在本轮回收范围。
-	if r.Dir == filepath.Join(a.Dir, "tasks", r.Task, "work") {
-		return nil
-	}
-	if why := ReclaimRefusal(a.Dir, *r); why != "" {
+	// 无仓库任务保留 work，但仍核对轮号与执行者退出后回收 tmp。
+	workOnly := r.Dir == filepath.Join(a.Dir, "tasks", r.Task, "work")
+	if why := ReclaimRefusal(a.Dir, *r); !workOnly && why != "" {
 		return fmt.Errorf("%s", why)
 	}
 	// 已报退出的运行会从内存里移除；保留的 run-N.log 仍能证明重开已进入了新一轮。
@@ -85,7 +83,12 @@ func (a *Agent) reclaim(ctx context.Context, r *ReclaimRequest) error {
 	}
 	a.mu.Unlock()
 	clone := strings.TrimSuffix(r.Dir, "-"+r.Task)
-	return worktree.Remove(ctx, clone, r.Dir, "task-"+r.Task, a.workspaceRun)
+	if !workOnly {
+		if err := worktree.Remove(ctx, clone, r.Dir, "task-"+r.Task, a.workspaceRun); err != nil {
+			return err
+		}
+	}
+	return worktree.RemoveTemp(filepath.Join(a.Dir, "tasks", r.Task, "tmp"))
 }
 
 func (a *Agent) reclaimGeneration(task string) (int, error) {

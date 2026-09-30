@@ -386,7 +386,11 @@ func (a *Agent) launch(ctx context.Context, as Assignment) (int, string, error) 
 		cwd = wt
 	}
 	adapter, _ := AdapterFor(as.Tool)
-	env := platform.WorkerEnv(runtime.GOOS, a.Env)
+	tempDir := filepath.Join(taskDir, "tmp")
+	if err := os.MkdirAll(tempDir, 0o700); err != nil {
+		return 0, "", err
+	}
+	env := platform.WorkerEnv(runtime.GOOS, a.Env, tempDir)
 	for k, v := range as.Env {
 		env[k] = v
 	}

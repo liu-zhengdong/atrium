@@ -34,6 +34,7 @@ const langRule = "用中文写过程说明和最后的交付说明（命令、�
 // 通用约束：对所有仓库成立的，每件活都附；怎么交由交付方式定（gates.PromptRules）；
 // 仓库自己的约定从目标仓库的 .agents/README.md 读（PromptInput.Guide）。
 var commonRules = []string{
+	"临时文件放 $TMPDIR，不写 /tmp；任务结束后临时目录会被回收。",
 	"凭据不打印、不写进提交、PR、issue 或日志。",
 	"不碰用户的真实环境：不启停用户在跑的服务，不读写用户主目录里的数据；要跑起来验证，就用临时数据目录与空闲端口起隔离实例，用完停掉。",
 	"资料（在哪台机器上都能用 atrium 取）：atrium material ls 按部门列，atrium material ls mN 取正文、mN/<相对路径> 取这条资料里的其他文件（二进制加 --out 文件）；说明里给的 mN 就是给你的输入。跨部门的事先查再调研，不直接搜数据目录。",

@@ -139,7 +139,7 @@ func TestTraceAgyEvents(t *testing.T) {
 		{Cmd: "subagent 读设计、读测试", State: CmdOK},
 		{Cmd: "go test ./...", State: CmdOK, Out: "ok"},
 		{Cmd: "gh pr create", State: CmdRun},
-	}}}, Unknown: 1, Lines: []string{
+	}}}, Unknown: 1, UnknownHead: []string{`{"event":"step_update","step_update":{"step_index":7,"state":"DONE","step_type":"brand_new_step"}}`}, Lines: []string{
 		`{"event":"step_update","step_update":{"step_index":7,"state":"DONE","step_type":"brand_new_step"}}`,
 		`{"event":"result","result":{"status":"ERROR","error":"boom"}}`,
 	}}
@@ -182,6 +182,23 @@ func TestTraceCursorLog(t *testing.T) {
 	}
 	if !tr.Ended || tr.Ms != 772574 || !strings.HasPrefix(tr.Result, "OpenQuota 宣传片做完了") || tr.Unknown != 0 || len(tr.Lines) != 0 {
 		t.Errorf("收尾（result 连着说过的话，总结取最后一句）：%v %d %q %d %q", tr.Ended, tr.Ms, firstPara(tr.Result), tr.Unknown, tr.Lines)
+	}
+}
+
+// 真实日志（t476，精简过输出）：抓网页前的授权请求与应答（interaction_query）认出但不显示，抓取本身是 webFetch 步骤。
+func TestTraceCursorInteraction(t *testing.T) {
+	tr, err := ReadTrace("cursor+auto", "testdata/cursor-t476.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cmds []string
+	for _, c := range tr.Segments[0].Cmds {
+		cmds = append(cmds, c.State+" "+c.Cmd)
+	}
+	want := []string{"ok webFetch https://linear.app/docs", "ok webFetch https://www.notion.com/help",
+		"ok webFetch https://vercel.com/docs/getting-started-with-vercel", "ok webFetch https://support.stripe.com/"}
+	if len(tr.Segments) != 1 || !reflect.DeepEqual(cmds, want) || tr.Unknown != 0 || len(tr.Lines) != 0 || !tr.Ended {
+		t.Errorf("%d 段，命令 %q，%d 行没认出 %q", len(tr.Segments), cmds, tr.Unknown, tr.Lines)
 	}
 }
 
@@ -246,7 +263,7 @@ warning: something`)
 	want := Trace{Segments: []Segment{{Cmds: []Command{
 		{Cmd: "ls", State: CmdErr, Out: `{"rejected":{"reason":"no"}}`},
 		{Cmd: `glob {"globPattern":"*.go"}`, State: CmdRun},
-	}}}, Unknown: 2, Lines: []string{`{"type":"brand_new","x":1}`, `{"type":"tool_call","subtype":"started","call_id":"c","tool_call":{"what":{}}}`, "warning: something"}}
+	}}}, Unknown: 2, UnknownHead: []string{`{"type":"brand_new","x":1}`, `{"type":"tool_call","subtype":"started","call_id":"c","tool_call":{"what":{}}}`}, Lines: []string{`{"type":"brand_new","x":1}`, `{"type":"tool_call","subtype":"started","call_id":"c","tool_call":{"what":{}}}`, "warning: something"}}
 	if !reflect.DeepEqual(tr, want) {
 		t.Errorf("得到 %+v", tr)
 	}

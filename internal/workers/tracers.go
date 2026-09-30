@@ -209,6 +209,10 @@ func readCursor(p *Parser, e event, _ string) bool {
 			p.dir = e.str("cwd")
 		}
 	case "user", "thinking", "connection", "retry":
+	case "interaction_query":
+		// 抓网页、搜索前向 cursor 要授权（request）与应答（response）：认出但不显示——同一次调用已是一条 tool_call
+		// 步骤（webFetch 网址），没放行的在它的结果里报出错。
+		return e.str("subtype") == "request" || e.str("subtype") == "response"
 	case "assistant":
 		content, _ := e.obj("message")["content"].([]any)
 		for _, c := range content {

@@ -785,6 +785,9 @@ func (d *dispatcher) track(p *proc, wait func() int) {
 		if err := d.exited(context.Background(), p, code); err != nil {
 			d.env.Log.Error("执行者退出后收尾失败", "task", p.task, "err", err)
 		}
+		if err := noteUnknown(context.Background(), d.env.DB, p.task, p.run); err != nil {
+			d.env.Log.Error("记日志解析草稿失败", "task", p.task, "err", err)
+		}
 		d.wake()
 	}()
 }
@@ -932,6 +935,27 @@ func (d *dispatcher) exited(ctx context.Context, p *proc, code int) error {
 		return apply(ledger.ExitFail, note+"；重新拉起失败："+err.Error())
 	}
 	return ledger.Note(ctx, db, p.task, actor, "执行者退出："+note+"；已重新拉起（"+o.Why+"，"+o.W.ID+"）")
+}
+
+// noteUnknown：这次拉起的日志有认不出的事件时记一条草稿（workers.ParseFinding 判）；草稿满了照常报错。
+func noteUnknown(ctx context.Context, db *store.DB, task string, run workers.Run) error {
+	tr, err := workers.ReadTrace(run.Worker, run.Log)
+	if err != nil {
+		return err
+	}
+	t, err := ledger.Get(ctx, db, task)
+	if err != nil {
+		return err
+	}
+	open, err := ledger.List(ctx, db, ledger.Filter{Class: workers.ParseClass, Limit: 500,
+		Status: []ledger.Status{ledger.Draft, ledger.Todo, ledger.Queued, ledger.Running, ledger.Blocked}})
+	if err != nil {
+		return err
+	}
+	if in, ok := workers.ParseFinding(t, run.Worker, tr, open); ok {
+		_, err = ledger.Add(ctx, db, in, actor)
+	}
+	return err
 }
 
 // recordExit 记这次拉起的结果（workers 按拉起统计用）。

@@ -22,6 +22,7 @@ const (
 	lineRunes = 400  // 输出与原文每行的上限
 	cmdRunes  = 4000 // 命令原文的上限
 	rawLines  = 40   // 认不出的输出留最后几行
+	headLines = 2    // 没认出的事件留最早几行
 )
 
 // Trace 是一次拉起的「经过」（纯数据）：按执行者自己说的话切段，每段带这段里跑的命令。网页任务抽屉与 task log 共用。
@@ -32,6 +33,8 @@ type Trace struct {
 	Ms       int64     `json:"ms,omitempty"`      // 用时（工具报了才有）
 	Lines    []string  `json:"lines,omitempty"`   // 其他输出原文（最后 rawLines 行）：非事件行、报错事件、没认出的事件；解析不了的工具全在这里
 	Unknown  int       `json:"unknown,omitempty"` // 没认出的事件行数：非零说明工具的日志格式变了，解析要跟上
+	// UnknownHead 是最早没认出的 headLines 行原文（截断）：自动记草稿时写进详述（ParseFinding）。
+	UnknownHead []string `json:"-"`
 }
 
 // Segment 是经过里的一段：执行者说的一句话和它之后跑的命令。Say 为空是开头还没说话的那段。
@@ -97,6 +100,9 @@ func (p *Parser) Line(line string) {
 		p.raw(line)
 	} else if !p.read(p, e, line) {
 		p.t.Unknown++
+		if len(p.t.UnknownHead) < headLines {
+			p.t.UnknownHead = append(p.t.UnknownHead, clipRunes(line, lineRunes))
+		}
 		p.raw(line)
 	}
 }

@@ -16,6 +16,7 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/config"
 	"github.com/liu-zhengdong/atrium/internal/events"
 	"github.com/liu-zhengdong/atrium/internal/ledger"
+	"github.com/liu-zhengdong/atrium/internal/org"
 	"github.com/liu-zhengdong/atrium/internal/pause"
 	"github.com/liu-zhengdong/atrium/internal/store"
 	"github.com/liu-zhengdong/atrium/internal/workers"
@@ -473,5 +474,52 @@ func TestTellLeader(t *testing.T) {
 	}
 	if n != 3 {
 		t.Fatalf("捎话都记进经历（两次捎话、一次改说明）：%d", n)
+	}
+}
+
+// 执行者日志有认不出的事件：退出时记一条组织发现草稿；同一工具还没结束的不再记，别的工具另记；草稿满了报错。
+func TestNoteUnknown(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	db, err := store.Open(filepath.Join(dir, "atrium.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	log := filepath.Join(dir, "run-1.log")
+	os.WriteFile(log, []byte(`{"type":"system","subtype":"init","cwd":"/r"}
+{"type":"brand_new","x":1}
+{"type":"brand_new","x":2}
+{"type":"brand_new","x":3}
+`), 0o600)
+	tk := must(ledger.Add(ctx, db, ledger.NewTask{Title: "改帮助中心"}, "u1"))
+	drafts := func() []ledger.Task {
+		return must(ledger.List(ctx, db, ledger.Filter{Class: workers.ParseClass, Status: []ledger.Status{ledger.Draft}}))
+	}
+	for range 2 {
+		if err := noteUnknown(ctx, db, tk.ID, workers.Run{Worker: "cursor+auto", Log: log}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := drafts()
+	if len(got) != 1 || got[0].Title != "cursor 日志有认不出的事件（"+tk.ID+"）" || got[0].Source != ledger.SourceOrg ||
+		!strings.Contains(got[0].Detail, "有 3 行事件认不出") || !strings.Contains(got[0].Detail, `{"type":"brand_new","x":2}`) ||
+		strings.Contains(got[0].Detail, `"x":3`) {
+		t.Fatalf("同一工具只记一条，详述带行数与前两行：%+v", got)
+	}
+	// 认得出的日志、纯文本工具不记。
+	if err := noteUnknown(ctx, db, tk.ID, workers.Run{Worker: "kimi", Log: log}); err != nil || len(drafts()) != 1 {
+		t.Fatalf("纯文本工具不该记：%v %d", err, len(drafts()))
+	}
+	if err := noteUnknown(ctx, db, tk.ID, workers.Run{Worker: "codex", Log: log}); err != nil || len(drafts()) != 2 {
+		t.Fatalf("别的工具另记一条：%v %d", err, len(drafts()))
+	}
+	// 草稿满了：照常报上限错误，不静默吞掉。
+	for len(must(ledger.List(ctx, db, ledger.Filter{Status: []ledger.Status{ledger.Draft}, Limit: 500}))) < org.MaxDrafts {
+		must(ledger.Add(ctx, db, ledger.NewTask{Title: "占位", Draft: true}, "u1"))
+	}
+	err = noteUnknown(ctx, db, tk.ID, workers.Run{Worker: "opencode", Log: log})
+	if ae := (*api.Error)(nil); !errors.As(err, &ae) || ae.Code != "limit" {
+		t.Fatalf("草稿满了应报错：%v", err)
 	}
 }

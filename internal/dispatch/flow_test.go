@@ -30,7 +30,7 @@ import (
 var fakes = map[string]string{
 	"claude": `#!/bin/sh
 read first
-echo '{"type":"system","subtype":"init","session_id":"0123abcd-0123-0123-0123-0123456789ab"}'
+echo '{"type":"system","subtype":"init","session_id":"0123abcd-0123-0123-0123-0123456789ab","model":"claude-opus-5-5"}'
 echo "worker=$ATRIUM_WORKER task=$ATRIUM_TASK secret=${DEMO_TOKEN:-none} home=${ANTHROPIC_API_KEY:-clean} cwd=$(pwd -P)"
 case "$first" in *'"type":"user"'*) echo got-prompt ;; esac
 echo '{"type":"result","is_error":false,"stop_reason":"end_turn","result":"ok"}'
@@ -257,15 +257,15 @@ func TestFlowQuotaRequeue(t *testing.T) {
 	}
 	waitFor(t, env, tk.ID, func(x ledger.Task) bool { return x.Status == ledger.Queued && x.Worker == "" }) // 换人重派：上一轮的执行者清掉
 	marks, _ := workers.Marks(ctx, env.DB, store.Now())
-	if len(marks) != 1 || marks[0].Target() != "codex+gpt-6-sol@"+LocalHost || marks[0].Until <= store.Now() {
-		t.Fatalf("应标记本机的 codex+gpt-6-sol 额度用尽：%+v", marks)
+	if len(marks) != 1 || marks[0].Target() != "codex@"+LocalHost || marks[0].Until <= store.Now() {
+		t.Fatalf("应标记本机的 codex 额度用尽：%+v", marks)
 	}
 	v, err := d.view(ctx, tk, "low", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, c := range v.Candidates {
-		if c.ID == "codex+gpt-6-sol" && (c.Eligible || !strings.Contains(strings.Join(c.Refusals, "、"), "额度用尽")) {
+		if c.ID == "codex" && (c.Eligible || !strings.Contains(strings.Join(c.Refusals, "、"), "额度用尽")) {
 			t.Errorf("挑执行者应避开额度用尽的组合：%+v", c)
 		}
 	}
@@ -274,18 +274,18 @@ func TestFlowQuotaRequeue(t *testing.T) {
 	}
 	waitFor(t, env, tk.ID, func(x ledger.Task) bool { return x.Stage == ledger.StageGate })
 	runs, _ := workers.Runs(ctx, env.DB, tk.ID, 10)
-	if len(runs) != 2 || runs[0].Worker != "codex+gpt-6-sol" || runs[1].Worker == "codex+gpt-6-sol" {
+	if len(runs) != 2 || runs[0].Worker != "codex" || runs[1].Worker == "codex" {
 		t.Fatalf("额度用尽应换人重派：%+v", runs)
 	}
 	stats, err := workers.Stats(ctx, env.DB)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s := stats["codex+gpt-6-sol"]; len(s) != 1 || s[0].Outcome != workers.OutQuota || s[0].Task != tk.ID {
-		t.Errorf("这次拉起应记额度失败：%+v", s)
+	if s := stats["codex"]; len(s) != 1 || s[0].Outcome != workers.OutQuota || s[0].Task != tk.ID || s[0].Model != "" {
+		t.Errorf("这次拉起应记额度失败（codex 不报模型）：%+v", s)
 	}
-	if s := stats[workers.Combo(runs[1].Worker)]; len(s) != 1 || s[0].Outcome != workers.OutOK {
-		t.Errorf("换上的执行者应记交付：%+v", s)
+	if s := stats[workers.Combo(runs[1].Worker)]; len(s) != 1 || s[0].Outcome != workers.OutOK || s[0].Model != "claude-opus-5-5" {
+		t.Errorf("换上的执行者应记交付，带上它报的模型：%+v", s)
 	}
 	if _, err := os.Stat(filepath.Join(TaskDir(env.Paths.Data, tk.ID), "work")); err != nil {
 		t.Error("没有仓库时用 work/")
@@ -366,7 +366,7 @@ func TestFlowLoginRequeue(t *testing.T) {
 	}
 	waitFor(t, env, tk.ID, func(x ledger.Task) bool { return x.Stage == ledger.StageGate })
 	runs, _ := workers.Runs(ctx, env.DB, tk.ID, 10)
-	if len(runs) != 2 || runs[0].Worker != "grok+grok-4.6" || strings.HasPrefix(runs[1].Worker, "grok") {
+	if len(runs) != 2 || runs[0].Worker != "grok" || strings.HasPrefix(runs[1].Worker, "grok") {
 		t.Fatalf("没登录应换人重派：%+v", runs)
 	}
 }

@@ -32,9 +32,10 @@ var outText = map[string]string{OutOK: "交付", OutQuota: "额度", OutSetup: "
 // OutText 是结果给人看的名字。
 func OutText(out string) string { return outText[out] }
 
-// Exit 是经历 kind "exit" 的正文：第几次拉起、结果与原因。
+// Exit 是经历 kind "exit" 的正文：第几次拉起、实际用的模型、结果与原因。
 type Exit struct {
 	N       int    `json:"n"`
+	Model   string `json:"model,omitempty"` // 工具在日志里报的实际模型（ModelOf）；没写模型、跟随工具缺省时看它解析到了哪个
 	Outcome string `json:"outcome"`
 	Reason  string `json:"reason,omitempty"`
 }
@@ -59,7 +60,8 @@ func Failed(out string) bool { return out == OutQuota || out == OutSetup || out 
 type Attempt struct {
 	Task    string `json:"task"`
 	N       int    `json:"n"`
-	Worker  string `json:"worker"` // 当时的执行者标识（含强度）
+	Worker  string `json:"worker"`          // 当时的执行者标识（含强度）
+	Model   string `json:"model,omitempty"` // 工具报的实际模型
 	Host    string `json:"host"`
 	Outcome string `json:"outcome"` // 空：还在跑，或被人停下、取消（不计）
 	Reason  string `json:"reason,omitempty"`
@@ -134,7 +136,7 @@ type Event struct {
 func Settle(task string, evs []Event) ([]Attempt, error) {
 	var out []Attempt
 	var cur *Attempt
-	var bounce, exit, ended *Attempt // 这一段里各类经历给出的结果与原因（只用 Outcome、Reason）
+	var bounce, exit, ended *Attempt // 这一段里各类经历给出的结果与原因（只用 Outcome、Reason；exit 另带 Model）
 	flush := func() {
 		if cur == nil {
 			return
@@ -144,6 +146,9 @@ func Settle(task string, evs []Event) ([]Attempt, error) {
 				cur.Outcome, cur.Reason = x.Outcome, x.Reason
 				break
 			}
+		}
+		if exit != nil {
+			cur.Model = exit.Model
 		}
 		out = append(out, *cur)
 	}
@@ -163,7 +168,7 @@ func Settle(task string, evs []Event) ([]Attempt, error) {
 				return nil, fmt.Errorf("任务 %s 的退出记录坏了：%w", task, err)
 			}
 			if exit == nil {
-				exit = &Attempt{Outcome: x.Outcome, Reason: x.Reason}
+				exit = &Attempt{Outcome: x.Outcome, Reason: x.Reason, Model: x.Model}
 			}
 		case "exit_ok", "exit_fail", "bounce":
 			var b struct {

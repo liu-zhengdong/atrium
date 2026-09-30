@@ -31,6 +31,7 @@ type Trace struct {
 	Ended    bool      `json:"ended"`             // 走到了收尾
 	Result   string    `json:"result,omitempty"`  // 收尾总结全文
 	Ms       int64     `json:"ms,omitempty"`      // 用时（工具报了才有）
+	Model    string    `json:"model,omitempty"`   // 这次实际用的模型（工具在开头报了才有：claude、cursor、agy）
 	Lines    []string  `json:"lines,omitempty"`   // 其他输出原文（最后 rawLines 行）：非事件行、报错事件、没认出的事件；解析不了的工具全在这里
 	Unknown  int       `json:"unknown,omitempty"` // 没认出的事件行数：非零说明工具的日志格式变了，解析要跟上
 	// UnknownHead 是最早没认出的 headLines 行原文（截断）：自动记草稿时写进详述（ParseFinding）。
@@ -144,6 +145,13 @@ func ReadTrace(worker, path string) (Trace, error) {
 		}
 		p.Line(line)
 	}
+}
+
+// ModelOf 从日志开头取工具报的实际模型（纯函数）；工具不报返回空。
+func ModelOf(worker, head string) string {
+	p := NewParser(worker)
+	p.Feed(head)
+	return p.t.Model
 }
 
 func (p *Parser) say(text string) {

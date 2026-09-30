@@ -80,7 +80,7 @@ type Adapter interface {
 type Driver struct {
 	Tool         string
 	Exe          string
-	DefaultModel string
+	DefaultModel string   // 只写工具、档案也没写 model 时交给工具的模型；空表示不传，跟随工具自带的缺省（最新）
 	Efforts      []string // nil 表示不接受思考强度
 	Exclusive    bool     // 同一时刻只跑一个
 	Tell         string
@@ -194,6 +194,7 @@ var initSession = regexp.MustCompile(`"type":"system","subtype":"init"[^\n]*?"se
 // 运行中写入的用户消息在工具调用边界读入，--replay-user-messages 把读入的消息带 isReplay 回显。
 // --setting-sources 不含 local：工作树顺着读到主检出的 .claude/settings.local.json（用户个人设置，
 // 秘书目录在那里写着 env ATRIUM_AS=secretary 与起秘书桥的 SessionStart hook），执行者不该带上。
+// 缺省模型 opus 是 CLI 的别名，跟随最新的 Opus；不传 --model 会用用户 settings.json 里的 model。
 func claudeAdapter() *Driver {
 	a := &Driver{Tool: "claude", Exe: "claude", DefaultModel: "opus", Efforts: []string{"low", "medium", "high", "xhigh", "max"},
 		Tell: TellStdin, JSON: true, Endpoints: []string{"anthropic"}, KeyEnv: "ANTHROPIC_AUTH_TOKEN", read: readClaude, session: initSession}
@@ -224,16 +225,17 @@ func claudeAdapter() *Driver {
 
 // codex exec：--json 逐行输出事件；-C 工作目录、-s 沙箱、-m 模型、强度走 -c model_reasoning_effort；PROMPT 写 - 从标准输入读。
 // --skip-git-repo-check：没有仓库的任务（work/、工作地点、审阅）目录不是 git 仓库，不带 codex 直接拒绝启动。
+// --ignore-user-config：不读用户个人的 config.toml（模型、强度、MCP、hooks、memories），登录照用；没写模型时用 CLI 自带的缺省（最新）。
 // 续上：codex exec resume --json <会话> -（没有 -C、-s，沙箱走配置覆盖）；会话 id 是 thread.started 的 thread_id。
 func codexAdapter() *Driver {
-	a := &Driver{Tool: "codex", Exe: "codex", DefaultModel: "gpt-6-sol", Efforts: []string{"minimal", "low", "medium", "high", "xhigh"},
+	a := &Driver{Tool: "codex", Exe: "codex", Efforts: []string{"minimal", "low", "medium", "high", "xhigh"},
 		Tell: TellResume, JSON: true, Endpoints: []string{"responses"}, read: readCodex, session: regexp.MustCompile(`"type":"thread.started","thread_id":"([0-9a-f-]{36})"`)}
 	a.build = func(in Request) (Launch, error) {
 		var args []string
 		if in.Session != "" {
-			args = []string{"exec", "resume", "--json", "--skip-git-repo-check", "-c", `sandbox_mode="danger-full-access"`}
+			args = []string{"exec", "resume", "--json", "--skip-git-repo-check", "--ignore-user-config", "-c", `sandbox_mode="danger-full-access"`}
 		} else {
-			args = []string{"exec", "--json", "--skip-git-repo-check", "-C", in.Dir, "-s", "danger-full-access"}
+			args = []string{"exec", "--json", "--skip-git-repo-check", "--ignore-user-config", "-C", in.Dir, "-s", "danger-full-access"}
 		}
 		if in.Model != "" {
 			args = append(args, "-m", in.Model)
@@ -261,6 +263,7 @@ func codexAdapter() *Driver {
 }
 
 // opencode run：提示词是位置参数；--format json 逐步输出事件；--auto 全放行；同一数据目录并发会死锁，独占。
+// 缺省模型写死：opencode models 只列各家模型、不标哪个是缺省，不传 -m 用的是用户配置或上次选的。
 func opencodeAdapter() *Driver {
 	a := &Driver{Tool: "opencode", Exe: "opencode", DefaultModel: "opencode-go/mimo-v2.6-flash",
 		Efforts: []string{"minimal", "low", "medium", "high", "max"}, Exclusive: true, Tell: TellRestart, JSON: true,
@@ -322,6 +325,7 @@ func CursorModel(model, effort string) (string, error) {
 }
 
 // cursor-agent -p：提示词读标准输入；stream-json 事件；--force --trust --sandbox disabled 全放行。续上 --resume。
+// 缺省模型 auto 由 Cursor 自己挑（跟随）。
 func cursorAdapter() *Driver {
 	a := &Driver{Tool: "cursor", Exe: "cursor-agent", DefaultModel: "auto", Efforts: cursorEfforts, Tell: TellResume, JSON: true,
 		read: readCursor, session: initSession}
@@ -371,6 +375,7 @@ func AgyModelArgs(model, effort string) ([]string, error) {
 }
 
 // agy（Antigravity）：--print=<提示词>（等号形式）、stream-json 事件、全放行、不认斜杠命令。
+// 缺省模型写死：agy models 只列清单、不标哪个是缺省；模型名要带强度（gemini-3.8-flash 会被拒）。
 func agyAdapter() *Driver {
 	a := &Driver{Tool: "agy", Exe: "agy", DefaultModel: "gemini-3.8-flash-high", Efforts: []string{"low", "medium", "high", "max"},
 		Tell: TellRestart, JSON: true, ArgPrompt: true, read: readAgy}
@@ -399,9 +404,9 @@ func kimiAdapter() *Driver {
 	return a
 }
 
-// grok -p：单轮提示词、--always-approve、--cwd、--reasoning-effort。
+// grok -p：单轮提示词、--always-approve、--cwd、--reasoning-effort；没写模型用 grok 服务端给的缺省（grok models 里标 default 的）。
 func grokAdapter() *Driver {
-	a := &Driver{Tool: "grok", Exe: "grok", DefaultModel: "grok-4.6", Efforts: []string{"low", "medium", "high"},
+	a := &Driver{Tool: "grok", Exe: "grok", Efforts: []string{"low", "medium", "high"},
 		Tell: TellRestart, ArgPrompt: true}
 	a.build = func(in Request) (Launch, error) {
 		args := []string{"-p", in.Prompt}

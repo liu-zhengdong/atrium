@@ -20,6 +20,7 @@ const icon = {
   narrow: '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M2.5 6H6V2.5M13.5 6H10V2.5M2.5 10H6v3.5M13.5 10H10v3.5"/></svg>',
   out: '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M9 2.5h4.5V7M13.5 2.5l-6 6M11.5 9.5v4h-9v-9h4"/></svg>',
   down: '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M8 2.5v8M4.5 7 8 10.5 11.5 7M3 13.5h10"/></svg>',
+  pause: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M5.5 3.5v9M10.5 3.5v9"/></svg>',
 };
 
 // brand：各家额度账号的图标，路径取自 OpenQuota 的 provider-icons（坐标取两位小数），单色随 currentColor，明暗主题通用
@@ -147,6 +148,13 @@ function draftsLink(n) {
   return root ? ` · <a class="quiet" href="#${esc(root.id)}/tasks" data-drafts>草稿 ${n} 件</a>` : ` · 草稿 ${n} 件`;
 }
 
+/* 今天页脉搏行开头的暂停说明；部门写名字，机器写 hN */
+function pausedNote(paused) {
+  if (!paused.length) return "";
+  const what = paused.includes("all") ? "已全部暂停" : "部分暂停：" + esc(paused.map(deptName).join("、"));
+  return `<span class="paused">${icon.pause}${what}</span> · `;
+}
+
 /* 今天 */
 function renderToday(d) {
   let live = "";
@@ -166,8 +174,8 @@ function renderToday(d) {
         <span class="meta">${esc(a.dept_name || "")}<br>${esc(ago(a.at))}前</span>
       </button>`).join("")}</div>` : `<div class="empty">没有等你的事</div>`;
   $("#page").innerHTML = `
-    <h1 class="hello">${d.paused.includes("all") ? "已全部暂停" : d.asks.length ? `${d.asks.length} 件事等你` : d.paused.length ? `部分暂停：${esc(d.paused.join("、"))}` : "军团在自己运转"}</h1>
-    <p class="pulse-line"><span class="dot ${d.running.length ? "run" : "idle"}"></span>&nbsp; ${d.running.length} 件在做 · ${d.queued} 件排队 · 今天上线 ${d.shipped.length} 件${draftsLink(d.drafts)}</p>
+    <h1 class="hello">今天</h1>
+    <p class="pulse-line">${pausedNote(d.paused)}<span class="dot ${d.running.length ? "run" : "idle"}"></span>&nbsp; ${d.running.length} 件在做 · ${d.queued} 件排队 · 今天上线 ${d.shipped.length} 件${draftsLink(d.drafts)}</p>
     <section class="section"><h2>等你</h2>${asks}</section>
     <section class="section"><h2>在做${d.running.length > 1 ? `<button class="sort" id="sort">按${sortMode}${icon.sort}</button>` : ""}</h2><div class="rows">${live}</div></section>
     <section class="section"><h2>接下来 7 天</h2>${soonHTML(d.soon)}</section>
@@ -560,7 +568,7 @@ function renderTree(cur) {
 function pageOf(page, tab) {
   if (page === "legion") return { path: "legion", head: `<h1 class="hello">执行者</h1>`, draw: renderLegion };
   if (/^o[1-9]\d*$/.test(page)) return { path: "dept/" + page, head: deptHead(page), draw: d => renderDept(d, page, tab) };
-  return { path: "today", head: `<div class="skel"><i class="t"></i></div>`, draw: renderToday };
+  return { path: "today", head: `<h1 class="hello">今天</h1>`, draw: renderToday };
 }
 function drawerOf(open, page) {
   if (open[0] === "a") return { path: "dept/" + page, draw: d => renderLeader(d, open) }; // 负责人、资料抽屉用部门页的数据

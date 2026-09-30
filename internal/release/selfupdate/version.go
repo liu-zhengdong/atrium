@@ -1,4 +1,6 @@
-package release
+// Package selfupdate 是服务与远程代理共用的自升级：版本比较、升不升的判定、从 GitHub Release 下载本平台二进制、
+// 校验 SHA256SUMS 后替换自身。不依赖别的包：release（服务）与 hosts（代理）都引它。
+package selfupdate
 
 import (
 	"path/filepath"
@@ -6,7 +8,16 @@ import (
 	"strings"
 )
 
-// 本文件是纯判定：版本比较、资产名、自升级开不开。
+// DefaultRepo 是 Atrium 自己的仓库；ATRIUM_UPDATE_REPO 可改（服务那台设，代理跟服务取同一个）。
+const DefaultRepo = "liu-zhengdong/atrium"
+
+// Repo 是发版仓库：ATRIUM_UPDATE_REPO，没设用 DefaultRepo。
+func Repo(getenv func(string) string) string {
+	if r := strings.TrimSpace(getenv("ATRIUM_UPDATE_REPO")); r != "" {
+		return r
+	}
+	return DefaultRepo
+}
 
 // Version 是 vMAJOR.MINOR.PATCH。
 type Version [3]int
@@ -82,8 +93,9 @@ func SelfUpgrade(data, defaultData, version string) (bool, string) {
 	return true, ""
 }
 
-// Upgrade 判发版巡检这一轮升不升：本实例开了自升级（默认数据目录、发版版本，见 SelfUpgrade）、
-// 没有全局暂停、最新发布比运行中的新，且本进程没在这个版本上升失败过（失败只报一次，不反复重试）。
+// Upgrade 判这一次升不升到 latest：本实例开了自升级（默认数据目录、发版版本，见 SelfUpgrade）、
+// 没有暂停、latest 比运行中的新，且本进程没在这个版本上升失败过（失败只报一次，不反复重试）。
+// 服务拿最新发布比，远程代理拿服务的版本比。
 func Upgrade(current, latest string, enabled, paused bool, failed string) bool {
 	return enabled && !paused && latest != failed && Compare(latest, current) > 0
 }

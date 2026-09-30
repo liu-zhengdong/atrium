@@ -21,17 +21,24 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/api"
 	"github.com/liu-zhengdong/atrium/internal/platform"
 	"github.com/liu-zhengdong/atrium/internal/quota"
+	"github.com/liu-zhengdong/atrium/internal/release/selfupdate"
+	"github.com/liu-zhengdong/atrium/internal/service"
 	"github.com/liu-zhengdong/atrium/internal/workers"
 )
 
 // 远程代理（atrium agent）：主动长轮询领指令（远程不开入站端口），在这台克隆仓库、建工作树、按同一份适配器拉起执行者，
 // 按字节偏移续传日志、补报退出；断线期间执行者照跑，重连后对账。令牌只存这台的 agent.json（0600）。
+// 版本跟服务走：hello 回执带服务的版本，代理旧于服务就换成同一版本、退出让系统服务重起（见 catchUp）。
 
 // AdapterFor 按工具名取执行者适配器（workers 包提供；第三波在装配处接上）。没接上时代理拒绝拉起。
 var AdapterFor func(tool string) (workers.Adapter, bool)
 
 // ErrRevoked：机器令牌失效（这台被移除或重新登记）。代理以 0 退出，系统服务不再重起它。
 var ErrRevoked = errors.New("机器令牌已失效：这台已被移除或重新登记；在服务那台重新 atrium host add 后再接入")
+
+// ErrUpgraded：代理已换成服务的版本。以非 0 退出，系统服务（launchd、systemd、Windows 计划任务）按新二进制重起它；
+// 前台跑的要自己再运行 atrium agent。
+var ErrUpgraded = errors.New("代理已换成服务的版本，退出让系统服务按新版本重起")
 
 const logChunk = 256 * 1024
 
@@ -128,15 +135,21 @@ type runState struct {
 
 // Agent 是一个在跑的代理。
 type Agent struct {
-	Dir    string
-	Cfg    AgentConfig
-	Env    map[string]string // 执行者与找程序用的基础环境：本进程环境叠上 agent.json 的 Env
-	Log    *slog.Logger
-	Quota  *quota.Local // 读这台的额度并上报；nil 不报
-	client *api.Client
-	ctx    context.Context // Run 的 ctx：停下时续传也停（执行者照跑，下次启动接着看）
-	mu     sync.Mutex
-	runs   map[string]*runState
+	Dir   string
+	Cfg   AgentConfig
+	Env   map[string]string // 执行者与找程序用的基础环境：本进程环境叠上 agent.json 的 Env
+	Log   *slog.Logger
+	Quota *quota.Local // 读这台的额度并上报；nil 不报
+	// 自升级：Version 是本代理的版本，Exe 是要替换的可执行文件，GH 下载新版本（nil 用这台执行者环境里的 gh）。
+	Version string
+	Exe     string
+	GH      selfupdate.Runner
+	failed  string            // 本进程升失败过的版本：不再重试
+	failure map[string]string // 还没报给服务的升级失败
+	client  *api.Client
+	ctx     context.Context // Run 的 ctx：停下时续传也停（执行者照跑，下次启动接着看）
+	mu      sync.Mutex
+	runs    map[string]*runState
 }
 
 func NewAgent(dir string, cfg AgentConfig, log *slog.Logger) *Agent {
@@ -144,7 +157,9 @@ func NewAgent(dir string, cfg AgentConfig, log *slog.Logger) *Agent {
 	for k, v := range cfg.Env {
 		env[k] = v
 	}
-	return &Agent{Dir: dir, Cfg: cfg, Env: env, Log: log, client: newClient(cfg.Server, cfg.Token), runs: map[string]*runState{}}
+	exe, _ := os.Executable()
+	return &Agent{Dir: dir, Cfg: cfg, Env: env, Log: log, Version: service.Version, Exe: exe,
+		client: newClient(cfg.Server, cfg.Token), runs: map[string]*runState{}}
 }
 
 func (a *Agent) call(ctx context.Context, path string, body, out any) error {
@@ -180,7 +195,7 @@ func (a *Agent) Run(ctx context.Context) error {
 		if ctx.Err() != nil {
 			return nil
 		}
-		if errors.Is(err, ErrRevoked) {
+		if errors.Is(err, ErrRevoked) || errors.Is(err, ErrUpgraded) {
 			return err
 		}
 		if connected {
@@ -236,16 +251,22 @@ func (a *Agent) recover() error {
 	return nil
 }
 
-// session 是一次连接：hello 对账，然后长轮询领指令，出错返回。
+// session 是一次连接：hello 对账、跟上服务的版本，然后长轮询领指令，出错返回。
 func (a *Agent) session(ctx context.Context) (bool, error) {
 	var hello struct {
-		Stop []RunRef `json:"stop"`
+		Stop    []RunRef `json:"stop"`
+		Version string   `json:"version"`
+		Repo    string   `json:"repo"`
+		Paused  bool     `json:"paused"`
 	}
 	if err := a.call(ctx, "/api/agent/hello", map[string]any{"info": machineInfo(a.Dir, a.Env), "runs": a.agentRuns()}, &hello); err != nil {
 		return false, err
 	}
 	for _, r := range hello.Stop {
 		a.stop(r)
+	}
+	if err := a.catchUp(ctx, hello.Version, hello.Repo, hello.Paused); err != nil {
+		return true, err
 	}
 	a.Log.Info("已连上服务", "server", a.Cfg.Server, "host", a.Cfg.Host)
 	for {
@@ -498,14 +519,19 @@ func (a *Agent) git(ctx context.Context, dir string, args ...string) error {
 
 // runGit 在 dir（空为当前目录）跑一条 git，至多 10 分钟。
 func (a *Agent) runGit(ctx context.Context, dir string, args []string, stdout, stderr io.Writer) error {
-	env := platform.WorkerEnv(runtime.GOOS, a.Env)
-	env["GIT_TERMINAL_PROMPT"] = "0"
-	path, err := platform.LookPath("git", env)
-	if err != nil {
-		return err
-	}
 	if dir != "" {
 		args = append([]string{"-C", dir}, args...)
+	}
+	return a.runTool(ctx, "git", args, stdout, stderr)
+}
+
+// runTool 用这台执行者的环境跑一条命令（git、gh），至多 10 分钟。
+func (a *Agent) runTool(ctx context.Context, name string, args []string, stdout, stderr io.Writer) error {
+	env := platform.WorkerEnv(runtime.GOOS, a.Env)
+	env["GIT_TERMINAL_PROMPT"] = "0"
+	path, err := platform.LookPath(name, env)
+	if err != nil {
+		return err
 	}
 	cmd, err := platform.Start(platform.Spec{Path: path, Args: args, Env: env, Stdout: stdout, Stderr: stderr})
 	if err != nil {

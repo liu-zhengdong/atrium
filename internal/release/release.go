@@ -1,5 +1,5 @@
-// Package release 是上线：每分钟看一次最新发布，比运行中的新、且本平台二进制与 SHA256SUMS 都已传完，就下载替换自身、平滑重启
-// （全局暂停时不升；同一版本升失败只发一次 online.failed 给秘书，本进程不再重试）。
+// Package release 是上线：每分钟看一次最新发布（不看草稿），比运行中的新就下载替换自身、平滑重启
+// （全局暂停时不升；同一版本升失败只发一次 online.failed 给秘书，本进程不再重试）。版本判定与下载替换在 selfupdate，远程代理共用。
 // Atrium 自己的仓库合入后的任务等含它的版本：新服务起来后跑只读冒烟（status、task ls、--help），
 // 通过记「已上线」（task.status 事件带版本），没过转受阻。
 //
@@ -28,15 +28,13 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/ledger"
 	"github.com/liu-zhengdong/atrium/internal/pause"
 	"github.com/liu-zhengdong/atrium/internal/platform"
+	"github.com/liu-zhengdong/atrium/internal/release/selfupdate"
 	"github.com/liu-zhengdong/atrium/internal/service"
 	"github.com/liu-zhengdong/atrium/internal/store"
 )
 
 // Actor 是上线在经历里的署名。
 const Actor = "release"
-
-// DefaultRepo 是 Atrium 自己的仓库；ATRIUM_UPDATE_REPO 可改。
-const DefaultRepo = "liu-zhengdong/atrium"
 
 // Config 是本实例的上线设置。
 type Config struct {
@@ -49,17 +47,13 @@ type Config struct {
 
 // ConfigFor 按数据目录、端口、ATRIUM_UPDATE_REPO 与当前版本定本实例的上线设置。
 func ConfigFor(p config.Paths, port int) Config {
-	repo := strings.TrimSpace(os.Getenv("ATRIUM_UPDATE_REPO"))
-	if repo == "" {
-		repo = DefaultRepo
-	}
 	def, err := config.Resolve(func(string) string { return "" })
-	c := Config{Repo: repo, Data: p.Data, Port: port}
+	c := Config{Repo: selfupdate.Repo(os.Getenv), Data: p.Data, Port: port}
 	if err != nil {
 		c.Why = err.Error()
 		return c
 	}
-	c.Enabled, c.Why = SelfUpgrade(p.Data, def.Data, service.Version)
+	c.Enabled, c.Why = selfupdate.SelfUpgrade(p.Data, def.Data, service.Version)
 	return c
 }
 
@@ -127,19 +121,11 @@ func (r *Releaser) Sweep(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if Upgrade(r.Current, latest, r.Cfg.Enabled, paused, r.failed) {
-		// 资产没传完不算升失败：这一轮跳过，下一轮再看。
-		switch missing, err := Pending(ctx, r.R, r.Cfg.Repo, latest); {
-		case err != nil:
-			r.Log.Warn("查不到新版本的发布文件", "to", latest, "err", err)
-		case len(missing) > 0:
-			r.Log.Info("新版本的发布文件还没传完，下一轮再看", "to", latest, "missing", missing)
-		default:
-			if err := r.upgrade(ctx, latest); err != nil && ctx.Err() == nil {
-				return r.upgradeFailed(ctx, latest, err)
-			}
-			return nil
+	if selfupdate.Upgrade(r.Current, latest, r.Cfg.Enabled, paused, r.failed) {
+		if err := r.upgrade(ctx, latest); err != nil && ctx.Err() == nil {
+			return r.upgradeFailed(ctx, latest, err)
 		}
+		return nil
 	}
 	tasks, err := gates.InStage(ctx, r.DB, ledger.StageMerged)
 	if err != nil {
@@ -184,7 +170,7 @@ func (r *Releaser) step(ctx context.Context, t ledger.Task) error {
 }
 
 func (r *Releaser) upgrade(ctx context.Context, tag string) error {
-	if err := Install(ctx, r.R, r.Cfg.Repo, tag, r.Exe); err != nil {
+	if err := selfupdate.Install(ctx, r.R, r.Cfg.Repo, tag, r.Exe); err != nil {
 		return err
 	}
 	token, err := r.Token()
@@ -290,14 +276,11 @@ func update(c *cli.Ctx) error {
 	if err := c.MaxArgs(0); err != nil {
 		return err
 	}
-	repo := strings.TrimSpace(c.Env.Getenv("ATRIUM_UPDATE_REPO"))
-	if repo == "" {
-		repo = DefaultRepo
-	}
+	repo := selfupdate.Repo(c.Env.Getenv)
 	x := gates.NewExec()
 	to := c.Str("to")
 	if to != "" {
-		if _, ok := Parse(to); !ok {
+		if _, ok := selfupdate.Parse(to); !ok {
 			return api.Usage("--to: 应为 vX.Y.Z，收到 %q", to)
 		}
 		if !strings.HasPrefix(to, "v") {
@@ -314,7 +297,7 @@ func update(c *cli.Ctx) error {
 		to = latest
 	}
 	res := UpdateResult{From: service.Version, To: to}
-	if Compare(to, service.Version) == 0 {
+	if selfupdate.Compare(to, service.Version) == 0 {
 		return c.Done(res, "已是 "+to, "atrium status")
 	}
 	exe, err := os.Executable()
@@ -322,7 +305,7 @@ func update(c *cli.Ctx) error {
 		return err
 	}
 	res.Exe = exe
-	if err := Install(c.Context, x, repo, to, exe); err != nil {
+	if err := selfupdate.Install(c.Context, x, repo, to, exe); err != nil {
 		return err
 	}
 	p, err := c.Paths()

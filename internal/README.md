@@ -40,8 +40,9 @@ Go 代码怎么分包、包之间怎么调用、并行开发时各自改哪里�
 | `gates/skillcheck` | 完成 | 技能声明的交付检查：技能的 `checks` 写检查名（`article`、`video`），关卡在本机工作目录里查表自己跑（构建与明暗截图；ffprobe、响度、第一帧不空白、联系表），产物放任务目录、结论与路径记进经历；每项有时限，跑不起来（缺工具、工作目录在远程）转受阻；org 保存技能时经 `Validate` 校验名字 | — |
 | `merge` | 完成 | pr 交付方式的落地第一段：合入队列、快检查；`task merge`（登记亲手做的 PR、放行受阻的交付；放行的人判不了这个部门的验收时先等验收）；快检查进程经 `watch.Track` 登记 | — |
 | `release` | 完成 | pr 交付方式的落地第二段（Atrium 自己的仓库）：有新版本就自升级、平滑重启；等版本、上线冒烟；`update` | — |
+| `release/selfupdate` | 完成 | 服务与远程代理共用的自升级：版本比较与升不升（纯函数 `Upgrade`、`SelfUpgrade`）、发版仓库（`Repo`）、下载本平台二进制校验 SHA256SUMS 后替换自身（`Install`，旧文件留 `.old`）；不引用别的包 | — |
 | `watch` | 完成 | 持球与期限表（`Rules`）、巡检循环、卡死判定、服务重启后接管；每轮顺带数上限用量（刚到或超了发 `limit.full`）；持球人判定 `HolderOf`；`top` 与 `/api/top`（末行是三个目标的数） | — |
-| `hosts` | 完成 | 机器登记、挑机器（`Pick`，避开工具没装、没登录或「工具+模型」在那台标了不可用的机器）、派到远程（`Launch`/`Stop`/`WaitExit`）、问远程只读查询（`Ask`：只读 git 子命令、读工作目录根下的文件）、ssh 隧道、远程代理；自检（`probe.go`：本机服务与远程代理上线时和之后每 10 分钟对装了的每个工具用执行者环境跑一次 `--version`，拉不起来、非 0 退出、超时经 `workers.SyncProbes` 标「工具@机器」不可用并记输出前几行，跑通自动解除；判定纯函数 `ProbeFault`）；`host add/ls [hN]/edit`（edit 含 `--key` 私钥、`--join` 重新接入、`--rm` 移除）；`agent`、`agent install` 在远程机器上照 `host add` 回执跑，不列在帮助里 | `hosts` `host_runs` |
+| `hosts` | 完成 | 机器登记、挑机器（`Pick`，避开工具没装、没登录或「工具+模型」在那台标了不可用的机器）、派到远程（`Launch`/`Stop`/`WaitExit`）、问远程只读查询（`Ask`：只读 git 子命令、读工作目录根下的文件）、ssh 隧道、远程代理（跟服务同版本：hello 回执带服务的版本，代理旧于服务就经 `selfupdate` 换成同一版本、以非 0 退出由系统服务重起，在跑的执行者照跑、重起后接回；同一版本升失败发一次 `online.failed` 给秘书；隔离与开发版不升）；自检（`probe.go`：本机服务与远程代理上线时和之后每 10 分钟对装了的每个工具用执行者环境跑一次 `--version`，拉不起来、非 0 退出、超时经 `workers.SyncProbes` 标「工具@机器」不可用并记输出前几行，跑通自动解除；判定纯函数 `ProbeFault`）；`host add/ls [hN]/edit`（edit 含 `--key` 私钥、`--join` 重新接入、`--rm` 移除）；`agent`、`agent install` 在远程机器上照 `host add` 回执跑，不列在帮助里 | `hosts` `host_runs` |
 | `quota` | 完成 | 额度读取、多机合并、富余（`Spares`）；只有服务的后台循环去读（本机自带读取到期就读，OpenQuota 每 5 分钟），读数连同 OpenQuota 的都存 `quota_cache`，派活、网页、命令都只取 `Last`；隔离实例（服务与代理都按数据目录不是缺省的算）不读本机登录与 OpenQuota；`quota`（只读）、`quota set`（改给用户留的份额） | `quota_cache` `quota_settings` |
 | `web` | 完成 | 只读网页与只读接口；`map`；点了立刻切页：先画上次数据（没有画页头与骨架），nav 与页面数据并行取，推送来了数据没变的一处不重画；执行者页额度是存下的读数（`quota.Last`），后台读到新数经推送随整页重取；今天页末尾一块是三个目标的数；「等你」= 待拍板的选项单 + 等你验收的交付 + 递到你这层的卡住任务 + 上交到秘书还没确认的事 + 等人处理的执行者不可用标记（从 `worker_marks` 现读，解除就消失；额度用尽不算）；部门页负责人一行点开是负责人抽屉（执行者组合、负责哪些部门、备忘按行分段，地址 `#oN/aN`，数据就用部门页的）；部门页任务按父子排成树（结束的子任务两件以上折成一行，没派的行尾写「等 tN」），任务抽屉给上级、子任务、要等的、在等它的，来源后的负责人名字点开是他的负责人抽屉；任务抽屉的「经过」是执行者真日志按段解析（`workers.ReadTrace`，与 `task log` 同一份解析）；周期任务在部门页（挂上一轮）、今天页「接下来 7 天」和抽屉（最近 5 轮，`agenda.Rounds`）里看得到，多久一轮与 `schedule ls` 共用 `agenda.Cadence`；部门页资料点开是资料抽屉（能放宽到整个主岛），原文走 `/ui/material/mN`（带 CSP sandbox，pdf 除外），一条资料是一个文件或一个目录，打开渲染正文，按扩展名一处分派：md（相对图片、链接在这条资料的文件里找）、html（沙箱 iframe，相对路径落到 `/ui/material/mN/<相对路径>`，只在这条资料里找）、没有正文的图片集列出缩略图、pdf 与图片（浏览器原生）、其它文本等宽、docx 与 xlsx（`static/lib` 里 embed 的前端库，打开时才加载），其余给下载；代为注册一次性的 `import`（实现在 `importer`） | — |
 | `importer` | 完成 | 从旧 TS 库只读导入部门、要点、负责人、备忘、技能、资料、档案、机器 | — |
@@ -175,6 +176,7 @@ dispatch ─→ ledger.Apply/SetFacts、org.Chain/GetSkill/SecretEnv、workers�
 gates    ─→ ledger.Apply/Record（查 PR 用 gh，经 platform）
 merge    ─→ ledger.Apply、platform（git、gh、快检查）
 release  ─→ service 的 restart 接口、ledger.Apply(Land)、events.Emit(OnlineFailed)
+release、hosts ─→ release/selfupdate（版本判定、下载替换；hosts 引不到 release：release 经 gates 引 hosts）
 watch    ─→ ledger.Get/Apply、events.Emit(Overdue, LimitFull)、org、platform.KillTree
 dispatch、merge ─→ watch.Track（拉起执行者或检查后登记 pid、日志、工作树）
 dispatch ─→ watch.Use(Hooks{Requeue})：卡住或临时错误时重新入队（可换人、标额度）

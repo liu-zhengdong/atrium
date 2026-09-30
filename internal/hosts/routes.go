@@ -11,8 +11,11 @@ import (
 
 	"github.com/liu-zhengdong/atrium/internal/api"
 	"github.com/liu-zhengdong/atrium/internal/app"
+	"github.com/liu-zhengdong/atrium/internal/events"
 	"github.com/liu-zhengdong/atrium/internal/pause"
 	"github.com/liu-zhengdong/atrium/internal/quota"
+	"github.com/liu-zhengdong/atrium/internal/release/selfupdate"
+	"github.com/liu-zhengdong/atrium/internal/service"
 	"github.com/liu-zhengdong/atrium/internal/store"
 	"github.com/liu-zhengdong/atrium/internal/workers"
 )
@@ -226,7 +229,26 @@ func agentRoutes(r *api.Router, env *app.Env) {
 		if orphans == nil {
 			orphans = []RunRef{}
 		}
-		return map[string]any{"stop": orphans}, nil
+		// 代理拿服务的版本与发版仓库跟上服务（见 Agent.catchUp）；暂停（全局或这台）时不升。
+		paused, err := env.Pause.Paused(ctx, pause.Scope{Host: host})
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"stop": orphans, "version": service.Version, "repo": selfupdate.Repo(os.Getenv), "paused": paused}, nil
+	})
+	// 代理升到服务的版本失败：同服务自升级失败，发一条 online.failed 给秘书（代理同一版本只报一次）。
+	handle("POST /api/agent/upgrade-failed", func(q *api.Req, host string) (any, error) {
+		var b struct {
+			From  string `json:"from"`
+			To    string `json:"to"`
+			Error string `json:"error"`
+		}
+		if err := q.Decode(&b); err != nil {
+			return nil, err
+		}
+		env.Log.Error("远程代理升级失败", "host", host, "from", b.From, "to", b.To, "err", b.Error)
+		return map[string]bool{"reported": true}, events.Emit(q.Context(), env.DB, events.Event{Kind: events.OnlineFailed,
+			Target: events.Secretary, By: host, Body: map[string]string{"host": host, "from": b.From, "to": b.To, "error": b.Error}})
 	})
 	handle("POST /api/agent/poll", func(q *api.Req, host string) (any, error) {
 		var b struct {

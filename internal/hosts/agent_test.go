@@ -142,15 +142,24 @@ func (g *rig) agent(dir string) (*Agent, context.CancelFunc, chan error) {
 func t2(t *testing.T) string { return t.TempDir() }
 
 func (g *rig) start(dir string) (*Agent, context.CancelFunc, chan error) {
+	a, cancel, done := g.run(dir, nil)
+	g.waitOnline(a.Cfg.Host)
+	return a, cancel, done
+}
+
+// run 起代理（prep 在 Run 之前改它），不等上线。
+func (g *rig) run(dir string, prep func(*Agent)) (*Agent, context.CancelFunc, chan error) {
 	cfg, err := ReadAgentConfig(dir)
 	if err != nil {
 		g.t.Fatal(err)
 	}
 	a := NewAgent(dir, cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if prep != nil {
+		prep(a)
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- a.Run(ctx) }()
-	g.waitOnline(cfg.Host)
 	return a, cancel, done
 }
 

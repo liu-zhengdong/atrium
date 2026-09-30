@@ -1,4 +1,4 @@
-package release
+package selfupdate
 
 import "testing"
 
@@ -59,10 +59,6 @@ func TestSelfUpgrade(t *testing.T) {
 			t.Errorf("%+v：%v %q", c, on, why)
 		}
 	}
-	if (Config{Enabled: true, Repo: "o/r"}).Tracks("o/x") || !(Config{Enabled: true, Repo: "o/r"}).Tracks("o/r") ||
-		(Config{Repo: "o/r"}).Tracks("o/r") {
-		t.Error("Tracks 判定不对")
-	}
 }
 
 func TestUpgrade(t *testing.T) {
@@ -80,10 +76,20 @@ func TestUpgrade(t *testing.T) {
 		{"全局暂停", "v2.0.6", "v2.0.7", true, true, "", false},
 		{"这个版本升失败过", "v2.0.6", "v2.0.7", true, false, "v2.0.7", false},
 		{"升失败后又出更新的版本", "v2.0.6", "v2.0.8", true, false, "v2.0.7", true},
+		{"代理旧于服务", "v2.0.5", "v2.0.91", true, false, "", true},
+		{"代理新于服务（服务还没升）", "v2.0.92", "v2.0.91", true, false, "", false},
+		{"服务是开发版", "v2.0.5", "v2-dev", true, false, "", false},
 	}
 	for _, c := range cases {
 		if got := Upgrade(c.current, c.latest, c.enabled, c.paused, c.failed); got != c.want {
 			t.Errorf("%s：得到 %v", c.name, got)
 		}
+	}
+}
+
+func TestRepo(t *testing.T) {
+	env := func(v string) func(string) string { return func(string) string { return v } }
+	if Repo(env("")) != DefaultRepo || Repo(env(" me/fork ")) != "me/fork" {
+		t.Error("Repo 判定不对")
 	}
 }

@@ -101,37 +101,48 @@ func TestRoute(t *testing.T) {
 		name, owner, leader string
 		body                map[string]any
 		want                Delivery // 零值表示不投
+		by                  string
 	}{
-		// 结果：只投处理人；秘书、用户派的活，部门有负责人就投负责人，不再投秘书。
-		{"用户处理·合入完成·有负责人", "u1", "a1", st("done", "merged"), Delivery{"a1", Act}},
-		{"用户处理·合入完成·无负责人", "u1", "", st("done", "merged"), Delivery{Secretary, Act}},
-		{"秘书处理·上线·有负责人", Secretary, "a1", st("done", "released"), Delivery{"a1", Act}},
-		{"秘书处理·已合入等发版只知会", Secretary, "a1", map[string]any{"to": "running", "stage": "merged", "event": "land"}, Delivery{"a1", Info}},
-		{"秘书处理·已合入等发版·无负责人", Secretary, "", map[string]any{"to": "running", "stage": "merged", "event": "land"}, Delivery{Secretary, Info}},
-		{"用户处理·用户验收通过只知会", "u1", "a1", map[string]any{"to": "done", "stage": "accept", "event": "accept", "by": "u1"}, Delivery{"a1", Info}},
-		{"用户处理·用户标受阻照旧要处理", "u1", "", map[string]any{"to": "blocked", "by": "u1"}, Delivery{Secretary, Act}},
-		{"秘书处理·失败·无负责人", Secretary, "", st("failed", ""), Delivery{Secretary, Act}},
-		{"负责人处理·受阻·本部门", "a1", "a1", st("blocked", "merge_queue"), Delivery{"a1", Act}},
-		{"负责人处理·完成·下属部门只投处理人", "a1", "a3", st("done", "gate"), Delivery{"a1", Act}},
-		{"负责人处理·已合入·下属部门只知会处理人", "a1", "a3", map[string]any{"to": "running", "stage": "merged", "event": "land"}, Delivery{"a1", Info}},
-		{"负责人处理·失败·无负责人", "a2", "", st("failed", ""), Delivery{"a2", Act}},
+		// 处理人没有亲自操作的结果，沿原路由投递。
+		{"用户处理·合入完成·有负责人", "u1", "a1", st("done", "merged"), Delivery{"a1", Act}, ""},
+		{"用户处理·合入完成·无负责人", "u1", "", st("done", "merged"), Delivery{Secretary, Act}, ""},
+		{"秘书处理·上线·有负责人", Secretary, "a1", st("done", "released"), Delivery{"a1", Act}, ""},
+		{"秘书处理·已合入等发版只知会", Secretary, "a1", map[string]any{"to": "running", "stage": "merged", "event": "land"}, Delivery{"a1", Info}, ""},
+		{"秘书处理·已合入等发版·无负责人", Secretary, "", map[string]any{"to": "running", "stage": "merged", "event": "land"}, Delivery{Secretary, Info}, ""},
+		{"用户处理·用户验收通过只知会", "u1", "a1", map[string]any{"to": "done", "stage": "accept", "event": "accept", "by": "u1"}, Delivery{"a1", Info}, ""},
+		{"用户处理·用户标受阻照旧要处理", "u1", "", map[string]any{"to": "blocked", "by": "u1"}, Delivery{Secretary, Act}, ""},
+		{"秘书处理·失败·无负责人", Secretary, "", st("failed", ""), Delivery{Secretary, Act}, ""},
+		{"负责人处理·受阻·本部门", "a1", "a1", st("blocked", "merge_queue"), Delivery{"a1", Act}, ""},
+		{"负责人处理·完成·下属部门只投处理人", "a1", "a3", st("done", "gate"), Delivery{"a1", Act}, ""},
+		{"负责人处理·已合入·下属部门只知会处理人", "a1", "a3", map[string]any{"to": "running", "stage": "merged", "event": "land"}, Delivery{"a1", Info}, ""},
+		{"负责人处理·失败·无负责人", "a2", "", st("failed", ""), Delivery{"a2", Act}, ""},
+		// 负责人亲自收尾，结果回到派活人；同一人派给自己或没有派活人则不投。
+		{"负责人自己完成·秘书派活", "a1", "a1", map[string]any{"to": "done", "by": "a1"}, Delivery{Secretary, Act}, Secretary},
+		{"负责人自己完成·用户派活", "a1", "a1", map[string]any{"to": "done", "by": "a1"}, Delivery{Secretary, Act}, "u1"},
+		{"负责人自己完成·另一负责人派活", "a1", "a1", map[string]any{"to": "done", "by": "a1"}, Delivery{"a2", Act}, "a2"},
+		{"负责人自己失败·秘书派活", "a1", "a1", map[string]any{"to": "failed", "by": "a1"}, Delivery{Secretary, Act}, Secretary},
+		{"负责人自己受阻·另一负责人派活", "a1", "a1", map[string]any{"to": "blocked", "by": "a1"}, Delivery{"a2", Act}, "a2"},
+		{"负责人自己完成·自己派活", "a1", "a1", map[string]any{"to": "done", "by": "a1"}, none, "a1"},
+		{"负责人自己完成·没有派活人", "a1", "a1", map[string]any{"to": "done", "by": "a1"}, none, ""},
+		{"执行者完成·仍投处理人", "a1", "a1", map[string]any{"to": "done", "by": "worker"}, Delivery{"a1", Act}, Secretary},
+		{"运行时完成·仍投处理人", "a1", "a1", map[string]any{"to": "done", "by": "merge"}, Delivery{"a1", Act}, Secretary},
 		// 等验收：投验收人，要处理。
-		{"等用户验收·有负责人", "a1", "a1", map[string]any{"to": "running", "stage": "accept", "accept_by": "user"}, Delivery{Secretary, Act}},
-		{"等负责人验收", "u1", "a1", map[string]any{"to": "running", "stage": "accept", "accept_by": "leader"}, Delivery{"a1", Act}},
-		{"等负责人验收·没有负责人投秘书", "u1", "", map[string]any{"to": "running", "stage": "accept", "accept_by": "leader"}, Delivery{Secretary, Act}},
+		{"等用户验收·有负责人", "a1", "a1", map[string]any{"to": "running", "stage": "accept", "accept_by": "user", "by": "a1"}, Delivery{Secretary, Act}, "u1"},
+		{"等负责人验收", "u1", "a1", map[string]any{"to": "running", "stage": "accept", "accept_by": "leader"}, Delivery{"a1", Act}, ""},
+		{"等负责人验收·没有负责人投秘书", "u1", "", map[string]any{"to": "running", "stage": "accept", "accept_by": "leader"}, Delivery{Secretary, Act}, ""},
 		// 运行时建的：按部门找负责人，成功只知会，失败、受阻要处理。
-		{"运行时·完成·有负责人", "gates", "a1", st("done", "review"), Delivery{"a1", Info}},
-		{"运行时·受阻·有负责人", "gates", "a1", st("blocked", "gate"), Delivery{"a1", Act}},
-		{"运行时·失败·无负责人", "", "", st("failed", ""), Delivery{Secretary, Act}},
+		{"运行时·完成·有负责人", "gates", "a1", st("done", "review"), Delivery{"a1", Info}, ""},
+		{"运行时·受阻·有负责人", "gates", "a1", st("blocked", "gate"), Delivery{"a1", Act}, ""},
+		{"运行时·失败·无负责人", "", "", st("failed", ""), Delivery{Secretary, Act}, ""},
 		// 过程：没有要动手的事，谁都不投。
-		{"用户处理·入队·有负责人", "u1", "a1", st("queued", ""), none},
-		{"用户处理·拉起·无负责人", "u1", "", st("running", ""), none},
-		{"秘书处理·交回一次", Secretary, "a1", st("queued", ""), none},
-		{"负责人处理·取消·本部门", "a1", "a1", st("cancelled", ""), none},
-		{"运行时·入队·无负责人", "gates", "", st("queued", ""), none},
+		{"用户处理·入队·有负责人", "u1", "a1", st("queued", ""), none, ""},
+		{"用户处理·拉起·无负责人", "u1", "", st("running", ""), none, ""},
+		{"秘书处理·交回一次", Secretary, "a1", st("queued", ""), none, ""},
+		{"负责人处理·取消·本部门", "a1", "a1", st("cancelled", ""), none, ""},
+		{"运行时·入队·无负责人", "gates", "", st("queued", ""), none, ""},
 	}
 	for _, c := range cases {
-		got, ok := Route(c.owner, c.leader, TaskStatus, c.body)
+		got, ok := Route(c.owner, c.by, c.leader, TaskStatus, c.body)
 		if ok != (c.want != none) || got != c.want {
 			t.Errorf("%s：Route = %v %v，应为 %v", c.name, got, ok, c.want)
 		}
@@ -143,19 +154,19 @@ func TestEmitTask(t *testing.T) {
 	exec(t, db, `INSERT INTO identities (id, kind, name, created_at) VALUES ('a1', 'leader', '甲', 0)`)
 	exec(t, db, `INSERT INTO departments (id, parent, name, leader, created_at, updated_at) VALUES ('o1', NULL, '公司', 'a1', 0, 0)`)
 	exec(t, db, `INSERT INTO tasks (id, department, title, status, created_at, updated_at) VALUES ('t1', 'o1', 'x', 'running', 0, 0)`)
-	emitTask := func(owner, to, by string) {
+	emitTask := func(owner, assigner, to, by string) {
 		t.Helper()
 		err := db.Tx(ctx, func(tx *sql.Tx) error {
-			return EmitTask(ctx, tx, owner, Event{Kind: TaskStatus, Task: "t1", Dept: "o1", Body: map[string]any{"to": to, "by": by}, By: by})
+			return EmitTask(ctx, tx, owner, assigner, Event{Kind: TaskStatus, Task: "t1", Dept: "o1", Body: map[string]any{"to": to, "by": by}, By: by})
 		})
 		if err != nil {
 			t.Fatal(err)
 		}
 	}
 	// 用户派的活在有负责人的部门：过程不投，结果只投负责人，秘书不收。
-	emitTask("u1", "queued", "u1")
-	emitTask("u1", "running", "dispatch")
-	emitTask("u1", "done", "merge")
+	emitTask("u1", "u1", "queued", "u1")
+	emitTask("u1", "u1", "running", "dispatch")
+	emitTask("u1", "u1", "done", "merge")
 	sec, _ := Pending(ctx, db, Secretary, true, 10)
 	lead, _ := Pending(ctx, db, "a1", true, 10)
 	if len(sec) != 0 {
@@ -167,7 +178,7 @@ func TestEmitTask(t *testing.T) {
 	Ack(ctx, db, []int64{lead[0].ID}, "", "u1")
 
 	// 用户本人做的完成照样投负责人，只知会。
-	emitTask("u1", "done", "u1")
+	emitTask("u1", "u1", "done", "u1")
 	lead, _ = Pending(ctx, db, "a1", true, 10)
 	if len(lead) != 1 || lead[0].Level != Info {
 		t.Fatalf("用户本人做的完成，负责人应只收知会：%+v", lead)
@@ -175,16 +186,21 @@ func TestEmitTask(t *testing.T) {
 	Ack(ctx, db, []int64{lead[0].ID}, "", "u1")
 
 	// 一次操作引出的事件不投给做这次操作的身份本人：负责人自己停下的不收，别人让它的活失败的照收。
-	emitTask("a1", "blocked", "a1")
+	emitTask("a1", "a1", "blocked", "a1")
 	if n, _ := Pending(ctx, db, "a1", true, 10); len(n) != 0 {
 		t.Fatalf("负责人自己停下的不该收到：%+v", n)
 	}
-	emitTask("a2", "failed", "a1")
+	emitTask("a2", "a2", "failed", "a1")
 	if n, _ := Pending(ctx, db, "a2", true, 10); len(n) != 1 || n[0].Level != Act {
 		t.Fatalf("处理人 a2 应收到要处理的失败：%+v", n)
 	}
 	if n, _ := Pending(ctx, db, Secretary, true, 10); len(n) != 0 {
 		t.Fatalf("秘书不该收到：%+v", n)
+	}
+	// 负责人自己完成秘书派的活，事件应实际落库给秘书。
+	emitTask("a1", Secretary, "done", "a1")
+	if n, _ := Pending(ctx, db, Secretary, true, 10); len(n) != 1 || n[0].Level != Act {
+		t.Fatalf("秘书应收到负责人自己完成的结果：%+v", n)
 	}
 }
 

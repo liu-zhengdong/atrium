@@ -413,6 +413,27 @@ func TestSetOwner(t *testing.T) {
 	}
 }
 
+func TestLeaderSelfDoneReturnsToAssigner(t *testing.T) {
+	db, ctx := openDB(t), context.Background()
+	if _, err := db.Exec(`INSERT INTO identities (id, kind, name, created_at) VALUES ('a1', 'leader', '甲', 0)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO departments (id, name, leader, created_at, updated_at) VALUES ('o1', '公司', 'a1', 0, 0)`); err != nil {
+		t.Fatal(err)
+	}
+	task, err := Add(ctx, db, NewTask{Title: "研究报告", Org: "o1", Owner: "a1"}, "secretary")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Apply(ctx, db, task.ID, Event{Kind: Set, To: Done}, "a1", ""); err != nil {
+		t.Fatal(err)
+	}
+	got, err := events.Pending(ctx, db, events.Secretary, false, 10)
+	if err != nil || len(got) != 1 || got[0].Kind != events.TaskStatus || got[0].Level != events.Act || got[0].Task != task.ID {
+		t.Fatalf("秘书应收到一条要处理的完成结果：%+v %v", got, err)
+	}
+}
+
 // 交给负责人去拆的任务：没写部门落到它负责的那个部门，并给它发一条要处理的 task.assigned。
 func TestAddAssigned(t *testing.T) {
 	db, ctx := openDB(t), context.Background()

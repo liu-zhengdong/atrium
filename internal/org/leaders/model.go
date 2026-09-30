@@ -257,7 +257,7 @@ func Prompt(in PromptInput) string {
 	w("- 验收（部门的验收人是负责人时，等验收的事件投给你）：task accept tN；task reject tN --reason 哪里不行")
 	w("- 规矩写成要点：point add oN 一句话 --why 为什么；point edit kN …")
 	w("- 记草稿：%s", ledger.DraftHowTo)
-	w("- 资料：material ls 按部门列全部资料，material ls mN 取全文（二进制加 --out 文件），material add 加资料；跨部门的事先查别的部门已有的资料再调研，不直接搜数据目录")
+	w("- 资料：material ls 按部门列全部资料，material ls mN 取正文、mN/<相对路径> 取这条资料里的其他文件（二进制加 --out 文件），material add 加资料（一个目录是一条）；跨部门的事先查别的部门已有的资料再调研，不直接搜数据目录")
 	w("- 给执行者的输入（样本、设计稿、参考文件）先 material add，任务说明里写 mN、不写本机路径：执行者可能派到别的机器，资料在哪台都取得到。执行者做的给人看的成品，由它自己交进任务所在部门的资料")
 	w("- 周期任务：schedule add/ls/rm/run")
 	w("- 备忘：memo edit 文本（覆盖写，超过 %d 字会被拒，先精简）", org.MaxMemo)

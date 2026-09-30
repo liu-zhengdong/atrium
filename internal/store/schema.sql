@@ -218,8 +218,9 @@ CREATE TABLE IF NOT EXISTS choice_option_orgs (
   PRIMARY KEY (choice, pos)
 );
 
--- 资料：内容存数据目录 materials/<mN>/r<rev>/<文件名>，这里记元数据；每改一次追加一版，读取取最大 rev。
--- units 是折算字数（文本按字、二进制按 3 字节一字），部门总量按它算；归档只标 archived_at（整条资料，记在最新版上）。
+-- 资料：一个文件或一个目录是一条资料。内容存数据目录 materials/<mN>/r<rev>/<相对路径>，这里记元数据；每改一次追加一版，读取取最大 rev。
+-- file 是正文文件的相对路径（空表示没有正文，如图片集）；size 是这一版全部文件的字节数，units 是其中文本文件的字数，binary 是正文是否二进制。
+-- 归档只标 archived_at（整条资料，记在最新版上）。
 CREATE TABLE IF NOT EXISTS materials (
   id          TEXT NOT NULL,
   rev         INTEGER NOT NULL,
@@ -237,6 +238,18 @@ CREATE TABLE IF NOT EXISTS materials (
   PRIMARY KEY (id, rev)
 );
 CREATE INDEX IF NOT EXISTS materials_department ON materials (department, title);
+
+-- 资料每一版的全部文件（含正文）：部门二进制总量按这里的 binary 文件合计。
+CREATE TABLE IF NOT EXISTS material_files (
+  id     TEXT NOT NULL,
+  rev    INTEGER NOT NULL,
+  path   TEXT NOT NULL,
+  size   INTEGER NOT NULL,
+  units  INTEGER NOT NULL,
+  binary INTEGER NOT NULL,
+  PRIMARY KEY (id, rev, path),
+  FOREIGN KEY (id, rev) REFERENCES materials (id, rev)
+);
 
 -- 机器：本机 h1，远程 hN。接入码与机器令牌只存哈希；info、load 是代理上报的 JSON；repos 是自动派活能接的仓库（JSON 数组，"*" 为全部）。
 CREATE TABLE IF NOT EXISTS hosts (

@@ -330,6 +330,16 @@ details.full .result{margin-top:8px;font-size:13px;color:var(--ink2)}
 
 /* 资料：行首文件图标；抽屉比任务抽屉宽，能放宽到整个主岛，正文按格式渲染（app.js 的 viewers） */
 .row .file{width:14px;height:14px;color:var(--ink3);justify-self:center}
+.row .title .note{margin-left:10px;color:var(--ink3);font-size:13px}
+/* 资料里的全部文件：图片出缩略图，其余一个文件图标；图片集打开就是它，有正文的折在正文下面 */
+.mfiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px;margin-top:10px}
+.mfiles a{display:flex;flex-direction:column;gap:4px;min-width:0;color:var(--ink2);font-size:12.5px}
+.mfiles img,.mfiles .ph{width:100%;aspect-ratio:16/10;object-fit:cover;object-position:top;border-radius:8px;border:1px solid var(--line);background:var(--raise)}
+.mfiles .ph{display:grid;place-items:center}
+.mfiles .ph svg{width:20px;height:20px;color:var(--ink3)}
+.mfiles a:hover img,.mfiles a:hover .ph{border-color:var(--ink3)}
+.mfiles .n{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mfiles .s{color:var(--ink3);font-size:12px}
 .drawer.mat{width:min(780px,100%)}
 .drawer.mat.wide{width:100%}
 .drawer.mat.wide .dbody:has(.md,.text,.docx,.file){padding-inline:max(20px,calc(50% - 380px))} /* 放宽后读的东西居中成一栏，表格、网页、pdf 铺满 */

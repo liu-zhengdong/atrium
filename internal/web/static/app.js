@@ -16,6 +16,7 @@ const icon = {
   newline: '<svg class="nl" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12.5 3.5v4a2 2 0 0 1-2 2h-7M6 7 3.5 9.5 6 12"/></svg>',
   x: '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 4l8 8M12 4l-8 8"/></svg>',
   file: '<svg class="file" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M3.5 1.5h6l3 3v10h-9z"/><path d="M9.5 1.5v3h3"/></svg>',
+  folder: '<svg class="file" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M1.5 3h4.5l1.5 1.8h7v8.7h-13z"/></svg>',
   wide: '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M6 2.5H2.5V6M10 2.5h3.5V6M6 13.5H2.5V10M10 13.5h3.5V10"/></svg>',
   narrow: '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M2.5 6H6V2.5M13.5 6H10V2.5M2.5 10H6v3.5M13.5 10H10v3.5"/></svg>',
   out: '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M9 2.5h4.5V7M13.5 2.5l-6 6M11.5 9.5v4h-9v-9h4"/></svg>',
@@ -233,9 +234,10 @@ function renderDept(d, id, tab) {
     body = (d.rules.length ? d.rules.map((r, i) => rule(r, i)).join("") : `<div class="empty">本部门没有自己的规矩</div>`) +
       (d.inherited.length ? `<div class="inh-h">从上级继承</div>${d.inherited.map(r => rule(r, null)).join("")}` : "");
   }
+  // 一条资料一行：目录资料显示文件数，说明跟在标题后面（目录名常常看不出是什么；标题取自说明开头的不重复）
   if (tab === "files") body = d.materials.length ? `<div class="rows">${d.materials.map(m => `
-    <div class="row" data-open="${esc(m.id)}" tabindex="0">${icon.file}<div class="title"><span class="id">${esc(m.id)}</span>${esc(m.title)}</div>
-    <div class="who">${m.kind === "overview" ? "总览 · " : ""}v${m.rev} · ${size(m.size)}</div><div class="time num">${date(m.created_at)}</div></div>`).join("")}</div>`
+    <div class="row" data-open="${esc(m.id)}" tabindex="0">${m.files.length > 1 ? icon.folder : icon.file}<div class="title"><span class="id">${esc(m.id)}</span>${esc(m.title)}${m.note && !m.note.startsWith(m.title) ? `<span class="note">${esc(m.note)}</span>` : ""}</div>
+    <div class="who">${m.kind === "overview" ? "总览 · " : ""}v${m.rev} · ${matAmount(m)}</div><div class="time num">${date(m.created_at)}</div></div>`).join("")}</div>`
     : `<div class="empty">还没有资料</div>`;
   const cap = d.rules.length > d.rule_max ? "cap over" : "cap";
   const used = d.materials.reduce((n, m) => n + m.units, 0);
@@ -440,15 +442,18 @@ function renderLeader(deptPage, id) {
     <div class="jh"><b>备忘</b><span class="num">${n}/${deptPage.memo_max} 字</span></div>
     ${n ? `<div class="memo">${memoHTML(l.memo)}</div>` : `<div class="quiet-line">还没写备忘</div>`}`);
 }
-/* 资料抽屉：按扩展名一处分派渲染（viewers），原文取自 /ui/material/mN。md 里的相对图片、链接按「同部门、标题为该相对路径的资料」解析；
+/* 资料抽屉：一条资料是一个文件或一个目录。打开渲染正文（entry），按扩展名一处分派（viewers）；原文取自 /ui/material/mN/<相对路径>。
+   md 里的相对图片、链接在这条资料的文件里找；没有正文的（图片集）列出全部文件。
    html 只在沙箱 iframe 里（不放行同源，脚本碰不到网页）；md、docx、xlsx 用的库 embed 在二进制里（static/lib），打开这类文件时才加载。 */
 const kinds = { md: "md", markdown: "md", html: "html", htm: "html", pdf: "pdf", docx: "docx", xlsx: "xlsx",
   png: "img", jpg: "img", jpeg: "img", gif: "img", webp: "img", avif: "img", bmp: "img", svg: "img" };
-const kindOf = m => kinds[(m.title.match(/\.([^./]+)$/)?.[1] || "").toLowerCase()] || (m.binary ? "file" : "text");
-const baseName = title => title.split("/").pop();
-const matURL = m => `/ui/material/${m.id}?rev=${m.rev}`;
-// 以文件名结尾的地址：html 里的相对路径由服务按 mN 所在目录解析；新窗口打开、另存也带着文件名
-const namedURL = m => `/ui/material/${m.id}/${encodeURIComponent(baseName(m.title))}`;
+const extKind = p => kinds[(p.match(/\.([^./]+)$/)?.[1] || "").toLowerCase()];
+const kindOf = m => !m.entry ? "set" : extKind(m.entry) || (m.files.find(f => f.path === m.entry)?.binary ? "file" : "text");
+const baseName = p => p.split("/").pop();
+const matAmount = m => [m.files.length > 1 ? m.files.length + " 个文件" : "", size(m.size)].filter(Boolean).join(" · ");
+// 以文件路径结尾的地址：html 里的相对路径由浏览器落到同一条资料里；新窗口打开、另存也带着文件名
+const namedURL = (m, p = m.entry) => `/ui/material/${m.id}/${p.split("/").map(encodeURIComponent).join("/")}`;
+const matURL = (m, p = m.entry) => namedURL(m, p) + `?rev=${m.rev}`;
 async function fetchMat(m, as) {
   const r = await fetch(matURL(m));
   if (!r.ok) throw new Error((await r.json().catch(() => null))?.error?.message || "读取失败 " + r.status);
@@ -462,38 +467,48 @@ const lib = (...names) => names.reduce((p, n) => p.then(() => loaded[n] ??= new 
   s.onerror = () => { delete loaded[n]; bad(new Error("加载 " + n + " 失败")); };
   document.head.append(s);
 })), Promise.resolve());
-// sibling：资料标题 title 所在目录下的相对路径 rel 对应的标题（与服务端 sibling 同一规则）
-function sibling(title, rel) {
-  const out = title.split("/").slice(0, -1);
-  let p = rel.split(/[?#]/)[0];
+// inside：正文 entry 里的相对路径 href 指向这条资料里的哪个路径（越出资料返回空）
+function inside(entry, href) {
+  const out = entry.split("/").slice(0, -1);
+  let p = href.split(/[?#]/)[0];
   try { p = decodeURIComponent(p); } catch (_) { /* 不是合法转义就按原样 */ }
-  for (const s of p.split("/")) s === ".." ? out.pop() : s && s !== "." && out.push(s);
+  for (const s of p.split("/")) {
+    if (s === "..") { if (!out.length) return ""; out.pop(); } else if (s && s !== ".") out.push(s);
+  }
   return out.join("/");
 }
-function mdDoc(text, m, all) {
-  const find = href => !/^([a-z][\w+.-]*:|[/#])/i.test(href) && all.find(o => o.title === sibling(m.title, href));
-  const gone = (href, body) => `<span class="gone" title="部门里没有 ${esc(href)}">${body}</span>`;
+function mdDoc(text, m) {
+  const find = href => {
+    if (/^([a-z][\w+.-]*:|[/#])/i.test(href)) return "";
+    const p = inside(m.entry, href);
+    return m.files.some(f => f.path === p) ? p : "";
+  };
+  const gone = (href, body) => `<span class="gone" title="这条资料里没有 ${esc(href)}">${body}</span>`;
   const renderer = {
     html: t => esc(t.text), // 资料里的 HTML 标签按文字显示，不进网页
     image({ href, text }) {
-      const o = find(href), alt = esc(text || href);
-      if (o) return `<img src="${esc(matURL(o))}" alt="${esc(text)}" loading="lazy">`;
+      const p = find(href), alt = esc(text || href);
+      if (p) return `<img src="${esc(matURL(m, p))}" alt="${esc(text)}" loading="lazy">`;
       return /^https?:/i.test(href) ? `<a href="${esc(href)}" target="_blank" rel="noreferrer">图：${alt}</a>` : gone(href, "图：" + alt);
     },
     link({ href, tokens }) {
-      const body = this.parser.parseInline(tokens), o = find(href);
+      const body = this.parser.parseInline(tokens), p = find(href);
       if (/^(https?|mailto):/i.test(href)) return `<a href="${esc(href)}" target="_blank" rel="noreferrer">${body}</a>`;
-      if (o) return `<a href="#${esc(m.org)}/files/${esc(o.id)}">${body}</a>`;
+      if (p) return `<a href="${esc(matURL(m, p))}" target="_blank" rel="noopener">${body}</a>`;
       return href.startsWith("#") ? body : gone(href, body); // 文内锚点会和网页地址冲突，只留文字
     },
   };
   return new marked.Marked({ gfm: true, renderer }).parse(text);
 }
+// fileList：资料里的全部文件，图片出缩略图，点开是原文件
+const fileList = m => `<div class="mfiles">${m.files.map(f => `<a href="${esc(matURL(m, f.path))}" target="_blank" rel="noopener">
+  ${extKind(f.path) === "img" ? `<img src="${esc(matURL(m, f.path))}" alt="" loading="lazy">` : `<span class="ph">${icon.file}</span>`}
+  <span class="n">${esc(f.path)}</span><span class="s">${size(f.size)}</span></a>`).join("")}</div>`;
 const sheetRows = 1000; // 表格只读前这么多行：网页里看不过来，完整的下载看
 const viewers = {
-  async md(el, m, d) {
+  async md(el, m) {
     const [text] = await Promise.all([fetchMat(m, "text"), lib("marked")]);
-    return `<article class="doc">${mdDoc(text, m, d.materials)}</article>`;
+    return `<article class="doc">${mdDoc(text, m)}</article>`;
   },
   html: (el, m) => `<iframe class="frame" sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox" src="${esc(namedURL(m))}" title="${esc(m.title)}"></iframe>`,
   pdf: (el, m) => `<iframe class="frame" src="${esc(matURL(m))}" title="${esc(m.title)}"></iframe>`,
@@ -517,7 +532,8 @@ const viewers = {
     show(wb.SheetNames[0]);
   },
   file: (el, m) => `<div class="empty">这种格式网页里看不了，下载后用本机的应用打开</div>
-    <a class="dl" href="${esc(matURL(m))}" download="${esc(baseName(m.title))}">${icon.down}下载 ${esc(baseName(m.title))}</a>`,
+    <a class="dl" href="${esc(matURL(m))}" download="${esc(baseName(m.entry))}">${icon.down}下载 ${esc(baseName(m.entry))}</a>`,
+  set: (el, m) => fileList(m),
 };
 let shownMat = "", wide = false;
 function renderMaterial(deptPage, id) {
@@ -528,14 +544,17 @@ function renderMaterial(deptPage, id) {
   shownMat = key;
   const tip = label => `aria-label="${label}" title="${label}"`;
   const tools = `<button class="tool" data-wide ${tip(wide ? "收窄" : "放宽")}>${wide ? icon.narrow : icon.wide}</button>`
-    + (["file", "docx", "xlsx"].includes(kind) ? "" // 浏览器自己打不开的，新窗口只会变成下载
+    + (["file", "docx", "xlsx", "set"].includes(kind) ? "" // 浏览器自己打不开的，新窗口只会变成下载
       : `<a class="tool" href="${esc(namedURL(m))}" target="_blank" rel="noopener" ${tip("新窗口打开")}>${icon.out}</a>`)
-    + `<a class="tool" href="${esc(matURL(m))}" download="${esc(baseName(m.title))}" ${tip("下载")}>${icon.down}</a>`;
-  const meta = [m.kind === "overview" ? "总览" : "", "v" + m.rev, size(m.size), date(m.created_at), m.note].filter(Boolean);
+    + (kind === "set" ? "" : `<a class="tool" href="${esc(matURL(m))}" download="${esc(baseName(m.entry))}" ${tip("下载正文")}>${icon.down}</a>`);
+  const meta = [m.kind === "overview" ? "总览" : "", "v" + m.rev, matAmount(m), date(m.created_at), m.note !== m.title && m.note].filter(Boolean);
+  // 有正文的目录资料：正文下面折起全部文件（图源、没被正文引用的图也找得到）
+  const all = kind !== "set" && m.files.length > 1
+    ? `<details class="full"><summary>这条资料里的 ${m.files.length} 个文件</summary>${fileList(m)}</details>` : "";
   drawer(id, id + " · " + deptPage.dept.name, `<h3>${esc(m.title)}</h3><p class="sub-t">${esc(meta.join(" · "))}</p>
-    <div class="viewer ${kind}" id="viewer"><div class="quiet-line">正在打开…</div></div>`, tools);
+    <div class="viewer ${kind}" id="viewer"><div class="quiet-line">正在打开…</div></div>${all}`, tools);
   const el = $("#viewer"), still = () => drawerId === id && shownMat === key;
-  Promise.resolve().then(() => viewers[kind](el, m, deptPage))
+  Promise.resolve().then(() => viewers[kind](el, m))
     .then(html => { if (still() && html !== undefined) el.innerHTML = html; })
     .catch(err => { if (still()) el.innerHTML = `<div class="empty">打不开：${esc(err.message)}</div>`; });
 }

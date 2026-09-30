@@ -42,21 +42,7 @@ func TestMaterialType(t *testing.T) {
 	}
 }
 
-func TestSibling(t *testing.T) {
-	for _, c := range [][3]string{
-		{"magpie/report.md", "images/a.png", "magpie/images/a.png"},
-		{"magpie/report.md", "./appendix.md", "magpie/appendix.md"},
-		{"magpie/sub/x.md", "../report.md", "magpie/report.md"},
-		{"report.md", "images/a.png", "images/a.png"},
-		{"report.md", "../a.png", "../a.png"}, // 越出目录：没有这个标题，查不到
-	} {
-		if got := sibling(c[0], c[1]); got != c[2] {
-			t.Errorf("sibling(%q, %q) = %q，应为 %q", c[0], c[1], got, c[2])
-		}
-	}
-}
-
-// 资料原文：按 mN（可带版本）取；html 里的相对路径按 mN 所在目录解析到同部门的资料；外来 Host 403。
+// 资料原文：按 mN（可带版本）取正文；mN/<相对路径> 只在这条资料里找；外来 Host 403。
 func TestMaterialRoute(t *testing.T) {
 	ctx := context.Background()
 	data := t.TempDir()
@@ -66,22 +52,24 @@ func TestMaterialRoute(t *testing.T) {
 	}
 	defer db.Close()
 	dept, _ := org.Add(ctx, db, org.NewDept{Name: "调研"})
-	other, _ := org.Add(ctx, db, org.NewDept{Name: "别的"})
 	png := []byte("\x89PNG\r\n\x1a\n\x00\x00")
-	ms, err := org.AddMaterials(ctx, db, data, org.MaterialInput{Org: dept.ID, Note: "样本", Files: []org.MaterialFile{
-		{Name: "magpie/report.html", Content: []byte(`<img src="images/a.png">`)},
-		{Name: "magpie/images/a.png", Content: png},
-		{Name: "magpie/report.md", Content: []byte("# 第一版")},
+	site, err := org.AddMaterial(ctx, db, data, org.MaterialInput{Org: dept.ID, Title: "magpie", Note: "样本", Files: []org.MaterialFile{
+		{Name: "index.html", Content: []byte(`<img src="images/a.png">`)},
+		{Name: "images/a.png", Content: png},
 	}}, "u1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	html, md := ms[0], ms[2]
-	if _, err := org.AddMaterials(ctx, db, data, org.MaterialInput{Org: dept.ID, Note: "改", Files: []org.MaterialFile{{Name: "magpie/report.md", Content: []byte("# 第二版")}}}, "u1"); err != nil {
+	md, err := org.AddMaterial(ctx, db, data, org.MaterialInput{Org: dept.ID, Note: "报告", Files: []org.MaterialFile{{Name: "report.md", Content: []byte("# 第一版")}}}, "u1")
+	if err != nil {
 		t.Fatal(err)
 	}
-	// 别的部门同名的图不算
-	if _, err := org.AddMaterials(ctx, db, data, org.MaterialInput{Org: other.ID, Note: "别的", Files: []org.MaterialFile{{Name: "magpie/images/b.png", Content: png}}}, "u1"); err != nil {
+	if _, err := org.AddMaterial(ctx, db, data, org.MaterialInput{Org: dept.ID, Note: "改", Files: []org.MaterialFile{{Name: "report.md", Content: []byte("# 第二版")}}}, "u1"); err != nil {
+		t.Fatal(err)
+	}
+	set, err := org.AddMaterial(ctx, db, data, org.MaterialInput{Org: dept.ID, Title: "shots", Note: "截图", Files: []org.MaterialFile{
+		{Name: "a.png", Content: png}, {Name: "b.png", Content: png}}}, "u1")
+	if err != nil {
 		t.Fatal(err)
 	}
 
@@ -107,8 +95,10 @@ func TestMaterialRoute(t *testing.T) {
 	for _, c := range []struct{ path, body, ctype string }{
 		{"/ui/material/" + md.ID, "# 第二版", "text/plain; charset=utf-8"},
 		{"/ui/material/" + md.ID + "?rev=1", "# 第一版", "text/plain; charset=utf-8"},
-		{"/ui/material/" + html.ID + "/report.html", `<img src="images/a.png">`, "text/html; charset=utf-8"},
-		{"/ui/material/" + html.ID + "/images/a.png", string(png), "image/png"},
+		{"/ui/material/" + site.ID, `<img src="images/a.png">`, "text/html; charset=utf-8"},
+		{"/ui/material/" + site.ID + "/index.html", `<img src="images/a.png">`, "text/html; charset=utf-8"},
+		{"/ui/material/" + site.ID + "/images/a.png", string(png), "image/png"},
+		{"/ui/material/" + set.ID + "/b.png", string(png), "image/png"},
 	} {
 		res, body := get(c.path, "")
 		if res.StatusCode != 200 || body != c.body || res.Header.Get("Content-Type") != c.ctype ||
@@ -120,8 +110,9 @@ func TestMaterialRoute(t *testing.T) {
 		path string
 		code int
 	}{
-		{"/ui/material/" + html.ID + "/images/b.png", 404}, // 在别的部门
-		{"/ui/material/" + html.ID + "/nope.md", 404},
+		{"/ui/material/" + md.ID + "/images/a.png", 404}, // 在别的资料里：不按标题跨资料找
+		{"/ui/material/" + site.ID + "/nope.md", 404},
+		{"/ui/material/" + set.ID, 404}, // 图片集没有正文
 		{"/ui/material/m999", 404},
 		{"/ui/material/" + md.ID + "?rev=9", 404},
 		{"/ui/material/" + md.ID + "?rev=x", 400},

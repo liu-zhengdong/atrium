@@ -26,10 +26,30 @@ func TestTraceGrokEvents(t *testing.T) {
 {"type":"stream_event"}
 {"type":"system","subtype":"new"}
 {"type":"assistant","message":{"content":[{"type":"new"}]}}
+{"type":"user","message":{"content":[{"type":"new"}]}}
 {"type":"new"}`)
 	tr := p.Trace()
-	if tr.Unknown != 3 || len(tr.Segments) != 1 || tr.Segments[0].Cmds[0].Cmd != "rg absent" || tr.Segments[0].Cmds[0].State != CmdNone {
+	if tr.Unknown != 4 || len(tr.Segments) != 1 || tr.Segments[0].Cmds[0].Cmd != "rg absent" || tr.Segments[0].Cmds[0].State != CmdNone {
 		t.Fatalf("得到 %+v", tr)
+	}
+}
+
+// Windows 上真实 Messages 输出：工具结果保留它报出的嵌套 JSON 原文。
+func TestTraceGrokWindowsLog(t *testing.T) {
+	tr, err := ReadTrace("grok", "testdata/grok-messages-windows.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tr.Unknown != 0 || len(tr.Lines) != 0 || len(tr.Segments) != 1 || !tr.Ended || tr.Model != "grok-4.7" || tr.Ms != 7855 || tr.Result != "`probe.txt` contains one line: `t561 sample`." {
+		t.Fatalf("得到 %+v", tr)
+	}
+	s := tr.Segments[0]
+	if s.Say != "I'll read `probe.txt` in the current directory and report its one line." || len(s.Cmds) != 1 {
+		t.Fatalf("分段 %+v", s)
+	}
+	c := s.Cmds[0]
+	if c.Cmd != "read_file probe.txt" || c.State != CmdOK || !strings.Contains(c.Out, `"content":"1→t561 sample\n"`) {
+		t.Fatalf("工具 %+v", c)
 	}
 }
 

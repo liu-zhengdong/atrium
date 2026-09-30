@@ -85,7 +85,16 @@ func readGrok(p *Parser, e event, line string) bool {
 				return false
 			}
 		}
-	case "user", "result":
+	case "user":
+		content, _ := e.obj("message")["content"].([]any)
+		for _, c := range content {
+			switch event(asMap(c)).str("type") {
+			case "text", "tool_result":
+			default:
+				return false
+			}
+		}
+	case "result":
 	case "stream_event": // --include-partial-messages 的增量；整条消息负责显示。
 		return true
 	default:

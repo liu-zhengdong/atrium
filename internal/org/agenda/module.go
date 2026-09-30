@@ -172,7 +172,7 @@ func scheduleLine(x Schedule) string {
 
 func Commands(t *cli.Table) {
 	t.Group("choice", "选项单")
-	t.Add(cli.Command{Path: "choice ls", Read: true, Args: "[cN]", Summary: "列等拍板的选项单；给 cN 看全文",
+	t.Add(cli.Command{Path: "choice ls", Args: "[cN]", Summary: "列等拍板的选项单；给 cN 看全文",
 		Flags: []cli.Flag{
 			{Name: "node", Value: "oN", Help: "只看这个部门的"},
 			{Name: "all", Bool: true, Help: "含已拍板的"},
@@ -326,7 +326,7 @@ func Commands(t *cli.Table) {
 			}
 			return c.Done(x, "已建周期任务 "+scheduleLine(x), "atrium schedule run "+x.ID)
 		}})
-	t.Add(cli.Command{Path: "schedule ls", Read: true, Summary: "列周期任务：下一轮、上一轮、最近一笔",
+	t.Add(cli.Command{Path: "schedule ls", Summary: "列周期任务：下一轮、上一轮、最近一笔",
 		Flags: []cli.Flag{{Name: "node", Value: "oN", Help: "只看这个部门的"}},
 		Run: func(c *cli.Ctx) error {
 			var list []Schedule

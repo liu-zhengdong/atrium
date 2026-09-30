@@ -254,6 +254,7 @@ func Prompt(in PromptInput) string {
 	w("- 规矩写成要点：point add oN 一句话 --why 为什么；point edit kN …")
 	w("- 记草稿：%s", ledger.DraftHowTo)
 	w("- 资料：material ls 按部门列全部资料，material ls mN 取全文（二进制加 --out 文件），material add 加资料；跨部门的事先查别的部门已有的资料再调研，不直接搜数据目录")
+	w("- 给执行者的输入（样本、设计稿、参考文件）先 material add，任务说明里写 mN、不写本机路径：执行者可能派到别的机器，资料在哪台都取得到。执行者做的给人看的成品，由它自己交进任务所在部门的资料")
 	w("- 周期任务：schedule add/ls/rm/run")
 	w("- 备忘：memo edit 文本（覆盖写，超过 %d 字会被拒，先精简）", org.MaxMemo)
 	w("")
@@ -269,9 +270,8 @@ func Prompt(in PromptInput) string {
 	w("")
 	w("## 收尾")
 	w("1. 要记住的（在等什么、下次先看什么）写进备忘；做了取舍的写进那件任务的备注。")
-	w("2. 交付说明开头写了给人看的成品目录的，收尾时 material add oN 那个目录 --note 里面有什么、什么时候用，进部门资料。")
-	w("3. 处理完确认：atrium events ack %s", strings.Join(ids, " "))
-	w("4. 退出。没确认的事件会再次唤醒你；连续 %d 次没处理完，会转交 %s。", MaxFails, in.Upstream)
+	w("2. 处理完确认：atrium events ack %s", strings.Join(ids, " "))
+	w("3. 退出。没确认的事件会再次唤醒你；连续 %d 次没处理完，会转交 %s。", MaxFails, in.Upstream)
 	return b.String()
 }
 

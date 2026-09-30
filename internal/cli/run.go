@@ -67,29 +67,10 @@ func (t *Table) Main(ctx context.Context, args []string, env Env) int {
 	if err := c.parse(rest); err != nil {
 		return fail(env, jsonMode, err)
 	}
-	if !cmd.Read && guarded(env.Getenv) {
-		return fail(env, jsonMode, workerDenied())
-	}
 	if err := cmd.Run(c); err != nil {
 		return fail(env, jsonMode, err)
 	}
 	return 0
-}
-
-// guarded：执行者（ATRIUM_WORKER=1）连着用户的服务（数据目录是缺省的那个），只能跑只读命令。
-// 执行者用 ATRIUM_DATA 指向别的目录起的隔离实例不拦（执行者环境不带 ATRIUM_*，设了就是它自己设的）。
-func guarded(getenv func(string) string) bool {
-	if getenv("ATRIUM_WORKER") != "1" {
-		return false
-	}
-	p, err := config.Resolve(getenv)
-	return err != nil || !p.Isolated()
-}
-
-// workerDenied 是执行者被拒的错误。
-func workerDenied() error {
-	return &api.Error{Code: "forbidden",
-		Message: "执行者（ATRIUM_WORKER=1）连着用户的服务时只能跑只读命令（看、列、取）；要试写命令，用 ATRIUM_DATA 指向临时目录起隔离实例"}
 }
 
 func isCommandWord(s string) bool { return !strings.HasPrefix(s, "-") }
@@ -243,6 +224,12 @@ func (c *Ctx) Call(method, path string, body, out any) error {
 
 // Base 返回服务地址（http://127.0.0.1:端口）并备好调用用的令牌；服务没在运行时报错。
 func (c *Ctx) Base() (string, error) {
+	// 执行者带本次拉起签发的令牌与服务地址（远程机器上没有服务登记），权限由服务端按令牌判；
+	// 它自己用 ATRIUM_DATA 起的隔离实例不走这条。
+	if token, server := c.Env.Getenv("ATRIUM_WORKER_TOKEN"), c.Env.Getenv("ATRIUM_SERVER"); c.client == nil &&
+		token != "" && server != "" && c.Env.Getenv("ATRIUM_DATA") == "" {
+		c.client = &api.Client{Base: server, Token: token}
+	}
 	if c.client == nil {
 		p, err := c.Paths()
 		if err != nil {

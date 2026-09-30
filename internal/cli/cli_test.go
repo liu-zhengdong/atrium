@@ -7,8 +7,6 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -26,7 +24,7 @@ func testTable() (*Table, *Ctx) {
 			got = *c
 			return c.Done(map[string]string{"id": "t1"}, "已建 t1", "atrium task run t1")
 		}})
-	t.Add(Command{Path: "status", Summary: "看服务", Read: true, Run: func(c *Ctx) error { return c.Done(nil, "", "") }})
+	t.Add(Command{Path: "status", Summary: "看服务", Run: func(c *Ctx) error { return c.Done(nil, "", "") }})
 	return t, &got
 }
 
@@ -87,29 +85,6 @@ func TestErrorsAndJSON(t *testing.T) {
 	}
 }
 
-func TestWorkerGuard(t *testing.T) {
-	tbl, _ := testTable()
-	worker := map[string]string{"ATRIUM_WORKER": "1"}
-	if code, _, stderr := run(tbl, worker, "task", "add", "x"); code != 1 || !strings.Contains(stderr, "执行者") {
-		t.Fatalf("执行者应被拒：%d %q", code, stderr)
-	}
-	if code, _, _ := run(tbl, worker, "status"); code != 0 {
-		t.Fatal("只读命令应放行")
-	}
-	isolated := map[string]string{"ATRIUM_WORKER": "1", "ATRIUM_DATA": t.TempDir()}
-	if code, _, stderr := run(tbl, isolated, "task", "add", "x"); code != 0 {
-		t.Fatalf("隔离实例上的写命令应放行：%d %q", code, stderr)
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		t.Fatal(err)
-	}
-	explicit := map[string]string{"ATRIUM_WORKER": "1", "ATRIUM_DATA": filepath.Join(home, ".atrium-v2")}
-	if code, _, _ := run(tbl, explicit, "task", "add", "x"); code != 1 {
-		t.Fatal("ATRIUM_DATA 写成缺省目录仍是用户的服务，应拒")
-	}
-}
-
 func TestHelp(t *testing.T) {
 	tbl, _ := testTable()
 	_, top, _ := run(tbl, nil, "--help")
@@ -163,5 +138,28 @@ func TestLeaderToken(t *testing.T) {
 	}
 	if code, _, _ := run(tb, map[string]string{"ATRIUM_DATA": dir}, "ping"); code == 0 {
 		t.Fatal("没有负责人令牌时读用户令牌文件，文件不存在应报错")
+	}
+}
+
+// 执行者带 ATRIUM_WORKER_TOKEN 与 ATRIUM_SERVER：直接连那个地址、用执行者令牌（远程机器上没有服务登记，也不读用户令牌）；
+// 它自己设了 ATRIUM_DATA（隔离实例）时照常按数据目录连。写命令不在命令行拦，由服务端按令牌判。
+func TestWorkerToken(t *testing.T) {
+	var seen string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen = r.Header.Get("Authorization")
+		w.Write([]byte(`{"ok":true,"result":null}`))
+	}))
+	defer srv.Close()
+	tb := NewTable("atrium", "测试")
+	tb.Group("task", "任务")
+	tb.Add(Command{Path: "task add", Summary: "x", Run: func(c *Ctx) error { return c.Call("POST", "/api/tasks", nil, nil) }})
+	worker := map[string]string{"ATRIUM_WORKER": "1", "ATRIUM_WORKER_TOKEN": "wt_t1_1_x", "ATRIUM_SERVER": srv.URL, "HOME": t.TempDir()}
+	if code, _, e := run(tb, worker, "task", "add"); code != 0 || seen != "Bearer wt_t1_1_x" {
+		t.Fatalf("code=%d seen=%q %s", code, seen, e)
+	}
+	worker["ATRIUM_DATA"] = t.TempDir()
+	seen = ""
+	if code, _, _ := run(tb, worker, "task", "add"); code == 0 || seen != "" {
+		t.Fatalf("设了 ATRIUM_DATA 应连隔离实例（这里没起，报错），不该用执行者令牌连 %q", seen)
 	}
 }

@@ -1,12 +1,7 @@
 package leaders
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
-	"errors"
-	"io"
-	"net/http"
 	"strconv"
 
 	"github.com/liu-zhengdong/atrium/internal/api"
@@ -55,28 +50,10 @@ func guard(db *store.DB) api.Guard {
 	}
 }
 
-// peekBody 读出整个请求体再放回去，处理函数照常 Decode（各接口自己的上限在那里卡）。
-// 按所有接口里最大的上限读：只读一截会把合法的大请求（如报告连图片加资料）截断成不合法的 JSON。
+// peekBody 读出整个请求体再放回；按所有接口里最大的上限（资料上传）读。
 func peekBody(q *api.Req) (map[string]any, error) {
-	if q.Body == nil {
-		return map[string]any{}, nil
-	}
-	raw, err := io.ReadAll(http.MaxBytesReader(nil, q.Body, org.MaxMaterialBody))
-	var tooBig *http.MaxBytesError
-	if errors.As(err, &tooBig) {
-		return nil, api.Usage("请求体超过上限 %.1f MB：拆小或分几次", float64(org.MaxMaterialBody)/(1<<20))
-	}
-	if err != nil {
-		return nil, err
-	}
-	q.Body = io.NopCloser(bytes.NewReader(raw))
 	m := map[string]any{}
-	if len(bytes.TrimSpace(raw)) > 0 {
-		if err := json.Unmarshal(raw, &m); err != nil {
-			return nil, api.Usage("请求体不合法：%v", err)
-		}
-	}
-	return m, nil
+	return m, q.Peek(&m, org.MaxMaterialBody)
 }
 
 func str(m map[string]any, k string) string {

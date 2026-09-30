@@ -19,7 +19,7 @@ var introFlags = []cli.Flag{
 func Commands(t *cli.Table) {
 	defer resourceCommands(t)
 	t.Group("org", "部门")
-	t.Add(cli.Command{Path: "org tree", Read: true, Summary: "看部门树",
+	t.Add(cli.Command{Path: "org tree", Summary: "看部门树",
 		Run: func(c *cli.Ctx) error {
 			var roots []*Node
 			if err := c.Call("GET", "/api/org", nil, &roots); err != nil {
@@ -48,7 +48,7 @@ func Commands(t *cli.Table) {
 			}
 			return c.Done(roots, b.String(), "atrium org show "+roots[0].ID)
 		}})
-	t.Add(cli.Command{Path: "org show", Read: true, Args: "<oN>", Summary: "看一个部门：介绍、仓库、下属、要点链",
+	t.Add(cli.Command{Path: "org show", Args: "<oN>", Summary: "看一个部门：介绍、仓库、下属、要点链",
 		Run: func(c *cli.Ctx) error {
 			id, err := c.Arg(0, "<oN>")
 			if err != nil {

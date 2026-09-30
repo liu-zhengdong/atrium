@@ -362,6 +362,9 @@ func (a *Agent) launch(ctx context.Context, as Assignment) (int, string, error) 
 	for k, v := range as.Env {
 		env[k] = v
 	}
+	// 执行者的命令行经代理连的同一个服务地址、凭这次的令牌连回去；代理这个二进制排进 PATH，远程机器上也有 atrium。
+	env["ATRIUM_SERVER"], env["ATRIUM_WORKER_TOKEN"] = a.Cfg.Server, as.Token
+	platform.SelfOnPath(env)
 	req := as.Request
 	req.Task, req.Dir = as.Task, cwd
 	spec, err := adapter.Spec(req, env)

@@ -69,7 +69,7 @@ func Commands(t *cli.Table) {
 			}
 			return c.Done(r, text, "atrium host ls "+r.Host.ID)
 		}})
-	t.Add(cli.Command{Path: "host ls", Read: true, Args: "[hN]", Summary: "列出机器：连接、暂停、在跑、上限；给 hN 看一台：系统、编码 CLI、仓库、隧道",
+	t.Add(cli.Command{Path: "host ls", Args: "[hN]", Summary: "列出机器：连接、暂停、在跑、上限；给 hN 看一台：系统、编码 CLI、仓库、隧道",
 		Run: func(c *cli.Ctx) error {
 			if err := c.MaxArgs(1); err != nil {
 				return err

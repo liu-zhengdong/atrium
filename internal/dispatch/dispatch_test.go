@@ -157,11 +157,11 @@ func TestTries(t *testing.T) {
 }
 
 func TestBuildPrompt(t *testing.T) {
-	p := BuildPrompt(PromptInput{Task: "t3", Title: "修登录", Detail: "详述", Global: "## 用户的全局原则\n\n先给结论\n", Points: []string{"k1（o1）简洁——整体更简单"},
+	p := BuildPrompt(PromptInput{Task: "t3", Org: "o2", Title: "修登录", Detail: "详述", Global: "## 用户的全局原则\n\n先给结论\n", Points: []string{"k1（o1）简洁——整体更简单"},
 		Skill: "/data/skills/fix/SKILL.md", Profile: "先跑相关测试", Tells: []string{"改用 A 方案"}, Bounces: []string{"没有 PR"},
 		Repo: "a/b", Branch: "task-t3", Guide: "不要用 git stash"})
 	for _, want := range []string{"# 任务 t3：修登录", "- k1（o1）简洁——整体更简单", "/data/skills/fix/SKILL.md", "先跑相关测试", "atrium material ls mN 取全文",
-		"- 改用 A 方案", "- 没有 PR", "分支 task-t3", "端到端验证", "隔离实例", "凭据不打印", "## 这个仓库的约定", "不要用 git stash", "<任务号>-show/", "`交付结论：完成`"} {
+		"- 改用 A 方案", "- 没有 PR", "分支 task-t3", "端到端验证", "隔离实例", "凭据不打印", "## 这个仓库的约定", "不要用 git stash", "atrium material add o2 <目录>", "`交付结论：完成`"} {
 		if !strings.Contains(p, want) {
 			t.Errorf("提示词缺 %q：\n%s", want, p)
 		}
@@ -176,7 +176,8 @@ func TestBuildPrompt(t *testing.T) {
 		t.Errorf("通用约束不该写死某个仓库：\n%s", p)
 	}
 	p = BuildPrompt(PromptInput{Task: "t4", Title: "调研"})
-	if strings.Contains(p, "只交 PR") || !strings.Contains(p, "没有仓库") || !strings.Contains(p, "`交付结论：没做成`") || strings.Contains(p, "部门要点") || strings.Contains(p, "仓库的约定") {
+	if strings.Contains(p, "只交 PR") || !strings.Contains(p, "没有仓库") || !strings.Contains(p, "`交付结论：没做成`") || strings.Contains(p, "部门要点") || strings.Contains(p, "仓库的约定") ||
+		strings.Contains(p, "material add") || !strings.Contains(p, "交不了资料") {
 		t.Errorf("没有仓库的提示词：\n%s", p)
 	}
 	if r := ResumePrompt([]string{"改用 B"}); !strings.Contains(r, "- 改用 B") || !strings.Contains(r, langRule) {
@@ -344,6 +345,10 @@ func TestViewIsolated(t *testing.T) {
 	t.Cleanup(func() { db.Close() })
 	env := &app.Env{DB: db, Paths: config.Paths{Data: filepath.Join(dir, "data")}, Log: slog.New(slog.NewTextHandler(io.Discard, nil)),
 		Pause: &pause.Store{DB: db}}
+	// 执行者令牌以用户令牌为签名钥匙：服务启动时写好，测试里自己写。
+	if err := os.WriteFile(env.Paths.Token(), []byte("test-user-token"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	oldSpares := spares
 	spares = func(context.Context, *app.Env) (map[string]Spare, error) { return map[string]Spare{}, nil }
 	t.Cleanup(func() { spares = oldSpares })

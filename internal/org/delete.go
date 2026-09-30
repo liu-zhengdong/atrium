@@ -164,7 +164,7 @@ func removedLine(r Removed) string {
 // DeleteDept 删一个部门（p 只能带 Delete 与 Into）。不带 Into：有任何引用就拒绝并列出。
 // 带 Into：进行中的任务、待拍板的选项单、凭据、没确认的事件仍然挡着；其余引用在同一个事务里挪到 Into 再删。
 // 部门自己的要点、仓库清单、验收人、暂停、上限提醒随之删掉，已确认事件上的部门标记清掉。
-func DeleteDept(ctx context.Context, db *store.DB, id string, p DeptPatch) (Removed, error) {
+func DeleteDept(ctx context.Context, db *store.DB, id string, p DeptPatch, actor ...string) (Removed, error) {
 	if p.edits() {
 		return Removed{}, api.Usage("--delete: 不和别的字段一起给")
 	}
@@ -173,6 +173,23 @@ func DeleteDept(ctx context.Context, db *store.DB, id string, p DeptPatch) (Remo
 		var err error
 		if r.Dept, err = Get(ctx, tx, id); err != nil {
 			return err
+		}
+		ps, err := parents(ctx, tx)
+		if err != nil {
+			return err
+		}
+		lm, err := LeaderMap(ctx, tx)
+		if err != nil {
+			return err
+		}
+		if len(actor) > 0 && actor[0] != "" {
+			scope := SubordinateScope(ps, lm, actor[0])
+			if !scope[id] {
+				return SubordinateForbidden(id)
+			}
+			if p.Into != nil && !scope[*p.Into] {
+				return SubordinateForbidden(*p.Into)
+			}
 		}
 		blocks, err := refsOf(ctx, tx, id, deptBlockers(id))
 		if err != nil {
@@ -195,10 +212,6 @@ func DeleteDept(ctx context.Context, db *store.DB, id string, p DeptPatch) (Remo
 				return err.WithNext(next)
 			}
 		} else {
-			ps, err := parents(ctx, tx)
-			if err != nil {
-				return err
-			}
 			if err := CheckInto(ps, id, *p.Into); err != nil {
 				return err
 			}
@@ -216,6 +229,18 @@ func DeleteDept(ctx context.Context, db *store.DB, id string, p DeptPatch) (Remo
 				r.Moved = append(r.Moved, Moved{m.What, m.N})
 			}
 		}
+		if p.Into != nil {
+			for child, parent := range ps {
+				if parent == id {
+					ps[child] = *p.Into
+				}
+			}
+		}
+		delete(ps, id)
+		delete(lm, id)
+		if err := CheckDirectReports(ps, lm); err != nil {
+			return err
+		}
 		for _, s := range []string{
 			`DELETE FROM points WHERE department = ?`,
 			`DELETE FROM department_repos WHERE department = ?`,
@@ -226,6 +251,11 @@ func DeleteDept(ctx context.Context, db *store.DB, id string, p DeptPatch) (Remo
 			`DELETE FROM departments WHERE id = ?`,
 		} {
 			if _, err := tx.ExecContext(ctx, s, id); err != nil {
+				return err
+			}
+		}
+		if len(actor) > 0 && actor[0] != "" && r.Leader != "" {
+			if err := RetireOrphanLeader(ctx, tx, r.Leader); err != nil {
 				return err
 			}
 		}

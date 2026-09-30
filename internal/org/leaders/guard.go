@@ -46,6 +46,22 @@ func guard(db *store.DB) api.Guard {
 		if err != nil {
 			return err
 		}
+		if rule == RuleDeptPatch || rule == RuleDeptCreate || rule == RuleLeaderCreate {
+			checks, intro, err := StructureTargets(rule, q.PathValue("id"), body)
+			if err != nil {
+				return err
+			}
+			if intro {
+				return InScope(leader, org.Scope(ps, lm, leader), checks)
+			}
+			scope := org.SubordinateScope(ps, lm, leader)
+			for _, c := range checks {
+				if !scope[c.Dept] {
+					return org.SubordinateForbidden(c.Dept)
+				}
+			}
+			return nil
+		}
 		return InScope(leader, org.Scope(ps, lm, leader), checks)
 	}
 }
@@ -106,11 +122,6 @@ func collect(ctx context.Context, db *store.DB, rule Rule, q *api.Req, body map[
 			return nil, Forbid("负责人建任务要写归属部门（--org oN）或父任务")
 		}
 	case RuleDeptRef:
-		checks = append(checks, Check{What: "部门 " + id, Dept: id})
-	case RuleDeptIntro:
-		if err := IntroOnly(body); err != nil {
-			return nil, err
-		}
 		checks = append(checks, Check{What: "部门 " + id, Dept: id})
 	case RulePointRef:
 		err = lookup("要点", "points")

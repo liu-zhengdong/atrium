@@ -19,6 +19,7 @@ const (
 	MaxRepos         = 20   // 每部门仓库
 	MaxMemo          = 2000 // 每份备忘（字；秘书、每位负责人各一份）
 	MaxLeaders       = 200  // 全部负责人
+	MaxDirectLeaders = 7    // 每位负责人直接下属的负责人（秘书同样受限）
 	MaxLeaderWorkers = 5    // 负责人的执行者组合
 	MaxSkills        = 50   // 全部技能
 	MaxSkillBody     = 6 << 10
@@ -56,6 +57,7 @@ var Limits = []Limit{
 		"atrium org show {dept}"},
 	{"repos", "每部门仓库", MaxRepos, "个", "部门负责人", "拆子部门，或去掉不用的（atrium org edit {dept} --repo-rm …）", "atrium org show {dept}"},
 	{"leaders", "全部负责人", MaxLeaders, "位", "秘书", "合并职责相近的部门，一位负责人管几个部门", "atrium leader ls"},
+	{"direct_leaders", "直接下属负责人", MaxDirectLeaders, "位", "部门负责人", "合并职责相近的部门，一位下属管几个部门", "atrium leader ls"},
 	{"memo", "每份备忘", MaxMemo, "字", "备忘的主人", "不记进展（任务到哪了看 atrium top）；删掉已经过时的、合并重复的，只留账本里没有、下次醒来必须知道的；定下的规矩提成要点", "atrium memo show"},
 	{"skills", "全部技能", MaxSkills, "个", "秘书", "合并相近的技能，删掉没人用的", "atrium skill ls"},
 	{"skill_body", "每份 SKILL.md", MaxSkillBody, "B", "技能作者", "细节挪进技能目录里的附属文件，SKILL.md 只留做法", "atrium skill ls"},
@@ -191,6 +193,24 @@ func Counts(ctx context.Context, q store.Querier, dept string) ([]Count, error) 
 		}
 		l := LimitOf(x.key)
 		out = append(out, Count{Key: l.Key, What: l.What, Used: n, Max: l.Max, Unit: l.Unit})
+	}
+	ps, err := parents(ctx, q)
+	if err != nil {
+		return nil, err
+	}
+	lm, err := LeaderMap(ctx, q)
+	if err != nil {
+		return nil, err
+	}
+	owner := Secretary
+	if dept != "" {
+		owner, _ = Nearest(ps, lm, dept, "")
+	}
+	// 一位负责人管多个部门时只在第一处显示，避免巡检发重复提醒。
+	led := Led(lm, owner)
+	if dept == "" || (lm[dept] == owner && len(led) > 0 && led[0] == dept) {
+		l := LimitOf("direct_leaders")
+		out = append(out, Count{Key: l.Key, What: l.What, Used: DirectReports(ps, lm)[owner], Max: l.Max, Unit: l.Unit})
 	}
 	return out, nil
 }

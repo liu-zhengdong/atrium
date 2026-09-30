@@ -55,11 +55,11 @@ func TestLeaderRulesCoverRealRoutes(t *testing.T) {
 		"POST /api/events/ack":                leaders.RuleEventsAck,
 		"POST /api/escalations":               leaders.RuleEscalate,
 		"POST /api/choices/{id}/decide":       leaders.RuleDeny, // 拍板只有用户
-		"POST /api/org":                       leaders.RuleDeny,
-		"PATCH /api/org/{id}":                 leaders.RuleDeptIntro, // 只许介绍四项
+		"POST /api/org":                       leaders.RuleDeptCreate,
+		"PATCH /api/org/{id}":                 leaders.RuleDeptPatch,
 		"PUT /api/org/{id}/secrets/{name}":    leaders.RuleDeny,
 		"DELETE /api/org/{id}/secrets/{name}": leaders.RuleDeny,
-		"POST /api/leaders":                   leaders.RuleDeny,
+		"POST /api/leaders":                   leaders.RuleLeaderCreate,
 		"PATCH /api/leaders/{id}":             leaders.RuleDeny,
 		"POST /api/skills":                    leaders.RuleDeny,
 		"POST /api/workers/edit":              leaders.RuleDeny,

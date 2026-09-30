@@ -182,9 +182,9 @@ func TestLeaderGuard(t *testing.T) {
 	if err := a1.Do(ctx, "PATCH", "/api/org/o2", map[string]string{"next": "上级写的"}, &d); err != nil || d.Next != "上级写的" {
 		t.Fatalf("上级负责人改下属部门介绍：%+v %v", d, err)
 	}
-	// 被拒时说明该字段只归秘书和用户。
+	// 被拒时说明自己直接管的地方要上交。
 	var ae *api.Error
-	if err := a2.Do(ctx, "PATCH", "/api/org/o2", map[string]string{"name": "x"}, nil); !errors.As(err, &ae) || !strings.Contains(ae.Message, "只归秘书和用户") {
+	if err := a2.Do(ctx, "PATCH", "/api/org/o2", map[string]string{"name": "x"}, nil); !errors.As(err, &ae) || !strings.Contains(ae.Message, "交上一层") {
 		t.Fatalf("改名被拒要说明归属：%v", err)
 	}
 	// 用户令牌不受影响。

@@ -15,9 +15,9 @@ type memoBody struct {
 	Body string `json:"body"`
 }
 
-func userOnly(q *api.Req) error {
-	if q.Actor.Kind != "user" {
-		return api.Forbidden("只有用户能登记或改负责人")
+func userOrLeader(q *api.Req) error {
+	if q.Actor.Kind != "user" && q.Actor.Kind != "leader" {
+		return api.Forbidden("只有用户或负责人能登记负责人")
 	}
 	return nil
 }
@@ -25,14 +25,14 @@ func userOnly(q *api.Req) error {
 func identityRoutes(r *api.Router, db *store.DB) {
 	r.Handle("GET /api/leaders", func(q *api.Req) (any, error) { return Leaders(q.Context(), db) })
 	r.Handle("POST /api/leaders", func(q *api.Req) (any, error) {
-		if err := userOnly(q); err != nil {
+		if err := userOrLeader(q); err != nil {
 			return nil, err
 		}
 		var in NewLeader
 		if err := q.Decode(&in); err != nil {
 			return nil, err
 		}
-		return AddLeader(q.Context(), db, in)
+		return AddLeaderBy(q.Context(), db, in, structuralActor(q))
 	})
 	r.Handle("GET /api/leaders/{id}", func(q *api.Req) (any, error) {
 		id, err := q.Ref("id", "a")
@@ -47,8 +47,8 @@ func identityRoutes(r *api.Router, db *store.DB) {
 		return LeaderShow{Identity: i, Memo: m}, err
 	})
 	r.Handle("PATCH /api/leaders/{id}", func(q *api.Req) (any, error) {
-		if err := userOnly(q); err != nil {
-			return nil, err
+		if q.Actor.Kind != "user" {
+			return nil, api.Forbidden("只有用户能直接改负责人；撤换请改部门的 --leader")
 		}
 		id, err := q.Ref("id", "a")
 		if err != nil {

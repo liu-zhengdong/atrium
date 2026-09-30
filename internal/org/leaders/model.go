@@ -7,7 +7,6 @@ package leaders
 
 import (
 	"fmt"
-	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -263,8 +262,8 @@ func Prompt(in PromptInput) string {
 	w("- 备忘：memo edit 文本（覆盖写；只放跨任务、下次醒来先要知道的提示，任务进展写进 task note；超过 %d 字会被拒，先精简）", org.MaxMemo)
 	w("")
 	w("## 权限边界（服务端按你的令牌强制，越权会被拒）")
-	w("- 可以：动你负责的部门及其下属的任务、要点、资料、周期任务；改这些部门的介绍（org edit oN --what/--uses/--now/--next）；写自己的备忘；确认投给你的事件；上交。")
-	w("- 不可以：动别的部门的东西、改部门本身（名称、负责人、上级、验收人、仓库、删除）、登记负责人、停机与服务操作。需要时上交。")
+	w("- 可以：动你负责的部门及其下属的任务、要点、资料、周期任务，改介绍；在下属负责人管的区域里建、改、裁撤部门，登记新负责人时用 leader add <名字> --org oN 一步绑定部门，或用 org edit oN --leader <aN|-> 撤换、清除。直接下属负责人最多 %d 位，同一位可管多个部门。", org.MaxDirectLeaders)
+	w("- 不可以：在自己直接管的地方改结构，或动管辖之外的部门。需要建分工时用 atrium leader escalate <要建什么、为什么> --kind beyond 上交；上一层收到后自己动手建（即审批），或回复不同意。不能停机或操作服务。")
 	w("")
 	w("## 上交（投给 %s；只有这四类才上交，其余自己处理）", in.Upstream)
 	for _, k := range Kinds {
@@ -283,19 +282,21 @@ func Prompt(in PromptInput) string {
 type Rule int
 
 const (
-	RuleDeny        Rule = iota // 不许
-	RuleRead                    // 只读，放行
-	RuleTaskRef                 // 路径 {id} 是任务：任务的部门在管辖内；请求体里的 org、parent 也要在
-	RuleTaskCreate              // 建任务：请求体里的 org 或 parent 必须给且在管辖内
-	RuleDeptRef                 // 路径 {id} 是部门（部门下的要点、资料、周期任务）
-	RuleDeptIntro               // 改部门：路径 {id} 在管辖内，请求体只许介绍四项
-	RulePointRef                // 路径 {id} 是要点
-	RuleMaterialRef             // 路径 {id} 是资料
-	RuleScheduleRef             // 路径 {id} 是周期任务
-	RuleBodyDept                // 建资料、周期任务：请求体里的 org／department 必须给且在管辖内
-	RuleMemo                    // 自己的备忘（由 memo 路由按身份判）
-	RuleEventsAck               // 确认事件：只能是投给自己的
-	RuleEscalate                // 上交
+	RuleDeny         Rule = iota // 不许
+	RuleRead                     // 只读，放行
+	RuleTaskRef                  // 路径 {id} 是任务：任务的部门在管辖内；请求体里的 org、parent 也要在
+	RuleTaskCreate               // 建任务：请求体里的 org 或 parent 必须给且在管辖内
+	RuleDeptRef                  // 路径 {id} 是部门（部门下的要点、资料、周期任务）
+	RuleDeptPatch                // 改部门：介绍在管辖内，结构在下属区域
+	RuleDeptCreate               // 建部门：父部门在下属区域
+	RuleLeaderCreate             // 登记负责人：一步绑定的部门在下属区域
+	RulePointRef                 // 路径 {id} 是要点
+	RuleMaterialRef              // 路径 {id} 是资料
+	RuleScheduleRef              // 路径 {id} 是周期任务
+	RuleBodyDept                 // 建资料、周期任务：请求体里的 org／department 必须给且在管辖内
+	RuleMemo                     // 自己的备忘（由 memo 路由按身份判）
+	RuleEventsAck                // 确认事件：只能是投给自己的
+	RuleEscalate                 // 上交
 )
 
 // RuleFor 纯判定：负责人令牌碰到这条路由（Go 路由模式，如 "POST /api/tasks/{id}/notes"）时的规则。默认拒绝。
@@ -314,7 +315,11 @@ func RuleFor(pattern string) Rule {
 	case seg[0] == "tasks" && len(seg) >= 2 && seg[1] == "{id}":
 		return RuleTaskRef
 	case path == "/api/org/{id}" && method == "PATCH":
-		return RuleDeptIntro
+		return RuleDeptPatch
+	case path == "/api/org" && method == "POST":
+		return RuleDeptCreate
+	case path == "/api/leaders" && method == "POST":
+		return RuleLeaderCreate
 	case seg[0] == "org" && len(seg) >= 3 && seg[1] == "{id}" && slices.Contains([]string{"points", "materials", "schedules"}, seg[2]):
 		return RuleDeptRef
 	case seg[0] == "points" && len(seg) >= 2 && seg[1] == "{id}":
@@ -342,16 +347,58 @@ func RuleFor(pattern string) Rule {
 // introFields 是负责人能改的部门字段：介绍四项。
 var introFields = []string{"what", "uses", "now", "next"}
 
-// IntroOnly 纯判定：改部门的请求体只含介绍四项才放行。按键名判，不看值：
-// 解码时字段名不分大小写（"Leader" 也会落到 leader），所以键名必须和四项逐字相同。
-func IntroOnly(body map[string]any) error {
-	keys := slices.Sorted(maps.Keys(body))
-	for _, k := range keys {
+// IntroFieldsOnly 按键名判断是否只改介绍；解码不区分大小写，键名须逐字相同。
+func IntroFieldsOnly(body map[string]any) bool {
+	for k := range body {
 		if !slices.Contains(introFields, k) {
-			return Forbid("负责人改部门只能改介绍（--what/--uses/--now/--next），%q 只归秘书和用户", k)
+			return false
 		}
 	}
-	return nil
+	return true
+}
+
+// StructureTargets 纯判定：结构请求需要落在下属区域的部门；介绍请求仍走普通管辖。
+func StructureTargets(rule Rule, id string, body map[string]any) (checks []Check, intro bool, err error) {
+	allowed := map[string]bool{}
+	switch rule {
+	case RuleDeptCreate:
+		for _, k := range []string{"name", "parent", "what", "uses", "now", "next", "leader", "repos"} {
+			allowed[k] = true
+		}
+	case RuleLeaderCreate:
+		for _, k := range []string{"name", "workers", "org"} {
+			allowed[k] = true
+		}
+	case RuleDeptPatch:
+		for _, k := range []string{"name", "parent", "what", "uses", "now", "next", "leader", "accept", "repo_add", "repo_rm", "delete", "into"} {
+			allowed[k] = true
+		}
+	}
+	for k := range body {
+		if !allowed[k] {
+			return nil, false, Forbid("结构请求字段 %q 不允许", k)
+		}
+	}
+	get := func(k string) string { s, _ := body[k].(string); return s }
+	if rule == RuleDeptPatch {
+		if IntroFieldsOnly(body) {
+			return []Check{{What: "部门 " + id, Dept: id}}, true, nil
+		}
+		checks = append(checks, Check{What: "部门 " + id, Dept: id})
+		if _, ok := body["parent"]; ok {
+			checks = append(checks, Check{What: "新上级", Dept: get("parent")})
+		}
+		if _, ok := body["into"]; ok {
+			checks = append(checks, Check{What: "并入目标", Dept: get("into")})
+		}
+	} else {
+		field := "parent"
+		if rule == RuleLeaderCreate {
+			field = "org"
+		}
+		checks = append(checks, Check{What: "部门", Dept: get(field)})
+	}
+	return checks, false, nil
 }
 
 // Check 是一项要落在管辖内的东西。Dept 为空表示它不属于任何部门（一律不在管辖内）。

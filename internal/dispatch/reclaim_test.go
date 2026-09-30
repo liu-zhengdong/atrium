@@ -188,6 +188,9 @@ func TestReclaimEndingsAndReopen(t *testing.T) {
 }
 
 func TestMain(m *testing.M) {
+	if len(os.Args) > 1 && os.Args[1] == "--continue-pr-worker" {
+		os.Exit(continuePRWorker())
+	}
 	if len(os.Args) > 1 && (os.Args[1] == "--reclaim-fake-worker" || os.Args[1] == "--reclaim-wait-worker") {
 		if err := os.WriteFile("continued.txt", []byte("继续干"), 0600); err != nil {
 			os.Exit(1)

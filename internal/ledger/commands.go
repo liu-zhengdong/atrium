@@ -12,9 +12,12 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/events"
 )
 
+// ContinuePRHowTo 是命令帮助与负责人提示词共用的续做入口说明。
+const ContinuePRHowTo = "续做已有 PR 回原任务，不另建任务：task show tN 核对 PR；执行者在跑时 task tell tN 续做说明；等验收或已结束时先 task set tN --status todo，再 task tell tN 续做说明、task run tN（沿用原分支）"
+
 func Commands(t *cli.Table) {
 	t.Group("task", "任务")
-	t.Add(cli.Command{Path: "task add", Args: "<标题>", Summary: "建任务",
+	t.Add(cli.Command{Path: "task add", Args: "<标题>", Summary: "建任务；" + ContinuePRHowTo,
 		Flags: []cli.Flag{
 			{Name: "detail", Value: "文字", Help: "详述：要做成什么、怎么算做完"},
 			{Name: "org", Value: "oN", Help: "所属部门（缺省沿用父任务的）"},

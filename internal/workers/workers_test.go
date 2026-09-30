@@ -2,6 +2,7 @@ package workers
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"reflect"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/liu-zhengdong/atrium/internal/events"
+	"github.com/liu-zhengdong/atrium/internal/platform"
 	"github.com/liu-zhengdong/atrium/internal/store"
 )
 
@@ -59,11 +61,11 @@ func TestBuild(t *testing.T) {
 		{tool: "claude", in: in("", "ultra"), bad: "思考强度只能是"},
 		{tool: "codex", in: in("gpt-6", "high"), want: []string{"exec", "--json", "--skip-git-repo-check", "--ignore-user-config", "-C", dir, "-m", "gpt-6", `model_reasoning_effort="high"`, "-"}},
 		{tool: "codex", in: Request{Prompt: "x", PromptFile: pf, Dir: dir, Session: "0123abcd-0123-0123-0123-0123456789ab"}, want: []string{"exec", "resume", "--json", "--skip-git-repo-check", "--ignore-user-config", "0123abcd-0123-0123-0123-0123456789ab", "-"}},
-		{tool: "opencode", in: in("p/m", "low"), want: []string{"run", "--format", "json", "--auto", "-m", "p/m", "--variant", "low", "--", "做事"}},
-		{tool: "kimi", in: in("k2", ""), want: []string{"-p", "做事", "-m", "k2"}},
+		{tool: "opencode", in: in("p/m", "low"), want: []string{"run", "--format", "json", "--auto", "-m", "p/m", "--variant", "low"}},
+		{tool: "kimi", in: in("k2", ""), want: []string{"-p", "请先完整读取任务说明文件 " + pf + "，然后按文件内容执行。", "-m", "k2"}},
 		{tool: "kimi", in: in("", "high"), bad: "不接受思考强度"},
-		{tool: "grok", in: in("g", "low"), want: []string{"-p", "做事", "-m", "g", "--reasoning-effort", "low", "--always-approve", "--cwd", dir}},
-		{tool: "agy", in: in("gemini-3.8-flash", "high"), want: []string{"--print=做事", "--model", "gemini-3.8-flash", "--effort", "high"}},
+		{tool: "grok", in: in("g", "low"), want: []string{"--prompt-file", pf, "-m", "g", "--reasoning-effort", "low", "--always-approve", "--cwd", dir}},
+		{tool: "agy", in: in("gemini-3.8-flash", "high"), want: []string{"--input-format", "stream-json", "--output-format", "stream-json", "--model", "gemini-3.8-flash", "--effort", "high"}},
 		{tool: "agy", in: in("claude-opus", "high"), bad: "不接受思考强度"},
 		{tool: "cursor", in: in("gpt-5.3-codex-fast", "high"), want: []string{"-p", "--workspace", dir, "--model", "gpt-5.3-codex-high-fast"}},
 		{tool: "cursor", in: in("auto", "high"), bad: "auto"},
@@ -98,8 +100,8 @@ func TestBuild(t *testing.T) {
 			t.Errorf("%s 没写模型不应传 -m：%q %v", tool, l.Args, err)
 		}
 	}
-	// 走标准输入的接提示词文件，走参数的不接。
-	for tool, stdin := range map[string]bool{"claude": true, "codex": true, "cursor": true, "opencode": false, "kimi": false} {
+	// 走标准输入的接提示词文件，走文件路径的只传路径。
+	for tool, stdin := range map[string]bool{"claude": true, "codex": true, "cursor": true, "opencode": true, "kimi": false, "grok": false, "agy": false} {
 		a, _ := Builtin(tool)
 		l, _ := a.Build(in("", ""))
 		if (l.StdinFile == pf) != stdin {
@@ -115,6 +117,40 @@ func TestBuild(t *testing.T) {
 	l, _ := a.Build(Request{Prompt: "x", PromptFile: pf, Dir: dir, Endpoint: &Endpoint{BaseURL: "https://gw", API: "anthropic", KeyEnv: "ANTHROPIC_AUTH_TOKEN"}})
 	if l.Env["ANTHROPIC_BASE_URL"] != "https://gw" {
 		t.Errorf("claude 端点：%+v", l.Env)
+	}
+}
+
+func TestWindowsBatchLongPrompt(t *testing.T) {
+	dir := t.TempDir()
+	for _, prompt := range []string{"第一行\n第二行", strings.Repeat("长说明", 10000)} {
+		for _, tool := range []string{"opencode", "agy", "kimi", "grok"} {
+			req := Request{Dir: dir, PromptFile: filepath.Join(dir, "prompt.md"), Prompt: prompt}
+			l, err := Build(tool, req)
+			if err != nil {
+				t.Fatalf("%s Build: %v", tool, err)
+			}
+			line, err := platform.BatchCommandLine("", `C:\\bin\\`+tool+`.cmd`, l.Args)
+			if err != nil || strings.Contains(line, prompt) || len(line) >= 8191 {
+				t.Fatalf("%s Windows 命令行含说明或过长: len=%d err=%v", tool, len(line), err)
+			}
+			if tool == "opencode" && l.StdinFile != req.PromptFile {
+				t.Fatal("opencode 未接提示词文件到 stdin")
+			}
+			if tool == "agy" {
+				var event struct {
+					Event   string `json:"event"`
+					Message struct {
+						Content string `json:"content"`
+					} `json:"message"`
+				}
+				if err := json.Unmarshal([]byte(l.StdinData), &event); err != nil || event.Event != "user" || event.Message.Content != prompt {
+					t.Fatalf("agy stdin 未保留原文: %v", err)
+				}
+			}
+		}
+	}
+	if _, err := platform.BatchCommandLine("", `C:\\bin\\opencode.cmd`, []string{"run", "第一行\n第二行"}); err == nil {
+		t.Fatal("BatchCommandLine 应继续拒绝换行参数")
 	}
 }
 

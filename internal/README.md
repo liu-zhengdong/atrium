@@ -153,7 +153,7 @@ type Module struct {
 - 退出后 dispatch 自己收尾：正常 → `ExitOK`（进关卡）；临时错误同一执行者重试 1 次、再换人；思考耗尽换人（至多 2 次，换上的执行者在上一轮那台接不了就另挑机器）；额度用尽、起不来（没登录、缺运行环境，标整个「工具@机器」）、模型名无效经 `workers.MarkOf` 把「工具+模型@机器」标成不可用（额度到恢复时刻，读不出按 4 小时；其余等人 `workers edit --clear`），转失败后重新排队——本机的挑执行者时避开，各台的挑机器时避开（机器自检不过的标记同一处、同样避开，见 hosts）；「工具+模型」近 5 次拉起里启动失败（额度、起不来、其他）≥2 次的，挑执行者时排到能接的后面（纯函数 `Shaky`，只排序不排除，`--dry-run` 的推荐理由写出来）；有没送到的捎话按工具续上会话或重派；其余 `ExitFail`。任务已不在 running/""（watch 或人先收了尾）就不动。
 - 隔离实例（`config.Paths.Isolated`：数据目录不是缺省的那个）不自己拉起本机真实的模型进程：自动挑执行者（没写 `--worker`，含周期任务、审阅、换人）时内置工具一律不挑，只挑通用命令行执行者；写死 `--worker` 不拦（测试把假 `claude` 放进 PATH 就靠它）。负责人唤醒同理（`ATRIUM_LEADER_WAKE=1` 才开）。
 - 别的包要重新派：`dispatch.Enqueue(ctx, env, id, Options{…}, actor)`（即 task run，写队列行与 risk）；watch 经 `Hooks.Requeue`、周期任务经 `agenda.Enqueue`、审阅任务经 `gates.Enqueue`，都在 dispatch 的 Routes 里接上。交回（`gates.Bounce`）只转 queued、不写队列行：dispatch 对没有队列行的 queued 任务沿用上次拉起的执行者、机器（工作目录在那里；接不了就等或转受阻，不换机）、风险与凭据。
-- 远程：`workers.Request` 是纯数据，代理拿到后填 `Dir`、`PromptFile`，用 `workers.Build(tool, req)` 算出同样的调用。
+- 远程：`workers.Request` 是纯数据，代理拿到后填 `Dir`，把提示词写到自己的任务目录并填本机的 `PromptFile`，用 `workers.Build(tool, req)` 算出同样的调用。
 
 ### 子进程（`internal/platform`）
 

@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -673,7 +674,7 @@ func startLocal(tool string, req workers.Request, extra map[string]string, c con
 		return nil, 0, nil, err
 	}
 	defer logf.Close()
-	var in *os.File
+	var in io.Reader
 	switch {
 	case l.Live:
 		r, w, err := os.Pipe()
@@ -686,6 +687,8 @@ func startLocal(tool string, req workers.Request, extra map[string]string, c con
 			return nil, 0, nil, err
 		}
 		in, stdin = r, w
+	case l.StdinData != "":
+		in = strings.NewReader(l.StdinData)
 	case l.StdinFile != "":
 		f, err := os.Open(l.StdinFile)
 		if err != nil {

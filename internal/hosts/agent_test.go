@@ -211,13 +211,16 @@ func TestAgentLaunchLogExit(t *testing.T) {
 	g.task("t1")
 	log := filepath.Join(g.env.Paths.Data, "logs", "t1.log")
 	run, pid, wdir, err := Launch(context.Background(), g.env, host, Assignment{Task: "t1", Tool: "echo",
-		Request: workers.Request{Prompt: "做"}, Repo: origin, Branch: "t1-x", Base: "main", Env: map[string]string{"MY_KEY": "k1"}, Token: "wt_t1_1_x", Log: log})
+		Request: workers.Request{Prompt: "第一行\n第二行", PromptFile: filepath.Join(t.TempDir(), "service-only.md")}, Repo: origin, Branch: "t1-x", Base: "main", Env: map[string]string{"MY_KEY": "k1"}, Token: "wt_t1_1_x", Log: log})
 	if err != nil || run != 1 || pid <= 0 || wdir != filepath.Join(dir, "repos", "a-b-t1") {
 		t.Fatalf("Launch：%d %d %s %v", run, pid, wdir, err)
 	}
 	e := waitExit(t, g.env, "t1", 1)
 	if e.Code == nil || *e.Code != 3 || e.Lost {
 		t.Fatalf("退出：%+v", e)
+	}
+	if prompt, err := os.ReadFile(filepath.Join(dir, "tasks", "t1", "prompt-1.md")); err != nil || string(prompt) != "第一行\n第二行" {
+		t.Fatalf("远程提示词未落在代理机器上：%q %v", prompt, err)
 	}
 	got, _ := os.ReadFile(log)
 	s := string(got)

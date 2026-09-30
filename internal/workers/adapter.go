@@ -66,6 +66,7 @@ type Launch struct {
 	Args      []string          `json:"args"`
 	Dir       string            `json:"dir"`
 	StdinFile string            `json:"stdin_file,omitempty"` // 接到标准输入的文件；空表示不接
+	StdinData string            `json:"stdin_data,omitempty"` // 工具要求结构化标准输入时的内容
 	Live      bool              `json:"live,omitempty"`       // 标准输入是消息流：先写 StdinFile 内容作第一条消息，之后写捎话
 	Env       map[string]string `json:"env,omitempty"`        // 白名单环境之上额外设的变量（不放密钥）
 }
@@ -262,12 +263,12 @@ func codexAdapter() *Driver {
 	return a
 }
 
-// opencode run：提示词是位置参数；--format json 逐步输出事件；--auto 全放行；同一数据目录并发会死锁，独占。
+// opencode run：无位置参数时从标准输入读提示词；--format json 逐步输出事件；--auto 全放行，独占。
 // 缺省模型写死：opencode models 只列各家模型、不标哪个是缺省，不传 -m 用的是用户配置或上次选的。
 func opencodeAdapter() *Driver {
 	a := &Driver{Tool: "opencode", Exe: "opencode", DefaultModel: "opencode-go/mimo-v2.6-flash",
 		Efforts: []string{"minimal", "low", "medium", "high", "max"}, Exclusive: true, Tell: TellRestart, JSON: true,
-		Endpoints: []string{"openai", "anthropic"}, ArgPrompt: true, read: readOpencode}
+		Endpoints: []string{"openai", "anthropic"}, read: readOpencode}
 	a.build = func(in Request) (Launch, error) {
 		l := Launch{Exe: a.Exe, Dir: in.Dir}
 		model := in.Model
@@ -295,7 +296,7 @@ func opencodeAdapter() *Driver {
 		if in.Effort != "" {
 			l.Args = append(l.Args, "--variant", in.Effort)
 		}
-		l.Args = append(l.Args, "--", in.Prompt)
+		l.StdinFile = in.PromptFile
 		return l, nil
 	}
 	return a
@@ -374,28 +375,29 @@ func AgyModelArgs(model, effort string) ([]string, error) {
 	return []string{"--model", model, "--effort", effort}, nil
 }
 
-// agy（Antigravity）：--print=<提示词>（等号形式）、stream-json 事件、全放行、不认斜杠命令。
+// agy（Antigravity）：stream-json 从标准输入读一条 user 事件，输出同格式事件。
 // 缺省模型写死：agy models 只列清单、不标哪个是缺省；模型名要带强度（gemini-3.8-flash 会被拒）。
 func agyAdapter() *Driver {
 	a := &Driver{Tool: "agy", Exe: "agy", DefaultModel: "gemini-3.8-flash-high", Efforts: []string{"low", "medium", "high", "max"},
-		Tell: TellRestart, JSON: true, ArgPrompt: true, read: readAgy}
+		Tell: TellRestart, JSON: true, read: readAgy}
 	a.build = func(in Request) (Launch, error) {
 		m, err := AgyModelArgs(in.Model, in.Effort)
 		if err != nil {
 			return Launch{}, err
 		}
-		args := append([]string{"--print=" + in.Prompt, "--output-format", "stream-json", "--dangerously-skip-permissions",
+		args := append([]string{"--input-format", "stream-json", "--output-format", "stream-json", "--dangerously-skip-permissions",
 			"--disable-slash-commands"}, m...)
-		return Launch{Exe: a.Exe, Args: args, Dir: in.Dir}, nil
+		msg, _ := json.Marshal(map[string]any{"event": "user", "message": map[string]string{"content": in.Prompt}})
+		return Launch{Exe: a.Exe, Args: args, Dir: in.Dir, StdinData: string(msg) + "\n"}, nil
 	}
 	return a
 }
 
-// kimi -p：非交互单次运行；-m 模型别名；不接受强度；不能加 --yolo。
+// kimi -p：非交互单次运行。CLI 2.1.1 只接受参数提示词，让它读取任务文件，避免把正文放入命令行。
 func kimiAdapter() *Driver {
-	a := &Driver{Tool: "kimi", Exe: "kimi", Tell: TellRestart, ArgPrompt: true}
+	a := &Driver{Tool: "kimi", Exe: "kimi", Tell: TellRestart}
 	a.build = func(in Request) (Launch, error) {
-		args := []string{"-p", in.Prompt}
+		args := []string{"-p", "请先完整读取任务说明文件 " + in.PromptFile + "，然后按文件内容执行。"}
 		if in.Model != "" {
 			args = append(args, "-m", in.Model)
 		}
@@ -404,12 +406,12 @@ func kimiAdapter() *Driver {
 	return a
 }
 
-// grok -p：单轮提示词、--always-approve、--cwd、--reasoning-effort；没写模型用 grok 服务端给的缺省（grok models 里标 default 的）。
+// grok --prompt-file：单轮提示词从文件读，--always-approve、--cwd、--reasoning-effort；没写模型用服务端缺省。
 func grokAdapter() *Driver {
 	a := &Driver{Tool: "grok", Exe: "grok", Efforts: []string{"low", "medium", "high"},
-		Tell: TellRestart, ArgPrompt: true}
+		Tell: TellRestart}
 	a.build = func(in Request) (Launch, error) {
-		args := []string{"-p", in.Prompt}
+		args := []string{"--prompt-file", in.PromptFile}
 		if in.Model != "" {
 			args = append(args, "-m", in.Model)
 		}
@@ -452,7 +454,9 @@ func (a *Driver) Spec(req Request, env map[string]string) (platform.Spec, error)
 		return platform.Spec{}, err
 	}
 	s := platform.Spec{Path: exe, Args: l.Args, Dir: l.Dir, Env: envs}
-	if l.StdinFile != "" {
+	if l.StdinData != "" {
+		s.Stdin = strings.NewReader(l.StdinData)
+	} else if l.StdinFile != "" {
 		s.Stdin = strings.NewReader(req.Prompt)
 	}
 	return s, nil

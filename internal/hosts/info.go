@@ -50,9 +50,8 @@ func MaxWorkers(env map[string]string, cpus int) int {
 // machineInfo 按给定环境（PATH、HOME）看这台机器。
 func machineInfo(data string, env map[string]string) Info {
 	name, _ := os.Hostname()
-	clis := map[string]CLI{}
 	return Info{Hostname: name, OS: runtime.GOOS, Arch: runtime.GOARCH, CPUs: runtime.NumCPU(),
-		Version: service.Version, Data: data, CLIs: clis, MaxWorkers: MaxWorkers(env, runtime.NumCPU())}
+		Version: service.Version, Data: data, MaxWorkers: MaxWorkers(env, runtime.NumCPU())}
 }
 
 // LocalInfo 是服务这台（h1）的机器信息。

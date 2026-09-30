@@ -53,12 +53,19 @@ func TestChoose(t *testing.T) {
 		pinned string
 		want   Choice
 	}{
+		{"尚未自检", []Candidate{with(local, func(c *Candidate) { c.CLIs = nil })}, codex, "",
+			Choice{Kind: "queue", Reason: "h1 尚未完成工具自检，自检就绪后再派"}},
+		{"紧急也等自检", []Candidate{with(local, func(c *Candidate) { c.CLIs = nil })}, Need{Tool: "codex", Urgent: true}, "h1",
+			Choice{Kind: "queue", Host: "h1", Reason: "h1 尚未完成工具自检，自检就绪后再派"}},
+		{"本机自检中选就绪远程", []Candidate{with(local, func(c *Candidate) { c.CLIs = nil }), remote}, codex, "", Choice{Kind: "run", Host: "h2"}},
+		{"自检完成没装", []Candidate{with(local, func(c *Candidate) { c.CLIs = map[string]CLI{} })}, codex, "",
+			Choice{Kind: "refuse", Reason: "h1 上没装 codex，也没有别的机器能接"}},
 		{"一样空本机优先", []Candidate{remote, local}, codex, "", Choice{Kind: "run", Host: "h1"}},
 		{"本机更忙挑远程", []Candidate{with(local, func(c *Candidate) { c.Running = 1 }), remote}, codex, "", Choice{Kind: "run", Host: "h2"}},
 		{"远程没登记仓库", []Candidate{with(local, func(c *Candidate) { c.Running = 2 }), remote}, Need{Tool: "codex", Repo: "x/y"}, "",
 			Choice{Kind: "queue", Reason: "h1 同时最多跑 2 个执行者，有执行者结束后再拉起"}},
 		{"远程没登录", []Candidate{with(local, func(c *Candidate) { c.Paused = true }), remote}, Need{Tool: "claude", Repo: "a/b"}, "",
-			Choice{Kind: "queue", Reason: "h1 已暂停接活，也没有别的机器能接，有机器能接时再拉起"}},
+			Choice{Kind: "refuse", Reason: "h1 已暂停接活，也没有别的机器能接"}},
 		{"暂停的不选", []Candidate{local, with(remote, func(c *Candidate) { c.Paused = true })}, codex, "h2", Choice{Kind: "refuse", Reason: "h2 已暂停接活"}},
 		{"指定不看仓库", []Candidate{local, remote}, Need{Tool: "codex", Repo: "x/y"}, "h2", Choice{Kind: "run", Host: "h2"}},
 		{"指定满了排队钉住", []Candidate{local, with(remote, func(c *Candidate) { c.Running = 4 })}, codex, "h2",

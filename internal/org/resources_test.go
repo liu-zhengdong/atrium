@@ -228,6 +228,14 @@ func TestResourcesStore(t *testing.T) {
 	if err != nil || d2[0].ID != d1[0].ID || d2[0].Rev != 2 {
 		t.Fatalf("同名追加一版：%+v %v", d2, err)
 	}
+	// 追加一版不给 --note 沿用上一版说明；新建不给要拒绝。读出来带部门名称。
+	d3, err := AddMaterials(ctx, db, data, MaterialInput{Org: sub.ID, Files: []MaterialFile{{"a.md", []byte(strings.Repeat("字", 46000))}}}, "u1")
+	if err != nil || d3[0].Rev != 3 || d3[0].Note != "改" || d3[0].OrgName != sub.Name {
+		t.Fatalf("追加一版沿用说明：%+v %v", d3, err)
+	}
+	if _, err := AddMaterials(ctx, db, data, MaterialInput{Org: sub.ID, Files: []MaterialFile{{"c.md", []byte("1")}}}, "u1"); code(err) != "usage" {
+		t.Fatalf("新建不给说明应拒绝：%v", err)
+	}
 	if old, err := GetMaterial(ctx, db, data, d1[0].ID, 1); err != nil || old.Units != 1 {
 		t.Fatalf("旧版还在：%+v %v", old, err)
 	}

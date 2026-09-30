@@ -134,7 +134,7 @@ type Module struct {
 - 上限表在 `org/limits.go`（`Limits`：会增长的东西 → 上限 → 满了找谁 → 怎么办）；满了一律 `org.Full(key, dept, used)`，计数 `org.Counts(ctx, q, dept)`（网页「6/7」，接口 `GET /api/limits?node=oN`）。
 - 上限只挡写入，不截读取：读路径按技术上限 `org.ReadCap`（1000）查，超了报错而不是少给；超了业务上限的（导入的旧数据）照样全部返回，给人看的地方用 `org.Tally`／`org.Over` 标「超限 8/7」，要点链用 `org.PointsOver` 在派活与负责人提示词里加一行。
 - 巡检每轮 `org.ScanNotices` 对照 `limit_notices`：刚到或超了且未提醒则 watch 发 `limit.full`（要处理）；部门负责人投 `org.Recipient`，秘书、用户及其余投秘书。回到上限以内才删已提醒，再超再发。判定纯函数 `org.DecideNotice`。
-- 派活（dispatch）：`org.SkillPaths(ctx, q, data, task.Skill)` → 提示词附的 SKILL.md 路径；`org.GetSkill` 取优先执行者 `Workers`、交付要查 `Checks`、要的凭据 `Secrets`；`org.SecretEnv(ctx, db, data, task.Org, names)` → 注入执行者的凭据（按部门往上找，找不到报错带修正命令）。
+- 派活（dispatch）：`org.GetSkill` 取提示词附的 SKILL.md 路径 `Path`（当前版，在 `skills-current/<名字>/`，技能之间的 `../<名字>/SKILL.md` 能打开对方当前版）、优先执行者 `Workers`、交付要查 `Checks`、要的凭据 `Secrets`；`org.SecretEnv(ctx, db, data, task.Org, names)` → 注入执行者的凭据（按部门往上找，找不到报错带修正命令）。
 - 负责人唤醒：`org.Overview(ctx, q, data, dept)` 总览全文；`org.Materials(…, MaterialFilter{Org})` 细节清单。
 - 权限：`org.CheckReach(ctx, q, actor, dept)`（用户都行；负责人只到自己部门及下属）；`org.CheckUser(actor, 做什么)`（拍板、凭据只有用户）。
 - 关卡（gates）：没有仓库也没有工作地点的任务读工作目录根的 `choice.json`（远程经代理），关卡用 `agenda.ParseChoice` 核对（不合法按关卡不过交回），落地时 `agenda.Settle(ctx, db, task, raw)` 登记成选项单。

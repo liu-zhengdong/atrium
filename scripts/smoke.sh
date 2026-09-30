@@ -73,6 +73,8 @@ step "启动（端口 ${ATRIUM_PORT}）"
 out=$(json start); has '.ok and .result.pid > 0 and .next == "atrium status"'
 pid=$(jq -r .result.pid <<<"$out")
 private "$ATRIUM_DATA/token" || fail "令牌文件别人能读"
+printf x >"$work/wide"; chmod 644 "$work/wide"   # 反向：普通文件（Windows 上是继承来的 ACL）检查必须报出来
+private "$work/wide" && fail "私密检查没拦住别人能读的文件"
 out=$(json start); has '.ok and (.result.pid|tostring) == "'"$pid"'"'   # 单实例：再 start 不起第二个
 
 step "认证默认拒绝"

@@ -355,7 +355,7 @@ func SaveSkill(ctx context.Context, db *store.DB, data string, in SkillInput, ac
 		}
 		dir := skillDir(data, in.Name, rev)
 		for p, c := range files {
-			if err := writeFile(filepath.Join(dir, filepath.FromSlash(p)), c, 0o600); err != nil {
+			if err := writeFile(filepath.Join(dir, filepath.FromSlash(p)), c); err != nil {
 				return err
 			}
 		}

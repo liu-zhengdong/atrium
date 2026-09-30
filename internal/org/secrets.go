@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/url"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -19,7 +20,7 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/store"
 )
 
-// 凭据：按「部门 + 名称」存，名称就是注入执行者时的环境变量名。值只在数据目录 secrets/<oN>/<名称>（0600），
+// 凭据：按「部门 + 名称」存，名称就是注入执行者时的环境变量名。值只在数据目录 secrets/<oN>/<名称>（只有本人可读），
 // 不回显、不进日志与提示词；分派任务时按名称从任务部门往上找（SecretEnv），是执行者白名单环境之外的唯一例外。
 const maxSecretValue = 16 << 10
 
@@ -85,7 +86,11 @@ func SetSecret(ctx context.Context, db *store.DB, data, dept, name string, value
 			ON CONFLICT (department, name) DO UPDATE SET updated_at = excluded.updated_at`, dept, name, store.Now()); err != nil {
 			return err
 		}
-		return writeFile(secretFile(data, dept, name), value, 0o600)
+		path := secretFile(data, dept, name)
+		if err := platform.PrivateDir(filepath.Dir(path)); err != nil {
+			return err
+		}
+		return platform.WritePrivateFile(path, value)
 	})
 	if err != nil {
 		return Secret{}, err

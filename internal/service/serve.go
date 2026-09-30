@@ -187,18 +187,17 @@ func ensureToken(p config.Paths) (string, error) {
 	return writeToken(p)
 }
 
-// writeToken 生成新令牌，先写临时文件（0600）再改名替换。
+// writeToken 生成新令牌，按凭据写入（只有本人可读，改名替换）。
 func writeToken(p config.Paths) (string, error) {
 	buf := make([]byte, 32)
 	if _, err := rand.Read(buf); err != nil {
 		return "", err
 	}
 	token := hex.EncodeToString(buf)
-	tmp := p.Token() + ".tmp"
-	if err := platform.WritePrivateFile(tmp, []byte(token+"\n")); err != nil {
+	if err := platform.WritePrivateFile(p.Token(), []byte(token+"\n")); err != nil {
 		return "", fmt.Errorf("写用户令牌失败：%w", err)
 	}
-	return token, os.Rename(tmp, p.Token())
+	return token, nil
 }
 
 // rotate 换用户令牌：写文件后立即生效，旧令牌作废。

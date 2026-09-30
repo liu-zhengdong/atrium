@@ -26,7 +26,7 @@ Go 代码怎么分包、包之间怎么调用、并行开发时各自改哪里�
 | `api` | 完成 | HTTP 信封、错误码、路由（认证在匹配后统一做，默认拒绝）、客户端 | — |
 | `cli` | 完成 | 命令表、参数解析、帮助生成、回执（`Done`）、执行者拦截 | — |
 | `app` | 完成 | `Module`、`Env` | — |
-| `platform` | 完成 | 进程树结束、存活、shell、PATH 查找、服务与执行者白名单环境 | — |
+| `platform` | 完成 | 进程树结束、存活、shell、PATH 查找、服务与执行者白名单环境、凭据文件权限 | — |
 | `pause` | 完成 | 一键停机的状态与判定 `Paused` | `pauses` |
 | `service` | 完成 | start/serve/status/stop/restart/pause/resume/auth rotate；单实例；令牌 | — |
 | `ledger` | 完成 | 任务（仓库或工作地点二选一；都没写的，`task run` 派出去时沿用部门的仓库——部门恰有一个才沿用，纯判定 `DeptRepo`、写入 `UseDeptRepo`；运行时自己派的审阅、定时任务不经这里）、父子、依赖、状态机、就绪、汇总；草稿记的发现带来源（用户纠正／组织发现）与类，来源一行带记录人（任务分派人）的名字（`org.NameOf`），用户本人验收退回、取消任务时 `Apply` 自动记一条用户纠正（纯判定 `Correction`）；三个目标的数（纠正、认可、复发）由纯函数 `Measure` 算、`ReadGoals` 读，top 与网页今天页共用；`task add/ls/show/set/stop/tree/note/wait`（`task tree` 每件标出能派还是在等谁）（`task stop` 即转受阻，分派任务循环结束执行者；`task set --status` 不收 blocked） | `tasks` `task_dirs` `task_findings` `task_deps` `task_events` |
@@ -177,12 +177,13 @@ type Module struct {
 - 子进程只经 `platform.Start(platform.Spec{Path, Args, Dir, Env, Stdout, Stderr, Detached})` 拉起；`Env` 必填。任务执行者用 `platform.WorkerEnv(runtime.GOOS, platform.EnvMap(os.Environ()), tempDir)`，`tempDir` 是本机或代理任务目录下的 `tmp`，统一覆盖 `TMPDIR`、`TMP`、`TEMP`；负责人及自检不传临时目录。执行者环境带 `ATRIUM_WORKER=1`，不继承其他 `ATRIUM_*` 与凭据；任务声明的凭据在其后逐个注入，再加 `ATRIUM_SERVER`、`ATRIUM_WORKER_TOKEN`，并经 `platform.SelfOnPath` 把服务（远程是代理）这个二进制排进 PATH 最前。服务与执行者保留环境中的 `GOFLAGS`；`WorkerEnv` 统一追加 `-trimpath`，让本机、远程执行者与合入检查的 Go 编译跨工作树复用缓存。
 - 执行者一律 `Detached: true`：服务重启不影响它；结束用 `platform.KillTree(pid)`。拉起后必须 `Wait`（Unix 不 Wait 会留僵尸，`Alive` 会一直报活）。
 - 找程序用 `platform.LookPath(name, env)`（按子进程环境的 PATH/PATHEXT；`platform.EnvMap` 在 Windows 上把变量名落成大写）；shell 用 `platform.Shell(cmd)`。Windows 上找到的 `.cmd`/`.bat`（npm 装的 claude.cmd 等）由 `Start` 经 `cmd.exe /d /s /c` 拉起，参数带换行会报错。
+- 凭据类文件（用户令牌、`agent.json` 与代理运行记录、部门凭据）只经 `platform.WritePrivateFile` 写：临时文件先收紧成只有本人可读（Windows 为受保护的 DACL，只留本人、SYSTEM、管理员），再改名替换；所在目录用 `platform.PrivateDir`。
 
 ### 服务（`internal/service`）
 
 - `atrium`/`start` 拉起 `atrium serve`（服务白名单环境、独立会话、日志写数据目录 `service.log`），等 `/health` 回同一 pid。登记文件 `service.json`（pid、端口、版本）；同一数据目录只允许一个活着的服务。
 - `restart`：旧进程拉起新进程（带 `ATRIUM_REPLACE_PID`，新进程等端口放开），再打断长轮询、排空在途请求后退出。`release` 包升级后调 `POST /api/service/restart` 即可。
-- 用户令牌：数据目录 `token`（0600）；`auth rotate` 换新立即生效。
+- 用户令牌：数据目录 `token`（只有本人可读）；`auth rotate` 换新立即生效。
 
 ## 谁调谁
 

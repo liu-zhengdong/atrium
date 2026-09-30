@@ -293,7 +293,7 @@ func secretCommands(t *cli.Table) {
 			return c.Done(s, fmt.Sprintf("已设凭据 %s（%s），值不显示", s.Name, s.Org),
 				"atrium skill add <技能> --secrets "+s.Name)
 		}})
-	t.Add(cli.Command{Path: "secret ls", Read: true, Summary: "列凭据名称（不含值）",
+	t.Add(cli.Command{Path: "secret ls", Summary: "列凭据名称（不含值）",
 		Flags: []cli.Flag{{Name: "node", Value: "oN", Help: "只看这个部门能用到的（含上级的）"}},
 		Run: func(c *cli.Ctx) error {
 			var list []Secret

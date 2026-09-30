@@ -535,7 +535,7 @@ func (d *dispatcher) launch(ctx context.Context, t ledger.Task, o launchOpts) er
 		return err
 	}
 	secrets := o.Secrets
-	in := PromptInput{Task: t.ID, Title: t.Title, Detail: t.Detail, Profile: o.W.Body, Repo: t.Repo, Dir: t.Dir, Branch: branch}
+	in := PromptInput{Task: t.ID, Org: t.Org, Title: t.Title, Detail: t.Detail, Profile: o.W.Body, Repo: t.Repo, Dir: t.Dir, Branch: branch}
 	if in.Origin, err = gates.Origin(ctx, gates.NewExec(), t.Repo); err != nil {
 		return err
 	}
@@ -595,6 +595,10 @@ func (d *dispatcher) launch(ctx context.Context, t ledger.Task, o launchOpts) er
 		}
 		extra[o.W.Endpoint().KeyEnv] = v[key]
 	}
+	token, err := issueWorkerToken(d.env, t.ID, n)
+	if err != nil {
+		return err
+	}
 	run := workers.Run{N: n, Why: o.Why, Cause: o.Cause, Worker: o.W.ID, Host: o.Host, Dir: dir, Branch: branch,
 		Log: filepath.Join(td, fmt.Sprintf("run-%d.log", n)), Risk: o.Risk, Secrets: secrets, TellsUpto: upto, At: store.Now()}
 	p := &proc{task: t.ID, adapter: o.W.Adapter, remote: remote, pending: map[string]bool{}, done: make(chan struct{})}
@@ -611,14 +615,14 @@ func (d *dispatcher) launch(ctx context.Context, t ledger.Task, o launchOpts) er
 			}
 		}
 		rr, pid, rdir, err := launchRemote(ctx, d.env, o.Host, Remote{Task: t.ID, Tool: o.W.Spec.Tool, Request: req, Repo: clone,
-			Branch: branch, Base: "main", Env: extra, Log: run.Log})
+			Branch: branch, Base: "main", Env: extra, Token: token, Log: run.Log})
 		if err != nil {
 			return err
 		}
 		run.PID, run.RemoteRun, run.Dir = pid, rr, rdir
 		wait = d.remoteWaiter(t.ID, rr)
 	} else {
-		cmdWait, pid, stdin, err := startLocal(o.W.Spec.Tool, req, extra, run.Log, prompt, n)
+		cmdWait, pid, stdin, err := startLocal(o.W.Spec.Tool, req, extra, conn{fmt.Sprintf("http://127.0.0.1:%d", d.env.Port), token}, run.Log, prompt, n)
 		if err != nil {
 			return err
 		}
@@ -634,8 +638,12 @@ func (d *dispatcher) launch(ctx context.Context, t ledger.Task, o launchOpts) er
 	return nil
 }
 
-// startLocal 在本机拉起：白名单环境（带 ATRIUM_WORKER=1）+ 工具要的变量 + 凭据；日志直接写文件（服务重启不影响执行者）。
-func startLocal(tool string, req workers.Request, extra map[string]string, log, prompt string, n int) (wait func() int, pid int, stdin *os.File, err error) {
+// conn 是执行者的命令行连回服务用的：服务地址与本次拉起的执行者令牌。
+type conn struct{ server, token string }
+
+// startLocal 在本机拉起：白名单环境（带 ATRIUM_WORKER=1）+ 工具要的变量 + 凭据 + 连回服务的地址与令牌；
+// 服务所在目录排进 PATH 最前（atrium 就是服务这个二进制）；日志直接写文件（服务重启不影响执行者）。
+func startLocal(tool string, req workers.Request, extra map[string]string, c conn, log, prompt string, n int) (wait func() int, pid int, stdin *os.File, err error) {
 	l, err := workers.Build(tool, req)
 	if err != nil {
 		return nil, 0, nil, err
@@ -651,6 +659,8 @@ func startLocal(tool string, req workers.Request, extra map[string]string, log, 
 		env[k] = v
 	}
 	env["ATRIUM_TASK"] = req.Task
+	env["ATRIUM_SERVER"], env["ATRIUM_WORKER_TOKEN"] = c.server, c.token
+	platform.SelfOnPath(env)
 	exe, err := platform.LookPath(l.Exe, env)
 	if err != nil {
 		return nil, 0, nil, api.Conflict("没装 %s：%v", l.Exe, err)

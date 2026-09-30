@@ -36,7 +36,11 @@ func TestMain(m *testing.M) {
 		if _, err := os.Stat("README"); err == nil {
 			fmt.Println("看到了 README")
 		}
-		fmt.Println("密钥 " + os.Getenv("MY_KEY") + " 标记 " + os.Getenv("ATRIUM_WORKER"))
+		fmt.Println("密钥 " + os.Getenv("MY_KEY") + " 标记 " + os.Getenv("ATRIUM_WORKER") + " 令牌 " + os.Getenv("ATRIUM_WORKER_TOKEN") +
+			" 服务 " + os.Getenv("ATRIUM_SERVER"))
+		if exe, err := os.Executable(); err == nil && strings.HasPrefix(os.Getenv("PATH"), filepath.Dir(exe)) {
+			fmt.Println("代理在 PATH 最前")
+		}
 		fmt.Println(strings.Repeat("x", 300_000)) // 超过一段的日志，要分段续传
 		os.Exit(3)
 	case "sleep":
@@ -184,7 +188,7 @@ func TestAgentLaunchLogExit(t *testing.T) {
 	g.task("t1")
 	log := filepath.Join(g.env.Paths.Data, "logs", "t1.log")
 	run, pid, wdir, err := Launch(context.Background(), g.env, host, Assignment{Task: "t1", Tool: "echo",
-		Request: workers.Request{Prompt: "做"}, Repo: origin, Branch: "t1-x", Base: "main", Env: map[string]string{"MY_KEY": "k1"}, Log: log})
+		Request: workers.Request{Prompt: "做"}, Repo: origin, Branch: "t1-x", Base: "main", Env: map[string]string{"MY_KEY": "k1"}, Token: "wt_t1_1_x", Log: log})
 	if err != nil || run != 1 || pid <= 0 || wdir != filepath.Join(dir, "repos", "a-b-t1") {
 		t.Fatalf("Launch：%d %d %s %v", run, pid, wdir, err)
 	}
@@ -194,7 +198,8 @@ func TestAgentLaunchLogExit(t *testing.T) {
 	}
 	got, _ := os.ReadFile(log)
 	s := string(got)
-	if !strings.Contains(s, "开工 a-b-t1") || !strings.Contains(s, "看到了 README") || !strings.Contains(s, "密钥 k1 标记 1") || len(got) < 300_000 {
+	if !strings.Contains(s, "开工 a-b-t1") || !strings.Contains(s, "看到了 README") || !strings.Contains(s, "密钥 k1 标记 1 令牌 wt_t1_1_x 服务 "+a.Cfg.Server) ||
+		!strings.Contains(s, "代理在 PATH 最前") || len(got) < 300_000 {
 		t.Fatalf("日志不全（%d 字节）：%.200s", len(got), s)
 	}
 	// 代理那边的运行记录退出后清掉。

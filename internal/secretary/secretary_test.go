@@ -1,8 +1,6 @@
 package secretary
 
 import (
-	"bytes"
-	"context"
 	"encoding/json"
 	"errors"
 	"regexp"
@@ -10,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/liu-zhengdong/atrium/internal/cli"
 	"github.com/liu-zhengdong/atrium/internal/events"
 	"github.com/liu-zhengdong/atrium/internal/org"
 	"github.com/liu-zhengdong/atrium/internal/platform"
@@ -126,24 +123,6 @@ func TestWithHook(t *testing.T) {
 	for _, bad := range []string{`{"hooks":[]}`, `{"hooks":{"SessionStart":{}}}`, `{"env":[]}`, `{"env":{"ATRIUM_AS":"u1"}}`} {
 		if _, _, err := WithHook(parse(bad)); err == nil {
 			t.Errorf("认不出的结构应报错：%s", bad)
-		}
-	}
-}
-
-// 秘书桥写服务状态，不是只读命令：执行者连着用户的服务时哪种用法都拒绝。
-func TestBridgeInWorker(t *testing.T) {
-	tbl := cli.NewTable("atrium", "测试")
-	Commands(tbl)
-	worker := func(k string) string { return map[string]string{"ATRIUM_WORKER": "1"}[k] }
-	for _, args := range [][]string{
-		{"secretary", "bridge", "--detach"},
-		{"secretary", "bridge", "--status"},
-		{"secretary", "bridge"},
-	} {
-		var out, errb bytes.Buffer
-		code := tbl.Main(context.Background(), args, cli.Env{Stdout: &out, Stderr: &errb, Getenv: worker})
-		if code != 1 || out.Len() != 0 || !strings.Contains(errb.String(), "执行者") {
-			t.Errorf("%v 应按执行者拒绝：退出码 %d，stdout %q，stderr %q", args, code, out.String(), errb.String())
 		}
 	}
 }

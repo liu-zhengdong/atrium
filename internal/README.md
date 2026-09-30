@@ -34,7 +34,7 @@ Go 代码怎么分包、包之间怎么调用、并行开发时各自改哪里�
 | `org/leaders` | 完成 | 负责人运行时：唤醒（攒批 30 秒、同一位只起一个、20 分钟上限、连续 2 次没处理完转交上一层）、负责人令牌与统一权限判定、`leader escalate`；拉起经 `leaders.SetLauncher` 由 workers／dispatch 接上 | — |
 | `org/agenda` | 完成 | 会生成任务的：选项单（拍板建任务）、周期任务（到点建任务并派发）；与 org 分包是因为要调 ledger（org 被 events 引用，不能再引用 ledger） | 用 org 的 `choices` `choice_options` `choice_option_orgs` `schedules` |
 | `events` | 完成 | 事件落库（要处理／知会两级、同一订阅者同一去重键合并）、`events wait/ack`（长轮询、首条后攒批、15 分钟租约）、订阅者「在听」、清理（每小时删掉最后更新超过 7 天的已确认与知会级事件，要处理且没确认的不删） | `events` |
-| `dispatch` | 完成 | 派活队列、挑执行者与机器、拉起、退出后重试／换人／续上／交关卡；`task run`（入队前经 `ledger.UseDeptRepo` 补部门的仓库）、`task tell`（捎话；`dispatch.Tell` 是捎话的唯一送达入口，改说明经 `ledger.Tell` 钩子也走它）、`task log`；装配 watch、agenda、gates 的入队钩子、`ledger.Tell` 与 `hosts.AdapterFor` | `queue` |
+| `dispatch` | 完成 | 派活队列、挑执行者与机器、拉起（每次签发执行者令牌与认证、权限判定）、退出后重试／换人／续上／交关卡；`task run`（入队前经 `ledger.UseDeptRepo` 补部门的仓库）、`task tell`（捎话；`dispatch.Tell` 是捎话的唯一送达入口，改说明经 `ledger.Tell` 钩子也走它）、`task log`；装配 watch、agenda、gates 的入队钩子、`ledger.Tell` 与 `hosts.AdapterFor` | `queue` |
 | `workers` | 完成 | 适配器（7 个内置 + 通用命令行）、档案三层叠加、日志信号判定、拉起记录 `Run`、经过解析 `Trace`（输出 JSON 事件的工具各自的解析挂在适配器 `Driver.read` 上，按执行者的话分段、步骤写成「工具名 路径」，认不出的事件记 `Unknown`；纯文本工具逐行原文）、执行者可用性（「工具+模型@机器」不可用标记：`MarkOf` 由退出信号翻成标记、`Blocked` 给挑执行者与挑机器判）、按拉起统计（`Stats`：每次拉起一个结果——交付、被交回、额度、起不来、其他失败，按「工具+模型」归、强度不单列）；`workers`（列、看档案与每次拉起的明细，只读）、`workers edit`（改档案，`--clear` 解除不可用标记） | `worker_profiles` `worker_marks` |
 | `gates` | 完成 | 交付方式（`delivery.go`：pr、local、dir、choice、message 各自的提示词、关卡、落地；local 的关卡与落地在 `local.go`）；查事实、判关卡、审阅（建审阅任务经 `gates.Enqueue` 派出）；等验收与 `task accept/reject`；档案经 `workers.Resolve`；按工作树登记的机器查 git（远程经 `hosts.Ask`），PR 由服务查；与 dispatch 的经历约定见 `gates/records.go` | — |
 | `gates/skillcheck` | 完成 | 技能声明的交付检查：技能的 `checks` 写检查名（`article`、`video`），关卡在本机工作目录里查表自己跑（构建与明暗截图；ffprobe、响度、第一帧不空白、联系表），产物放任务目录、结论与路径记进经历；每项有时限，跑不起来（缺工具、工作目录在远程）转受阻；org 保存技能时经 `Validate` 校验名字 | — |
@@ -45,7 +45,7 @@ Go 代码怎么分包、包之间怎么调用、并行开发时各自改哪里�
 | `quota` | 完成 | 额度读取、多机合并、富余（`Spares`）；只有服务的后台循环去读（本机自带读取到期就读，OpenQuota 每 5 分钟），读数连同 OpenQuota 的都存 `quota_cache`，派活、网页、命令都只取 `Last`；隔离实例（服务与代理都按数据目录不是缺省的算）不读本机登录与 OpenQuota；`quota`（只读）、`quota set`（改给用户留的份额） | `quota_cache` `quota_settings` |
 | `web` | 完成 | 只读网页与只读接口；`map`；点了立刻切页：先画上次数据（没有画页头与骨架），nav 与页面数据并行取，推送来了数据没变的一处不重画；执行者页额度是存下的读数（`quota.Last`），后台读到新数经推送随整页重取；今天页末尾一块是三个目标的数；「等你」= 待拍板的选项单 + 等你验收的交付 + 递到你这层的卡住任务 + 上交到秘书还没确认的事；部门页负责人一行点开是负责人抽屉（执行者组合、负责哪些部门、备忘按行分段，地址 `#oN/aN`，数据就用部门页的）；部门页任务按父子排成树（结束的子任务两件以上折成一行，没派的行尾写「等 tN」），任务抽屉给上级、子任务、要等的、在等它的，来源后的负责人名字点开是他的负责人抽屉；任务抽屉的「经过」是执行者真日志按段解析（`workers.ReadTrace`，与 `task log` 同一份解析）；周期任务在部门页（挂上一轮）、今天页「接下来 7 天」和抽屉（最近 5 轮，`agenda.Rounds`）里看得到，多久一轮与 `schedule ls` 共用 `agenda.Cadence`；部门页资料点开是资料抽屉（能放宽到整个主岛），原文走 `/ui/material/mN`（带 CSP sandbox，pdf 除外），按扩展名一处分派渲染：md（相对图片、链接按同部门同目录的资料标题解析）、html（沙箱 iframe，相对路径由服务按 `mN/<相对路径>` 解析）、pdf 与图片（浏览器原生）、其它文本等宽、docx 与 xlsx（`static/lib` 里 embed 的前端库，打开时才加载），其余给下载；代为注册一次性的 `import`（实现在 `importer`） | — |
 | `importer` | 完成 | 从旧 TS 库只读导入部门、要点、负责人、备忘、技能、资料、档案、机器 | — |
-| `secretary` | 完成 | 把事件注入 Claude Code 会话；`secretary bridge`（`--install-hook` 装 SessionStart hook 与 `ATRIUM_AS=secretary`；`--detach` 起好后输出根部门要点、此刻全景与秘书备忘进会话；执行者环境里 `--detach` 静默退出）、`statusline`（状态栏调用，不列在帮助里） | — |
+| `secretary` | 完成 | 把事件注入 Claude Code 会话；`secretary bridge`（`--install-hook` 装 SessionStart hook 与 `ATRIUM_AS=secretary`；`--detach` 起好后输出根部门要点、此刻全景与秘书备忘进会话；执行者令牌调不了事件接口，执行者里起不来）、`statusline`（状态栏调用，不列在帮助里） | — |
 
 ## 共同约定
 
@@ -74,7 +74,7 @@ type Module struct {
 - 回执：`c.Done(result, 人读文字, 下一步命令)`。人读模式打印文字，最后一行「下一步：…」；`--json` 输出 `{"ok":true,"result":…,"next":…}`。每条命令都支持 `--json`。
 - 失败：返回 `*api.Error`（见下）；人读模式打印「错误：…」和可执行时的「修正：…」，`--json` 输出 `{"ok":false,"error":{"code","message","next"?}}`。用法错误退出码 2，其余 1。
 - 字段校验的报错以参数名开头：`--title: 不能为空`。
-- 每条命令标读写：只读（不改服务、本机与数据）的写 `Read: true`，缺省算写。执行者连着用户的服务（`ATRIUM_WORKER=1` 且数据目录是缺省的那个）时写命令一律拒绝；隔离实例（`ATRIUM_DATA` 指向别处）不拦。
+- 命令行不判权限：连服务用哪枚令牌由环境定——带 `ATRIUM_WORKER_TOKEN`、`ATRIUM_SERVER` 且没设 `ATRIUM_DATA`（执行者）连那个地址用执行者令牌；带 `ATRIUM_LEADER_TOKEN`（负责人）用它；其余读数据目录里的用户令牌。能做什么由服务端按令牌判。
 - 值以 `--` 开头时写成 `--名字=值`。
 
 ### HTTP（`internal/api`）
@@ -83,7 +83,7 @@ type Module struct {
 - 路由：`r.Handle("POST /api/tasks/{id}/notes", func(q *api.Req) (any, error))`，Go 1.22 写法。`r.Public` 只给 `/health` 与 hosts 自己认机器令牌的 `/api/agent/*`。
 - 路径里的短号用 `q.Ref("id", "t")` 取，自动拒绝前缀不对、`..`、`t0` 之类。请求体用 `q.Decode(&v)`（拒绝未知字段，上限 1MB）。
 - 错误：`api.Usage`（400）、`api.NotFound`（404）、`api.Conflict`（409）、`api.Limit(next, …)`（409，满了必须给怎么腾地方）、`api.Forbidden`（403）、`api.Unavailable`（503，code `restarting`）；`.WithNext("atrium …")` 附修正命令。其他 error 一律 500 `internal`。请求 context 取消（服务停下或重启）自动变成 `restarting`，客户端据此等新服务后重发。
-- 身份：`q.Actor{ID, Kind}`。某类身份的统一权限判定用 `r.AddGuard(kind, func(q) error)`（认证后、处理函数前；负责人的在 `org/leaders`，写接口默认拒绝）。用户令牌得到 `u1/user`；带 `X-Atrium-As: secretary`（命令行取自 `ATRIUM_AS`，`secretary bridge --install-hook` 写进秘书目录的项目设置）得到 `secretary/user`：权限同用户，署名是秘书（纯函数 `api.Sign`，其他身份忽略这个头）。负责人令牌由 org 在自己的 `Routes` 里 `r.AddAuth(func(token) (api.Actor, bool))` 接入，按 `Actor.Kind` 在处理函数里判权限。机器令牌不进全局认证：hosts 把 `/api/agent/*` 用 `Public` 注册、在处理函数里自己认，机器令牌只在这组接口有效。
+- 身份：`q.Actor{ID, Kind}`。某类身份的统一权限判定用 `r.AddGuard(kind, func(q) error)`（认证后、处理函数前；负责人的在 `org/leaders`，写接口默认拒绝）。用户令牌得到 `u1/user`；带 `X-Atrium-As: secretary`（命令行取自 `ATRIUM_AS`，`secretary bridge --install-hook` 写进秘书目录的项目设置）得到 `secretary/user`：权限同用户，署名是秘书（纯函数 `api.Sign`，其他身份忽略这个头）。负责人令牌由 org 在自己的 `Routes` 里 `r.AddAuth(func(token) (api.Actor, bool))` 接入，按 `Actor.Kind` 在处理函数里判权限。执行者令牌由 dispatch 每次拉起签发（`wt_任务_第几次_签名`，签名以用户令牌为钥匙，不存库；只在这次拉起还在跑时有效，纯判定 `dispatch.WorkerLive`），得到 `tN 执行者/worker`：只读接口（不含事件、服务、令牌）放行，写只许往本任务所在部门加细节资料（纯判定 `dispatch.WorkerRule`、`WorkerMaterialCheck`），其余拒绝。机器令牌不进全局认证：hosts 把 `/api/agent/*` 用 `Public` 注册、在处理函数里自己认，机器令牌只在这组接口有效。
 
 ### 存储（`internal/store`）
 
@@ -154,7 +154,7 @@ type Module struct {
 
 ### 子进程（`internal/platform`）
 
-- 子进程只经 `platform.Start(platform.Spec{Path, Args, Dir, Env, Stdout, Stderr, Detached})` 拉起；`Env` 必填。执行者用 `platform.WorkerEnv(runtime.GOOS, platform.EnvMap(os.Environ()))`（带 `ATRIUM_WORKER=1`，不带 `ATRIUM_*` 与凭据），任务声明的凭据在其后逐个注入。
+- 子进程只经 `platform.Start(platform.Spec{Path, Args, Dir, Env, Stdout, Stderr, Detached})` 拉起；`Env` 必填。执行者用 `platform.WorkerEnv(runtime.GOOS, platform.EnvMap(os.Environ()))`（带 `ATRIUM_WORKER=1`，不带 `ATRIUM_*` 与凭据），任务声明的凭据在其后逐个注入，再加 `ATRIUM_SERVER`、`ATRIUM_WORKER_TOKEN`，并经 `platform.SelfOnPath` 把服务（远程是代理）这个二进制排进 PATH 最前。
 - 执行者一律 `Detached: true`：服务重启不影响它；结束用 `platform.KillTree(pid)`。拉起后必须 `Wait`（Unix 不 Wait 会留僵尸，`Alive` 会一直报活）。
 - 找程序用 `platform.LookPath(name, env)`（按子进程环境的 PATH/PATHEXT；`platform.EnvMap` 在 Windows 上把变量名落成大写）；shell 用 `platform.Shell(cmd)`。Windows 上找到的 `.cmd`/`.bat`（npm 装的 claude.cmd 等）由 `Start` 经 `cmd.exe /d /s /c` 拉起，参数带换行会报错。
 
@@ -190,5 +190,5 @@ ledger   ─→ events.Emit
 - `task add` 的回执已给出下一步 `atrium task run tN`，`task show`/`task tree` 也会指向它：dispatch 必须提供 `task run`。
 - 状态变化只能经 `ledger.Apply`；需要新的事件种类就在 PR 里提，由 ledger 加进 `Transition` 与表驱动测试，不要直接 `UPDATE tasks SET status`。
 - 命令总数规格上限 60，`cmd/atrium/main_test.go` 会数；`Hidden` 的（serve、agent、agent install、import、statusline）不计数，由帮助末尾一行点名。
-- 负责人令牌的权限表按路由模式判（`leaders.RuleFor`）；`cmd/atrium/routes_test.go` 装上全部模块的真实路由逐条核对，新加写接口要在那张表里写明负责人能不能调。
+- 负责人令牌的权限表按路由模式判（`leaders.RuleFor`）；`cmd/atrium/routes_test.go` 装上全部模块的真实路由逐条核对，新加写接口要在那张表里写明负责人能不能调；同一处核对执行者令牌的写接口只有加资料。
 - 命令组名已占用：`task`、`org`、`point`、`auth`。其余按规格：`leader`、`memo`、`choice`、`skill`、`material`、`schedule`、`secret`（org）、`events`（events）、`host`、`agent`（hosts）、`workers`（workers）、`quota`（quota）、`secretary`（secretary）。单词命令：`top`（watch）、`statusline`（secretary）、`map`、`update`。

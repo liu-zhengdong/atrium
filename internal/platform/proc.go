@@ -27,6 +27,16 @@ type Spec struct {
 // EnvMap 把 os.Environ() 形式转成 map（Windows 上变量名按大写）。
 func EnvMap(list []string) map[string]string { return envMap(runtime.GOOS, list) }
 
+// SelfOnPath 把本进程所在目录排进 env 的 PATH 最前：负责人、执行者里跑的 atrium 就是服务（或远程代理）这同一个二进制。
+func SelfOnPath(env map[string]string) {
+	exe, err := os.Executable()
+	if err != nil {
+		return
+	}
+	key := EnvKey(runtime.GOOS, "PATH")
+	env[key] = strings.Join([]string{filepath.Dir(exe), env[key]}, PathListSeparator(runtime.GOOS))
+}
+
 // Start 拉起子进程；Windows 上 .cmd/.bat（如 npm 装的 claude.cmd）经 cmd.exe 拉起。调用方负责 Wait（Unix 上不 Wait 会留下僵尸，Alive 会一直报活着）。
 func Start(s Spec) (*exec.Cmd, error) {
 	if s.Env == nil {

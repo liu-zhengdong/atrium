@@ -11,7 +11,6 @@ import (
 func mapCommand() cli.Command {
 	return cli.Command{
 		Path:    "map",
-		Read:    true,
 		Summary: "打开只读网页（今天、部门、执行者）；交互终端里直接开浏览器，否则打印网址（可收藏）",
 		Run: func(c *cli.Ctx) error {
 			if err := c.MaxArgs(0); err != nil {

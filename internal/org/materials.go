@@ -492,7 +492,7 @@ func materialCommands(t *cli.Table) {
 			}
 			return c.Done(list, b.String(), "atrium material ls --node "+dept)
 		}})
-	t.Add(cli.Command{Path: "material ls", Read: true, Args: "[mN]", Summary: "按部门列资料（--node 只看一个部门及用量）；给 mN 取这一份的内容",
+	t.Add(cli.Command{Path: "material ls", Args: "[mN]", Summary: "按部门列资料（--node 只看一个部门及用量）；给 mN 取这一份的内容",
 		Flags: []cli.Flag{
 			{Name: "node", Value: "oN", Help: "只看这个部门的"},
 			{Name: "archived", Bool: true, Help: "只看已归档的"},

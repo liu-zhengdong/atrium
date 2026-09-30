@@ -26,14 +26,6 @@ func TestTable(t *testing.T) {
 	if visible > 60 {
 		t.Errorf("命令 %d 条，超过上限 60", visible)
 	}
-	// 执行者连着用户的服务时只能跑只读命令：看的与改的分成两条，看的那条标 Read。
-	for path, read := range map[string]bool{"quota": true, "quota set": false, "workers": true, "workers edit": false,
-		"material ls": true, "material add": false} {
-		c, rest := Table().Lookup(strings.Fields(path))
-		if c == nil || len(rest) != 0 || c.Read != read {
-			t.Errorf("%s 应为 Read=%v", path, read)
-		}
-	}
 	// 不列出的命令在帮助末尾点名，免得找不到。
 	var out strings.Builder
 	Table().Main(context.Background(), []string{"--help"}, cli.Env{Stdout: &out, Stderr: &out, Getenv: func(string) string { return "" }})

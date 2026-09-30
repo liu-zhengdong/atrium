@@ -312,17 +312,14 @@ func waitLimited(ctx context.Context, cmd *exec.Cmd, limit time.Duration) error 
 	}
 }
 
-// leaderEnv：执行者白名单环境，去掉 ATRIUM_WORKER（负责人要用命令行），加本次令牌与数据目录；
+// leaderEnv：执行者白名单环境，去掉 ATRIUM_WORKER（负责人不是执行者），加本次令牌与数据目录；
 // 服务所在目录排进 PATH 最前，atrium 命令就是这个服务的同一个二进制。
 func leaderEnv(base map[string]string, token, data string) map[string]string {
 	env := platform.WorkerEnv(runtime.GOOS, base)
 	delete(env, "ATRIUM_WORKER")
 	env["ATRIUM_LEADER_TOKEN"] = token
 	env["ATRIUM_DATA"] = data
-	if exe, err := os.Executable(); err == nil {
-		key := platform.EnvKey(runtime.GOOS, "PATH")
-		env[key] = strings.Join([]string{filepath.Dir(exe), env[key]}, platform.PathListSeparator(runtime.GOOS))
-	}
+	platform.SelfOnPath(env)
 	return env
 }
 

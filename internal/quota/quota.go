@@ -319,7 +319,7 @@ func Routes(r *api.Router, env *app.Env) {
 
 func Commands(t *cli.Table) {
 	t.Group("quota", "额度：各账号用量与给用户留的份额")
-	t.Add(cli.Command{Path: "quota", Read: true, Summary: "各账号额度与富余（撞了额度的「工具+模型@机器」见 atrium workers）",
+	t.Add(cli.Command{Path: "quota", Summary: "各账号额度与富余（撞了额度的「工具+模型@机器」见 atrium workers）",
 		Run: func(c *cli.Ctx) error {
 			if err := c.MaxArgs(0); err != nil {
 				return err

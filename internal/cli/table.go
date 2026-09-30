@@ -26,9 +26,7 @@ type Command struct {
 	Detail  string // 只在这条命令的 --help 里显示的长说明（如输入文件的格式）
 	Flags   []Flag
 	// Local：不经服务就能完成（start、status、stop）。其余命令都经服务 HTTP 完成。
-	Local bool
-	// Read：只读，不改服务、本机与数据；执行者连着用户的服务时只能跑这些（见 Guarded）。缺省算写。
-	Read   bool
+	Local  bool
 	Hidden bool // 不在帮助里列出（如服务进程入口 serve）
 	Run    func(c *Ctx) error
 }

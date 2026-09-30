@@ -28,6 +28,8 @@ type Assignment struct {
 	Base    string          `json:"base,omitempty"`
 	// Env 是任务声明的凭据：名称 → 值。只在这条指令里（服务与代理都只放内存），代理按名称合进执行者环境。
 	Env map[string]string `json:"env,omitempty"`
+	// Token 是这次拉起的执行者令牌：代理连同自己连服务的地址一起放进执行者环境（ATRIUM_WORKER_TOKEN、ATRIUM_SERVER）。只放内存。
+	Token string `json:"token,omitempty"`
 	// Log 是服务这台上的日志文件：代理传来的日志按字节偏移追加到这里。不发给代理。
 	Log string `json:"-"`
 }

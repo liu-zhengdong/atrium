@@ -42,7 +42,7 @@ echo "ERROR: You've hit your usage limit. Try again in ~5 min."
 exit 1
 `,
 	"kimi": `#!/bin/sh
-echo started
+echo "started server=$ATRIUM_SERVER token=${ATRIUM_WORKER_TOKEN:+yes}"
 sleep 30
 `,
 }
@@ -71,6 +71,10 @@ func setup(t *testing.T) (*app.Env, *dispatcher) {
 	t.Cleanup(func() { db.Close() })
 	env := &app.Env{DB: db, Paths: config.Paths{Data: filepath.Join(dir, "data")}, Log: slog.New(slog.NewTextHandler(io.Discard, nil)),
 		Pause: &pause.Store{DB: db}}
+	// 执行者令牌以用户令牌为签名钥匙：服务启动时写好，测试里自己写。
+	if err := os.WriteFile(env.Paths.Token(), []byte("test-user-token"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	// 不读开发者本机的额度与机器：只用本机、没有额度数据。
 	// 假的内置工具在 PATH 上：自动挑人时当用户的服务挑它们（换人重派要用）。
 	oldPick, oldSpares, oldIsolated := pickHost, spares, isolated

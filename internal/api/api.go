@@ -4,10 +4,12 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"regexp"
@@ -91,6 +93,30 @@ func (r *Req) DecodeMax(v any, max int64) error {
 		if errors.As(err, &tooBig) {
 			return Usage("请求体超过这个接口的上限 %.1f MB：拆小或分几次", float64(max)/(1<<20))
 		}
+		return Usage("请求体不合法：%v", err)
+	}
+	return nil
+}
+
+// Peek 读出整个 JSON 请求体解到 v（不拒未知字段）再放回，处理函数照常 Decode：给权限判定（Guard）看请求体用。
+// 按 max 读全：只读一截会把合法的大请求（如资料上传）截断成不合法的 JSON。请求体为空时 v 不变。
+func (r *Req) Peek(v any, max int64) error {
+	if r.Body == nil {
+		return nil
+	}
+	raw, err := io.ReadAll(http.MaxBytesReader(nil, r.Body, max))
+	var tooBig *http.MaxBytesError
+	if errors.As(err, &tooBig) {
+		return Usage("请求体超过上限 %.1f MB：拆小或分几次", float64(max)/(1<<20))
+	}
+	if err != nil {
+		return err
+	}
+	r.Body = io.NopCloser(bytes.NewReader(raw))
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return nil
+	}
+	if err := json.Unmarshal(raw, v); err != nil {
 		return Usage("请求体不合法：%v", err)
 	}
 	return nil

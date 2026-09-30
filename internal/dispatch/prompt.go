@@ -11,6 +11,7 @@ import (
 // PromptInput 是提示词的全部材料。
 type PromptInput struct {
 	Task    string
+	Org     string // 任务所在部门：成品交进这个部门的资料；空表示不属于任何部门
 	Title   string
 	Detail  string
 	Global  string   // 用户的全局原则（org.Principles 拼好的一节）；没有为空
@@ -34,10 +35,19 @@ const langRule = "用中文写过程说明和最后的交付说明（命令、�
 var commonRules = []string{
 	"凭据不打印、不写进提交、PR、issue 或日志。",
 	"不碰用户的真实环境：不启停用户在跑的服务，不读写用户主目录里的数据；要跑起来验证，就用临时数据目录与空闲端口起隔离实例，用完停掉。",
-	"别的部门已有的资料：atrium material ls 按部门列，atrium material ls mN 取全文（二进制加 --out 文件）；跨部门的事先查再调研，不直接搜数据目录。",
+	"资料（在哪台机器上都能用 atrium 取）：atrium material ls 按部门列，atrium material ls mN 取全文（二进制加 --out 文件）；说明里给的 mN 就是给你的输入。跨部门的事先查再调研，不直接搜数据目录。",
 	"只跑改动相关的快检查，不跑全量测试（全量由运行时跑）。",
-	"给人看的产物（报告、页面、站点、视频、图）：把能直接打开的成品或截图放进一个单独目录——当前目录上一级的 <任务号>-show/（原地干就在工作地点里单建一个子目录），不提交进仓库；" +
-		"交付说明开头写这个目录的绝对路径和入口文件，负责人收进部门资料。网页资料预览只认相对路径：站点按相对路径构建（如 base 设成 ./），做不到就交截图。",
+}
+
+// showRule 是给人看的产物怎么交（纯函数）：执行者自己交进任务所在部门的资料；任务不属于任何部门时交不了资料，写路径。
+func showRule(dept string) string {
+	const what = "给人看的产物（报告、页面、站点、视频、图）："
+	if dept == "" {
+		return what + "本任务不属于任何部门，交不了资料：成品放进一个单独目录（不提交进仓库），交付说明开头写这个目录的绝对路径和入口文件。"
+	}
+	return what + "把能直接打开的成品或截图放进一个只放它们的目录（不提交进仓库），做完 atrium material add " + dept +
+		" <目录> --note <里面有什么、什么时候用> 交进部门资料，交付说明开头写资料号 mN 和入口文件。" +
+		"网页资料预览只认相对路径：站点按相对路径构建（如 base 设成 ./），做不到就交截图。"
 }
 
 // BuildPrompt 拼提示词（纯函数）：标题 + 语言要求 + 详述 + 用户全局原则 + 部门要点链 + 技能路径 + 执行者档案正文 + 仓库约定 + 捎话与交回原因 + 通用约束。
@@ -71,7 +81,7 @@ func BuildPrompt(in PromptInput) string {
 	}
 	section("上次交付被交回的原因（先解决这些）", in.Bounces)
 	section("运行中的补充（后说的优先）", in.Tells)
-	section("通用约束", append(gates.PromptRules(in.Repo, in.Dir, in.Origin, in.Branch), commonRules...))
+	section("通用约束", append(append(gates.PromptRules(in.Repo, in.Dir, in.Origin, in.Branch), commonRules...), showRule(in.Org)))
 	return b.String()
 }
 

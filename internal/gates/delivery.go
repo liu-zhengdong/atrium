@@ -62,7 +62,7 @@ var (
 		land: func(*Gate, context.Context, ledger.Task) (landed, error) {
 			return landed{stage: ledger.StageMerge, note: "进合入队列"}, nil
 		}}
-	// local：本机仓库、不经 GitHub；关卡在本机查提交与改动；落地是合进本机主分支（landLocal）。
+	// local：本机仓库、不经 GitHub；关卡在本机查提交与改动；落地是合进本机主分支并清理工作树（landLocal）。
 	deliverLocal = Delivery{Name: "local",
 		Rules: []string{
 			"本机交付：在分支 %s 上提交；不要推送、不要合入主分支，验收过后由运行时合进本机主分支。不用改代码的活不提交，结论写在最后的回复里。",

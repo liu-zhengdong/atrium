@@ -219,3 +219,13 @@ func TestBrief(t *testing.T) {
 		t.Fatalf("全局原则、技能索引应在要点之前：\n%s", got)
 	}
 }
+
+// notify 沿用现有 bridge，但转告语义必须出现在实际注入消息里。
+func TestNotifyPrompt(t *testing.T) {
+	p := Prompt(Batch{Fresh: []events.Row{{ID: 9, Kind: events.LeaderEscalate, Body: json.RawMessage(`{"from":"a2","kind":"notify","note":"将调整应用配置"}`)}}}, 30*time.Minute)
+	for _, want := range []string{"a2 知会用户", "将调整应用配置", "秘书转告用户后确认", "不需回复或拍板", "负责人继续派活", "atrium events ack 9"} {
+		if !strings.Contains(p, want) {
+			t.Fatalf("知会消息缺 %s：%s", want, p)
+		}
+	}
+}

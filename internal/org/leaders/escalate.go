@@ -20,7 +20,7 @@ type Escalation struct {
 	Task string `json:"task,omitempty"`
 }
 
-// Escalate：负责人上报一件事，发给上一层负责人（没有投秘书）；给了任务就在任务经历里也记一笔。
+// Escalate：负责人上报一件事，发给上一层负责人（没有投秘书），notify 直接投秘书；给了任务就在任务经历里也记一笔。
 // 转交下层上报（--event）时带上原文；原事件由这位自己 events ack。
 func Escalate(ctx context.Context, db *store.DB, leader string, in EscalateIn) (Escalation, error) {
 	if err := CheckEscalate(in); err != nil {
@@ -69,7 +69,11 @@ func Escalate(ctx context.Context, db *store.DB, leader string, in EscalateIn) (
 			}
 			dept = t.Org
 		}
-		out = Escalation{To: Upstream(ps, lm, leader, dept), Kind: in.Kind, Task: task}
+		to := org.Secretary
+		if in.Kind != "notify" {
+			to = Upstream(ps, lm, leader, dept)
+		}
+		out = Escalation{To: to, Kind: in.Kind, Task: task}
 		if err := events.Emit(ctx, tx, events.Event{Kind: events.LeaderEscalate, Task: task, Dept: dept,
 			Target: out.To, Body: body}); err != nil {
 			return err

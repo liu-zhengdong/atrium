@@ -36,9 +36,9 @@ func moduleFor(h *hub) app.Module {
 }
 
 func commands(t *cli.Table) {
-	t.Add(cli.Command{Path: "leader escalate", Args: "<说明>", Summary: "负责人上报：要别的部门配合、越权、无法解决",
+	t.Add(cli.Command{Path: "leader escalate", Args: "<说明>", Summary: "负责人上报：要别的部门配合、越权、无法解决、知会用户",
 		Flags: []cli.Flag{
-			{Name: "kind", Value: "cross|beyond|stuck", Help: "上报哪一类（必填）"},
+			{Name: "kind", Value: "cross|beyond|stuck|notify", Help: "上报哪一类（必填）"},
 			{Name: "task", Value: "tN", Help: "关于哪件任务"},
 			{Name: "event", Value: "编号", Help: "转交下层上报给你的那条事件"},
 		},
@@ -58,6 +58,9 @@ func commands(t *cli.Table) {
 			in := EscalateIn{Kind: c.Str("kind"), Note: note, Task: c.Str("task"), Event: int64(ev)}
 			if err := c.Call("POST", "/api/escalations", in, &out); err != nil {
 				return err
+			}
+			if out.Kind == "notify" {
+				return c.Done(out, "已知会秘书；不需回复，继续派活", "atrium task run <tN>")
 			}
 			return c.Done(out, fmt.Sprintf("已上报 %s（%s）", out.To, kindLabel(out.Kind)), "atrium events ack <编号>")
 		}})

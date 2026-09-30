@@ -36,6 +36,9 @@ type Request struct {
 	Session    string    `json:"session,omitempty"` // 非空表示带着补充继续这个会话
 	Endpoint   *Endpoint `json:"endpoint,omitempty"`
 	CLI        *CLISpec  `json:"cli,omitempty"` // 通用命令行执行者的写法（远程没有档案库，随请求带过去）
+	// 本机工具（codex 的 -c 覆盖，含 computer use 与 chrome-devtools），由拉起那台机器经 LocalTools 填，服务端不填
+	ComputerUse []string `json:"computer_use,omitempty"`
+	ChromeURL   string   `json:"chrome_url,omitempty"`
 }
 
 // Build 按工具名算出进程调用（纯函数）：内置工具用内置适配器，通用命令行执行者用 req.CLI。
@@ -195,6 +198,7 @@ var initSession = regexp.MustCompile(`"type":"system","subtype":"init"[^\n]*?"se
 // 运行中写入的用户消息在工具调用边界读入，--replay-user-messages 把读入的消息带 isReplay 回显。
 // --setting-sources 不含 local：工作树顺着读到主检出的 .claude/settings.local.json（用户个人设置，
 // 秘书目录在那里写着 env ATRIUM_AS=secretary 与起秘书桥的 SessionStart hook），执行者不该带上。
+// --strict-mcp-config：只带 Atrium 显式给出的 MCP（执行者会话的工具集见 computeruse.go）。
 // 缺省模型 opus 是 CLI 的别名，跟随最新的 Opus；不传 --model 会用用户 settings.json 里的 model。
 func claudeAdapter() *Driver {
 	a := &Driver{Tool: "claude", Exe: "claude", DefaultModel: "opus", Efforts: []string{"low", "medium", "high", "xhigh", "max"},
@@ -208,7 +212,14 @@ func claudeAdapter() *Driver {
 		if in.Live {
 			args = append(args, "--input-format", "stream-json", "--replay-user-messages")
 		}
-		args = append(args, "--permission-mode", "bypassPermissions", "--setting-sources", "user,project")
+		args = append(args, "--permission-mode", "bypassPermissions", "--setting-sources", "user,project", "--strict-mcp-config")
+		if in.ChromeURL != "" {
+			config, err := json.Marshal(map[string]any{"mcpServers": map[string]any{"chrome-devtools": chromeMCP(in.ChromeURL)}})
+			if err != nil {
+				return Launch{}, err
+			}
+			args = append(args, "--mcp-config", string(config))
+		}
 		if in.Model != "" {
 			args = append(args, "--model", in.Model)
 		}
@@ -224,19 +235,25 @@ func claudeAdapter() *Driver {
 	return a
 }
 
-// codex exec：--json 逐行输出事件；-C 工作目录、-s 沙箱、-m 模型、强度走 -c model_reasoning_effort；PROMPT 写 - 从标准输入读。
+// codex exec：--json 逐行输出事件；-C 工作目录、-m 模型、强度走 -c model_reasoning_effort；PROMPT 写 - 从标准输入读。
 // --skip-git-repo-check：没有仓库的任务（work/、工作地点、审阅）目录不是 git 仓库，不带 codex 直接拒绝启动。
 // --ignore-user-config：不读用户个人的 config.toml（模型、强度、MCP、hooks、memories），登录照用；没写模型时用 CLI 自带的缺省（最新）。
-// 继续：codex exec resume --json <会话> -（没有 -C、-s，沙箱走配置覆盖）；会话 id 是 thread.started 的 thread_id。
+// 本机装了 computer use 时再用 -c 把那几张表带上（in.ComputerUse，见 computeruse.go）。
+// --dangerously-bypass-approvals-and-sandbox：不开沙箱、不问审批，computer use 的逐应用授权也由它放行。
+// 继续：codex exec resume --json <会话> -（没有 -C）；会话 id 是 thread.started 的 thread_id。
 func codexAdapter() *Driver {
 	a := &Driver{Tool: "codex", Exe: "codex", Efforts: []string{"minimal", "low", "medium", "high", "xhigh"},
 		Tell: TellResume, JSON: true, Endpoints: []string{"responses"}, read: readCodex, session: regexp.MustCompile(`"type":"thread.started","thread_id":"([0-9a-f-]{36})"`)}
 	a.build = func(in Request) (Launch, error) {
 		var args []string
 		if in.Session != "" {
-			args = []string{"exec", "resume", "--json", "--skip-git-repo-check", "--ignore-user-config", "-c", `sandbox_mode="danger-full-access"`}
+			args = []string{"exec", "resume", "--json", "--skip-git-repo-check", "--ignore-user-config", "--dangerously-bypass-approvals-and-sandbox"}
 		} else {
-			args = []string{"exec", "--json", "--skip-git-repo-check", "--ignore-user-config", "-C", in.Dir, "-s", "danger-full-access"}
+			args = []string{"exec", "--json", "--skip-git-repo-check", "--ignore-user-config", "--dangerously-bypass-approvals-and-sandbox", "-C", in.Dir}
+		}
+		args = append(args, "--disable", "apps")
+		for _, kv := range in.ComputerUse {
+			args = append(args, "-c", kv)
 		}
 		if in.Model != "" {
 			args = append(args, "-m", in.Model)
@@ -443,6 +460,10 @@ func (a *Driver) Spec(req Request, env map[string]string) (platform.Spec, error)
 		req.PromptFile = f.Name()
 	}
 	req.Live = false
+	req, err := LocalTools(a.Tool, req)
+	if err != nil {
+		return platform.Spec{}, err
+	}
 	l, err := Build(a.Tool, req)
 	if err != nil {
 		return platform.Spec{}, err

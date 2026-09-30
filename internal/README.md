@@ -9,7 +9,7 @@ Go 代码怎么分包、包之间怎么调用、并行开发时各自改哪里�
 3. **命令注册在自己包里**：`Commands(t *cli.Table)` 里 `t.Group(...)` 声明自己的组（每组只声明一次），`t.Add(...)` 加命令。`task` 组由 ledger 声明，别的包直接往里加 `task run` 之类，不再声明。
 4. **共享文件只有三个**，改时只动自己那一段，合并冲突按段解决：
    - `internal/store/schema.sql`：每张表一段，归属见下表。开发期不做迁移，改表就改这里，本地删库重建。
-   - `go.mod` / `go.sum`：依赖只用标准库、`modernc.org/sqlite`、`gopkg.in/yaml.v3`（workers 解析档案时再加）。冲突时 `go mod tidy`。
+   - `go.mod` / `go.sum`：依赖使用标准库、`modernc.org/sqlite`、`gopkg.in/yaml.v3`（档案）、`github.com/pelletier/go-toml/v2`（执行者工具配置）。冲突时 `go mod tidy`。
    - `scripts/smoke.sh`：主路径冒烟，加步骤只往末尾 `stop` 之前追加自己的一段。
 5. **快检查**：`.agents/check`（gofmt、vet 与 Windows/Linux 交叉编译、build、全部测试、`--help` 冒烟）。端到端：`scripts/smoke.sh`。单包测试超过 30 秒在 PR 里说明。
 6. **开发期不写兜底**：不做自愈、旧写法兼容、自动回滚；出错就返回错误停下。
@@ -156,7 +156,7 @@ type Module struct {
 - 退出后 dispatch 自己收尾：正常 → `ExitOK`（进入交付检查）；临时错误同一执行者重试 1 次、再换人；思考耗尽换人（至多 2 次，换上的执行者在上一轮那台接不了就另挑机器）；额度用尽、起不来（没登录、缺运行环境，标整个「工具@机器」）、模型名无效、零步骤出错退出经 `workers.MarkOf` 把「工具+模型@机器」标成不可用（额度到恢复时刻，读不出按 4 小时；零步骤出错退出原因不明，同样 4 小时后自动解除；其余等人 `workers edit --clear`），转失败后重新排队——挑执行者时按符合任务条件的可用主机判，各台的挑机器同样避开（机器自检不过的标记同一处、同样避开，见 hosts）；「工具+模型」近 5 次拉起里启动失败（额度、起不来、其他）≥2 次的，挑执行者时排到能接的后面（纯函数 `Shaky`，只排序不排除，`--dry-run` 的推荐理由写出来）；有没送到的补充说明按工具继续会话或重派；其余 `ExitFail`。任务已不在 running/""（watch 或人先收了尾）时只补退出用量记录，不再改状态或重新派活。
 - 隔离实例（`config.Paths.Isolated`：数据目录不是缺省的那个）不自己拉起本机真实的模型进程：自动挑执行者（没写 `--worker`，含定时任务、审阅、换人）时内置工具一律不挑，只挑通用命令行执行者；写死 `--worker` 不拦（测试把假 `claude` 放进 PATH 就靠它）。负责人唤醒同理（`ATRIUM_LEADER_WAKE=1` 才开）。
 - 别的包要重新派：`dispatch.Enqueue(ctx, env, id, Options{…}, actor)`（即 task run，写队列行与 risk）；watch 经 `Hooks.Requeue`、定时任务经 `agenda.Enqueue`、审阅任务经 `gates.Enqueue`，都在 dispatch 的 Routes 里接上。交回（`gates.Bounce`）只转 queued、不写队列行：dispatch 对没有队列行的 queued 任务沿用上次拉起的执行者、机器（工作目录在那里；接不了就等或转受阻，不换机）、风险与凭据。
-- 远程：`workers.Request` 是纯数据，代理拿到后填 `Dir`，把提示词写到自己的任务目录并填本机的 `PromptFile`，用 `workers.Build(tool, req)` 算出同样的调用。
+- 远程：`workers.Request` 是纯数据，代理拿到后填 `Dir`，把提示词写到自己的任务目录并填本机的 `PromptFile`，经 `workers.LocalTools` 补上本机才知道的工具，再用 `workers.Build(tool, req)` 算出同样的调用；本机拉起同样先过 `LocalTools`。
 - 工作树回收：dispatch 生命周期循环统一判 `Reclaimable`，`done`、`cancelled` 在执行者退出后回收；退回、受阻、可直接重派的 `failed` 保留。启动与后续循环按同一规则分页补清全部机器的工作树登记，离线代理上线后再清；回收成功记 `worktree_reclaimed`，不重复处理。回收运行时创建的仓库工作树和本地 `task-tN` 分支，任务临时目录 `tasks/tN/tmp` 同步回收（包括只读文件）；无仓库任务也回收临时目录，工作内容、prompt、run 日志及指定的工作地点保留。重开经原创建入口重建：已推送的任务分支还在就从它继续，否则从默认基线重新开始；终态里未提交、未推送的改动随工作树删除。merge 与 gates 的应用交付结果只负责合入，不再自行清理。早期缺 `host` 的 worktree、launch 按本机登记处理，仍核对本实例任务目录与分支归属；缺目录、无效登记或归属不符经 `ledger.EachTask` 记 `loop_error` 并保留，单件错误不停止服务、不重复重试。
 
 #### 接入一个执行者
@@ -168,6 +168,7 @@ type Module struct {
 - **可用性**：用没登录、额度用尽、模型名无效的日志样本验证 `workers/signals.go` 的 `Classify` 与 `workers/marks.go` 的 `MarkOf`，确认失败能分类并挡住后续分派任务。
 - **额度**：由 `workers.Resolved.Account()` 唯一给出额度账号，调用方直接使用，自带读取接在 `quota/readers.go` 并登记 `quota/merge.go` 的 `Accounts`，或核对 OpenQuota 的 `providerId` 与账号一致（`quota/openquota.go`、`quota/merge.go`），在执行者详情用假读数确认 `quota.Last` 的已用、周期进度与富余；缺周期依据不能把剩余百分比当富余。无法读取账号用量或余额时，在档案正文明确写「无读数」、原因及自动挑人的处理（如 `auto=false` 只接点名派活，无法保证用户留份额）。
 - **远程能力**：确认 `workers/tools.go` 的 `ToolCatalog` 包含命令，`hosts/agent.go` 能取得目录并经 `hosts/probe.go` 上报可用性，登录判定在 `hosts/info.go`。
+- **工具集**：执行者会话的工具由 Atrium 给出，不继承用户个人配置中的 MCP；要什么在适配器里显式带上，并在 `workers/computeruse.go` 开头的说明里写清带了什么、各做什么。
 - **补充说明与并发**：核对 `workers/adapter.go` 的 `Tell`、会话续接与 `Exclusive`（通用命令行档案在 `workers/cli.go`），确认 `dispatch/actions.go` 的补充说明和 `dispatch/pick.go` 的并发约束适用。
 - **自动挑人**：在档案明确 `auto`、`trust`、`max_risk`，用 `workers/profile.go`、`workers/refusal.go` 与 `dispatch/select.go` 核对是否参与自动挑人及能接的风险。
 

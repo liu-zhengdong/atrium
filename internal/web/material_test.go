@@ -64,7 +64,7 @@ func TestMaterialRoute(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := org.AddMaterial(ctx, db, data, org.MaterialInput{Org: dept.ID, Note: "改", Files: []org.MaterialFile{{Name: "report.md", Content: []byte("# 第二版")}}}, "u1"); err != nil {
+	if _, err := org.AddMaterial(ctx, db, data, org.MaterialInput{ID: md.ID, Note: "改", Files: []org.MaterialFile{{Name: "report.md", Content: []byte("# 第二版")}}}, "u1"); err != nil {
 		t.Fatal(err)
 	}
 	set, err := org.AddMaterial(ctx, db, data, org.MaterialInput{Org: dept.ID, Title: "shots", Note: "截图", Files: []org.MaterialFile{

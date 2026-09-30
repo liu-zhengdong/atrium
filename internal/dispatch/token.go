@@ -62,7 +62,7 @@ type WorkerAccess int
 const (
 	WorkerDeny     WorkerAccess = iota
 	WorkerRead                  // 只读接口：执行者能跑的看、列、取
-	WorkerMaterial              // 加资料：只能加到本任务所在的部门
+	WorkerMaterial              // 加资料（新建或给 mN 加一版）：只能加到本任务所在的部门
 )
 
 // WorkerRule 纯判定：执行者令牌碰到这条路由（Go 路由模式）时的规则。默认拒绝。
@@ -79,7 +79,7 @@ func WorkerRule(pattern string) WorkerAccess {
 		return WorkerDeny
 	case method == "GET" || method == "HEAD":
 		return WorkerRead
-	case method == "POST" && path == "/api/materials":
+	case method == "POST" && (path == "/api/materials" || path == "/api/materials/{id}/revs"):
 		return WorkerMaterial
 	}
 	return WorkerDeny
@@ -94,7 +94,7 @@ func WorkerMaterialCheck(task, taskOrg, dept string, overview bool) error {
 		return api.Forbidden("执行者只能往本任务所在的部门（%s）加资料，收到 %s", taskOrg, dept).
 			WithNext("atrium material add " + taskOrg + " <文件或目录> --note <是什么>")
 	case overview:
-		return api.Forbidden("部门总览由负责人维护，执行者只加细节资料（去掉 --overview）")
+		return api.Forbidden("部门总览由负责人维护，执行者只加细节资料")
 	}
 	return nil
 }
@@ -161,6 +161,14 @@ func workerGuard(env *app.Env) api.Guard {
 			}
 			if err := q.Peek(&in, org.MaxMaterialBody); err != nil {
 				return err
+			}
+			// 给 mN 加一版：部门与类别看那条资料。
+			if id := q.PathValue("id"); id != "" {
+				m, err := org.GetMaterial(q.Context(), env.DB, env.Paths.Data, id, 0)
+				if err != nil {
+					return err
+				}
+				in.Org, in.Overview = m.Org, m.Kind == "overview"
 			}
 			task := workerTask(q.Actor)
 			t, err := ledger.Get(q.Context(), env.DB, task)

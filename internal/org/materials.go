@@ -23,7 +23,7 @@ import (
 // 资料：部门的知识分两层——一份「总览」（每次附给负责人，≤MaxOverview 字）与按需取的细节。
 // 一个文件或一个目录是一条资料：目录里的入口文件（报告、README……）是正文，其余是附属文件，按相对路径存，正文里的相对引用在这条资料内部解析。
 // 整个部门没归档的资料：文本合计 ≤MaxMaterial 字，二进制合计 ≤MaxMaterialBin MB，单个文件 ≤MaxMaterialFile MB（附属文件一样算）。
-// 内容在 materials/<mN>/r<rev>/<相对路径>，改了追加一版。
+// 内容在 materials/<mN>/r<rev>/<相对路径>。加资料永远新建一条；给已有资料加一版要显式指明 mN，不按名字猜。
 const (
 	maxMaterialNote  = 200
 	maxMaterialFiles = 50
@@ -111,8 +111,9 @@ type MaterialFile struct {
 
 // MaterialInput 是 material add 的输入：一条资料的全部文件。Overview 时只能一个文本文件。
 type MaterialInput struct {
-	Org      string         `json:"org"`
-	Title    string         `json:"title"` // 目录名或文件名，同部门同标题就是给那份资料追加一版；只有一个文件时可省，取文件名
+	Org      string         `json:"org"`   // 新建在哪个部门
+	ID       string         `json:"-"`     // 给哪条资料加一版（接口路径里的 mN）；空是在 Org 新建一条
+	Title    string         `json:"title"` // 新建时的标题：目录名或文件名，只有一个文件时可省，取文件名；加一版时沿用原标题
 	Entry    string         `json:"entry"` // 正文文件的相对路径；省了按 PickEntry 判
 	Files    []MaterialFile `json:"files"`
 	Overview bool           `json:"overview"`
@@ -178,19 +179,37 @@ func PickEntry(files []MaterialFileInfo, want string) (string, error) {
 	return "", api.Usage("--entry: 判不出正文：%s 都可能是；用 --entry <相对路径> 指定，或把正文命名为 report.md", strings.Join(docs, "、"))
 }
 
-// PlanMaterial 纯判定：这次加的一条资料是新建（id 空）还是给已有资料追加一版，以及加完后部门总量是否超限。
-// 总览同一部门只有一份，再加就是它的新一版；细节按标题认同一份。
+// PlanMaterial 纯判定：这次加的一条资料——in.ID 空是新建，否则给 existing 里的 in.ID 加一版（类别、标题、说明沿用）——
+// 以及加完后部门总量是否超限。总览一个部门只有一份：已有时再新建要拒，给它加一版写它的 mN。
 func PlanMaterial(dept string, existing []materialSlot, in MaterialInput) (materialSlot, error) {
 	s := materialSlot{kind: "detail", title: in.Title}
 	if in.Overview {
 		s.kind = "overview"
+	}
+	if in.ID != "" {
+		i := slices.IndexFunc(existing, func(e materialSlot) bool { return e.id == in.ID })
+		switch {
+		case in.Overview:
+			return s, api.Usage("--overview: 给 %s 加一版时类别跟着原资料，不用写", in.ID)
+		case i < 0:
+			return s, api.NotFound("部门 %s 里没有资料 %s", dept, in.ID)
+		}
+		b := existing[i]
+		s = materialSlot{id: b.id, rev: b.rev, kind: b.kind, title: b.title, note: b.note}
+	} else if in.Overview {
+		for _, e := range existing {
+			if e.kind == "overview" {
+				return s, api.Conflict("部门 %s 已有总览 %s：给它加一版写 %s", dept, e.id, e.id).
+					WithNext("atrium material add " + e.id + " <文件>")
+			}
+		}
 	}
 	switch {
 	case len(in.Files) == 0:
 		return s, api.Usage("没有文件")
 	case len(in.Files) > maxMaterialFiles:
 		return s, api.Usage("一条资料最多 %d 个文件", maxMaterialFiles)
-	case in.Overview && len(in.Files) != 1:
+	case s.kind == "overview" && len(in.Files) != 1:
 		return s, api.Usage("--overview: 总览只能是一个文件")
 	case s.title == "" && len(in.Files) == 1:
 		s.title = in.Files[0].Name
@@ -223,17 +242,12 @@ func PlanMaterial(dept string, existing []materialSlot, in MaterialInput) (mater
 	if s.entry, err = PickEntry(s.files, in.Entry); err != nil {
 		return s, err
 	}
-	if in.Overview {
+	if s.kind == "overview" {
 		if s.bin > 0 {
 			return s, api.Usage("总览要是文本文件：%s 不是", s.entry)
 		}
 		if s.units > MaxOverview {
 			return s, Full("overview", dept, s.units)
-		}
-	}
-	for _, e := range existing {
-		if e.kind == s.kind && (s.kind == "overview" || e.title == s.title) {
-			s.id, s.rev, s.note = e.id, e.rev, e.note
 		}
 	}
 	return s, checkTotals(dept, existing, s)
@@ -349,8 +363,11 @@ func GetMaterial(ctx context.Context, q store.Querier, data, id string, rev int)
 		query, args = materialSelect+` WHERE id = ? AND rev = ?`, []any{id, rev}
 	}
 	m, err := scanMaterial(q.QueryRowContext(ctx, query, args...), data)
+	if store.IsNotFound(err) && rev > 0 {
+		return Material{}, api.NotFound("资料 %s 不存在或没有第 %d 版", id, rev).WithNext("atrium material ls " + id)
+	}
 	if store.IsNotFound(err) {
-		return Material{}, api.NotFound("资料 %s 不存在（或没有第 %d 版）", id, rev).WithNext("atrium material ls")
+		return Material{}, api.NotFound("资料 %s 不存在", id).WithNext("atrium material ls")
 	}
 	if err != nil {
 		return m, err
@@ -408,14 +425,23 @@ func insertMaterialRev(ctx context.Context, tx *sql.Tx, s materialSlot, dept, by
 	return nil
 }
 
-// AddMaterial 按 PlanMaterial 在一个事务里新建或追加一版，写文件。
+// AddMaterial 按 PlanMaterial 在一个事务里新建一条（in.Org）或给 in.ID 加一版，写文件。已归档的要先撤销归档才能加版。
 func AddMaterial(ctx context.Context, db *store.DB, data string, in MaterialInput, actor string) (Material, error) {
 	if err := checkText("note", in.Note, maxMaterialNote, false); err != nil {
 		return Material{}, err
 	}
 	var id string
 	err := db.Tx(ctx, func(tx *sql.Tx) error {
-		if _, err := Get(ctx, tx, in.Org); err != nil {
+		if in.ID != "" {
+			m, err := GetMaterial(ctx, tx, data, in.ID, 0)
+			if err != nil {
+				return err
+			}
+			if m.ArchivedAt != nil {
+				return api.Conflict("%s 已归档：先撤销归档再加一版", in.ID).WithNext("atrium material archive " + in.ID + " --undo")
+			}
+			in.Org = m.Org
+		} else if _, err := Get(ctx, tx, in.Org); err != nil {
 			return err
 		}
 		cur, err := Materials(ctx, tx, data, MaterialFilter{Org: in.Org})
@@ -523,6 +549,18 @@ func materialRoutes(r *api.Router, env *app.Env) {
 		if err := q.DecodeMax(&in, MaxMaterialBody); err != nil {
 			return nil, err
 		}
+		return AddMaterial(q.Context(), db, data, in, q.Actor.ID)
+	})
+	r.Handle("POST /api/materials/{id}/revs", func(q *api.Req) (any, error) {
+		id, err := q.Ref("id", "m")
+		if err != nil {
+			return nil, err
+		}
+		var in MaterialInput
+		if err := q.DecodeMax(&in, MaxMaterialBody); err != nil {
+			return nil, err
+		}
+		in.ID = id
 		return AddMaterial(q.Context(), db, data, in, q.Actor.ID)
 	})
 	r.Handle("GET /api/materials/{id}", func(q *api.Req) (any, error) {
@@ -634,21 +672,22 @@ func materialLine(m Material) string {
 
 func materialCommands(t *cli.Table) {
 	t.Group("material", "资料")
-	t.Add(cli.Command{Path: "material add", Args: "<oN> <文件或目录>",
-		Summary: fmt.Sprintf("加一条资料或给同名资料追加一版（总览 ≤%d 字，部门文本合计 ≤%d 字；单个文件 ≤%d MB，部门二进制合计 ≤%d MB）",
+	t.Add(cli.Command{Path: "material add", Args: "<oN|mN> <文件或目录>",
+		Summary: fmt.Sprintf("在部门 oN 新建一条资料，或给资料 mN 加一版（总览 ≤%d 字，部门文本合计 ≤%d 字；单个文件 ≤%d MB，部门二进制合计 ≤%d MB）",
 			MaxOverview, MaxMaterial, MaxMaterialFile, MaxMaterialBin),
 		Detail: fmt.Sprintf(`传文件：这个文件是一条资料，标题是文件名。
 传目录：整个目录是一条资料（跳过点开头的隐藏项），标题是目录名。正文按顺序认 report.md、README.md、index.html，
 再认目录里唯一的 md 或 html；全是图片就是图片集；都认不出时用 --entry 指定。其余文件按相对路径跟着正文，
 正文里的相对图片、链接在这条资料里找。目录要只放这条资料的东西：目录里还有别的（如克隆的仓库）就不要直接传它。
-一条资料最多 %d 个文件、%d 层、合计 %d MB。同一部门里标题相同就是给那份资料追加一版。`, maxMaterialFiles, maxMaterialDepth, maxMaterialRequest>>20),
+一条资料最多 %d 个文件、%d 层、合计 %d MB。
+写 oN 永远新建一条，哪怕部门里已有同名资料；要改已有的资料，写它的 mN 加一版（类别、标题沿用，旧版都留着）。`, maxMaterialFiles, maxMaterialDepth, maxMaterialRequest>>20),
 		Flags: []cli.Flag{
-			{Name: "overview", Bool: true, Help: "这是部门总览（每次附给负责人；一个部门一份）"},
-			{Name: "note", Value: "文字", Help: "资料里有什么、什么时候用；不写这一版改了什么。新建必填，给已有资料追加一版时可省，省了沿用上一版的说明"},
+			{Name: "overview", Bool: true, Help: "新建的是部门总览（每次附给负责人；一个部门一份，已有时写它的 mN 加一版）"},
+			{Name: "note", Value: "文字", Help: "资料里有什么、什么时候用；不写这一版改了什么。新建必填，给 mN 加一版时可省，省了沿用上一版的说明"},
 			{Name: "entry", Value: "相对路径", Help: "目录资料的正文文件（认不出时要给）"},
 		},
 		Run: func(c *cli.Ctx) error {
-			dept, err := c.Arg(0, "<oN>")
+			target, err := c.Arg(0, "<oN|mN>")
 			if err != nil {
 				return err
 			}
@@ -663,8 +702,13 @@ func materialCommands(t *cli.Table) {
 			if err != nil {
 				return err
 			}
-			in := MaterialInput{Org: dept, Title: title, Entry: c.Str("entry"), Files: files, Overview: c.Bool("overview"), Note: c.Str("note")}
-			if _, err := PlanMaterial(dept, nil, in); err != nil {
+			rev := strings.HasPrefix(target, "m")
+			if rev && c.Bool("overview") {
+				return api.Usage("--overview: 给 %s 加一版时类别跟着原资料，不用写", target)
+			}
+			in := MaterialInput{Title: title, Entry: c.Str("entry"), Files: files, Overview: c.Bool("overview"), Note: c.Str("note")}
+			// 文件先在本地查一遍（大目录不白传）；是新建还是加版、部门总量由服务端判。
+			if _, err := PlanMaterial("", nil, in); err != nil {
 				return err
 			}
 			size := 0
@@ -675,10 +719,17 @@ func materialCommands(t *cli.Table) {
 				return api.Usage("这条资料的文件合计 %d MB，超过一次上传的 %d MB：拆成几条加", MB(size), maxMaterialRequest>>20)
 			}
 			var m Material
+			if rev {
+				if err := c.Call("POST", "/api/materials/"+url.PathEscape(target)+"/revs", in, &m); err != nil {
+					return err
+				}
+				return c.Done(m, "已给 "+m.ID+" 加一版："+materialLine(m), "atrium material ls --node "+m.Org)
+			}
+			in.Org = target
 			if err := c.Call("POST", "/api/materials", in, &m); err != nil {
 				return err
 			}
-			return c.Done(m, "已加 "+materialLine(m), "atrium material ls --node "+dept)
+			return c.Done(m, "已新建 "+materialLine(m), "atrium material ls --node "+m.Org)
 		}})
 	t.Add(cli.Command{Path: "material ls", Args: "[mN[/相对路径]]",
 		Summary: "按部门列资料（--node 只看一个部门及用量）；给 mN 取正文，mN/<相对路径> 取资料里的其他文件",

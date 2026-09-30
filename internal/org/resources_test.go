@@ -80,25 +80,30 @@ func TestUnitsAndPlan(t *testing.T) {
 	}{
 		{"新细节：标题取文件名", MaterialInput{Files: one("b.md", text(100))},
 			materialSlot{kind: "detail", title: "b.md", entry: "b.md", files: []MaterialFileInfo{info("b.md", 300, 100, false)}, units: 100}, ""},
-		{"同名细节追加一版", MaterialInput{Files: one("a.md", text(48000))},
-			materialSlot{id: "m2", rev: 1, kind: "detail", title: "a.md", entry: "a.md", files: []MaterialFileInfo{info("a.md", 144000, 48000, false)}, units: 48000}, ""},
-		{"总览换一份也是同一条的新版", MaterialInput{Overview: true, Files: one("新总览.md", text(3000))},
-			materialSlot{id: "m1", rev: 2, kind: "overview", title: "新总览.md", entry: "新总览.md", files: []MaterialFileInfo{info("新总览.md", 9000, 3000, false)}, units: 3000}, ""},
+		{"同名也是新建一条，不碰已有的", MaterialInput{Files: one("a.md", text(100))},
+			materialSlot{kind: "detail", title: "a.md", entry: "a.md", files: []MaterialFileInfo{info("a.md", 300, 100, false)}, units: 100}, ""},
+		{"给 m2 加一版：标题沿用，总量只算新的", MaterialInput{ID: "m2", Title: "b.md", Files: one("b.md", text(48000))},
+			materialSlot{id: "m2", rev: 1, kind: "detail", title: "a.md", entry: "b.md", files: []MaterialFileInfo{info("b.md", 144000, 48000, false)}, units: 48000}, ""},
+		{"给总览加一版", MaterialInput{ID: "m1", Files: one("新总览.md", text(3000))},
+			materialSlot{id: "m1", rev: 2, kind: "overview", title: "总览.md", entry: "新总览.md", files: []MaterialFileInfo{info("新总览.md", 9000, 3000, false)}, units: 3000}, ""},
+		{"已有总览再新建一份", MaterialInput{Overview: true, Files: one("新总览.md", text(10))}, materialSlot{}, "conflict"},
+		{"加一版不写 --overview", MaterialInput{ID: "m1", Overview: true, Files: one("o.md", text(10))}, materialSlot{}, "usage"},
+		{"加一版的资料不在部门里", MaterialInput{ID: "m9", Files: one("o.md", text(10))}, materialSlot{}, "not_found"},
 		{"目录是一条：报告和图片合计，附属文件计入大小", MaterialInput{Title: "t446-show", Files: []MaterialFile{
 			{"report.md", text(10)}, {"images/a.png", bin(2)}, {"images/a.mmd", text(5)}}},
 			materialSlot{kind: "detail", title: "t446-show", entry: "report.md", units: 15, bin: 2 << 20, files: []MaterialFileInfo{
 				info("images/a.mmd", 15, 5, false), info("images/a.png", 2<<20, 0, true), info("report.md", 30, 10, false)}}, ""},
 		{"目录的附属文件超部门二进制合计", MaterialInput{Title: "d", Files: []MaterialFile{{"report.md", text(1)}, {"a.png", bin(11)}}}, materialSlot{}, "limit"},
 		{"目录要有标题", MaterialInput{Files: []MaterialFile{{"report.md", text(1)}, {"a.png", bin(1)}}}, materialSlot{}, "usage"},
-		{"目录总览不行", MaterialInput{Title: "d", Overview: true, Files: []MaterialFile{{"report.md", text(1)}, {"b.md", text(1)}}}, materialSlot{}, "usage"},
+		{"目录总览不行", MaterialInput{ID: "m1", Files: []MaterialFile{{"report.md", text(1)}, {"b.md", text(1)}}}, materialSlot{}, "usage"},
 		{"二进制不占字数", MaterialInput{Files: one("b.png", bin(10))},
 			materialSlot{kind: "detail", title: "b.png", entry: "b.png", files: []MaterialFileInfo{info("b.png", 10<<20, 0, true)}, bin: 10 << 20}, ""},
 		{"单个文件超 20MB", MaterialInput{Files: one("c.png", bin(21))}, materialSlot{}, "limit"},
 		{"部门二进制合计超 200MB", MaterialInput{Files: one("c.png", bin(11))}, materialSlot{}, "limit"},
-		{"同名二进制换一版只算新的", MaterialInput{Files: one("图.png", bin(20))},
+		{"二进制换一版只算新的", MaterialInput{ID: "m3", Files: one("图.png", bin(20))},
 			materialSlot{id: "m3", rev: 1, kind: "detail", title: "图.png", entry: "图.png", files: []MaterialFileInfo{info("图.png", 20<<20, 0, true)}, bin: 20 << 20}, ""},
-		{"总览超 3000 字", MaterialInput{Overview: true, Files: one("o.md", text(3001))}, materialSlot{}, "limit"},
-		{"总览不能是二进制", MaterialInput{Overview: true, Files: one("o.png", []byte{0, 0})}, materialSlot{}, "usage"},
+		{"总览超 3000 字", MaterialInput{ID: "m1", Files: one("o.md", text(3001))}, materialSlot{}, "limit"},
+		{"总览不能是二进制", MaterialInput{ID: "m1", Files: one("o.png", []byte{0, 0})}, materialSlot{}, "usage"},
 		{"部门合计超 5 万字", MaterialInput{Files: one("c.md", text(9001))}, materialSlot{}, "limit"},
 		{"重复文件", MaterialInput{Title: "d", Files: []MaterialFile{{"c.md", text(1)}, {"c.md", text(1)}}}, materialSlot{}, "usage"},
 		{"越出目录的路径", MaterialInput{Title: "d", Files: []MaterialFile{{"../c.md", text(1)}, {"b.md", text(1)}}}, materialSlot{}, "usage"},
@@ -375,7 +380,7 @@ func TestResourcesStore(t *testing.T) {
 		t.Fatal("没有的技能派活应报错")
 	}
 
-	// 资料：总览、细节、同名追加一版、归档不算用量、撤销归档查上限。
+	// 资料：总览、细节、同名新建、给 mN 加一版、归档不算用量、撤销归档查上限。
 	ms, err := AddMaterial(ctx, db, data, MaterialInput{Org: sub.ID, Overview: true, Note: "总览", Files: []MaterialFile{{"总览.md", []byte("是什么")}}}, "u1")
 	if err != nil || ms.Kind != "overview" || ms.Units != 3 {
 		t.Fatalf("%+v %v", ms, err)
@@ -384,14 +389,27 @@ func TestResourcesStore(t *testing.T) {
 		t.Fatalf("总览：%q %v", ov, err)
 	}
 	d1, _ := AddMaterial(ctx, db, data, MaterialInput{Org: sub.ID, Note: "细节", Files: []MaterialFile{{"a.md", []byte("1")}}}, "u1")
-	d2, err := AddMaterial(ctx, db, data, MaterialInput{Org: sub.ID, Note: "改", Files: []MaterialFile{{"a.md", []byte(strings.Repeat("字", 46000))}}}, "u1")
-	if err != nil || d2.ID != d1.ID || d2.Rev != 2 {
-		t.Fatalf("同名追加一版：%+v %v", d2, err)
+	same, err := AddMaterial(ctx, db, data, MaterialInput{Org: sub.ID, Note: "另一份", Files: []MaterialFile{{"a.md", []byte("2")}}}, "u1")
+	if err != nil || same.ID == d1.ID || same.Rev != 1 {
+		t.Fatalf("同名新建一条：%+v %v", same, err)
 	}
-	// 追加一版不给 --note 沿用上一版说明；新建不给要拒绝。读出来带部门名称。
-	d3, err := AddMaterial(ctx, db, data, MaterialInput{Org: sub.ID, Files: []MaterialFile{{"a.md", []byte(strings.Repeat("字", 46000))}}}, "u1")
+	if old, err := GetMaterial(ctx, db, data, d1.ID, 0); err != nil || old.Rev != 1 || old.Note != "细节" {
+		t.Fatalf("同名新建不动已有的：%+v %v", old, err)
+	}
+	if _, err := ArchiveMaterial(ctx, db, data, same.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := AddMaterial(ctx, db, data, MaterialInput{ID: same.ID, Files: []MaterialFile{{"a.md", []byte("3")}}}, "u1"); code(err) != "conflict" {
+		t.Fatalf("给已归档的加一版应拒绝：%v", err)
+	}
+	d2, err := AddMaterial(ctx, db, data, MaterialInput{ID: d1.ID, Note: "改", Files: []MaterialFile{{"a.md", []byte(strings.Repeat("字", 46000))}}}, "u1")
+	if err != nil || d2.ID != d1.ID || d2.Rev != 2 {
+		t.Fatalf("给 mN 加一版：%+v %v", d2, err)
+	}
+	// 加一版不给 --note 沿用上一版说明；新建不给要拒绝。读出来带部门名称。
+	d3, err := AddMaterial(ctx, db, data, MaterialInput{ID: d1.ID, Files: []MaterialFile{{"a.md", []byte(strings.Repeat("字", 46000))}}}, "u1")
 	if err != nil || d3.Rev != 3 || d3.Note != "改" || d3.OrgName != sub.Name {
-		t.Fatalf("追加一版沿用说明：%+v %v", d3, err)
+		t.Fatalf("加一版沿用说明：%+v %v", d3, err)
 	}
 	if _, err := AddMaterial(ctx, db, data, MaterialInput{Org: sub.ID, Files: []MaterialFile{{"c.md", []byte("1")}}}, "u1"); code(err) != "usage" {
 		t.Fatalf("新建不给说明应拒绝：%v", err)
@@ -513,8 +531,8 @@ func TestMaterialDir(t *testing.T) {
 			t.Fatalf("用量：%+v", c)
 		}
 	}
-	// 同一标题再加是新一版；图片集没有正文。
-	m2, err := AddMaterial(ctx, db, data, MaterialInput{Org: dept.ID, Title: "t446-show", Files: []MaterialFile{{"report.md", []byte("新")}}}, "u1")
+	// 给 mN 加一版换掉全部文件；图片集没有正文。
+	m2, err := AddMaterial(ctx, db, data, MaterialInput{ID: m.ID, Files: []MaterialFile{{"report.md", []byte("新")}}}, "u1")
 	if err != nil || m2.ID != m.ID || m2.Rev != 2 || len(m2.Files) != 1 {
 		t.Fatalf("追加一版：%+v %v", m2, err)
 	}

@@ -66,6 +66,7 @@ func TestWorkerRule(t *testing.T) {
 		"GET /api/materials/{id}":          WorkerRead,
 		"GET /api/tasks/{id}/log":          WorkerRead,
 		"POST /api/materials":              WorkerMaterial,
+		"POST /api/materials/{id}/revs":    WorkerMaterial,
 		"POST /api/materials/{id}/archive": WorkerDeny,
 		"POST /api/tasks":                  WorkerDeny,
 		"PATCH /api/tasks/{id}":            WorkerDeny,
@@ -92,7 +93,7 @@ func TestWorkerRule(t *testing.T) {
 	}
 }
 
-// 经路由走一遍：在跑的执行者凭令牌能读、能往本部门加资料（署名 tN 执行者），别的都拒；退出后令牌作废。
+// 经路由走一遍：在跑的执行者凭令牌能读、能往本部门加资料或给本部门的细节资料加一版（署名 tN 执行者），别的都拒；退出后令牌作废。
 func TestWorkerTokenRoutes(t *testing.T) {
 	env, d := setup(t)
 	ctx := context.Background()
@@ -126,6 +127,16 @@ func TestWorkerTokenRoutes(t *testing.T) {
 		by = q.Actor.ID
 		return nil, q.DecodeMax(&in, org.MaxMaterialBody)
 	})
+	r.Handle("POST /api/materials/{id}/revs", func(q *api.Req) (any, error) { return "ok", nil })
+	material := func(dept string, overview bool) string {
+		m, err := org.AddMaterial(ctx, env.DB, env.Paths.Data, org.MaterialInput{Org: dept, Overview: overview, Note: "x",
+			Files: []org.MaterialFile{{Name: "a.md", Content: []byte("x")}}}, "u1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return m.ID
+	}
+	mine, theirs, overview := material(o1.ID, false), material(o2.ID, false), material(o1.ID, true)
 	srv := httptest.NewServer(r)
 	defer srv.Close()
 	token := workerToken("test-user-token", tk.ID, 1)
@@ -147,13 +158,21 @@ func TestWorkerTokenRoutes(t *testing.T) {
 	if got := code(c.Do(ctx, "GET", "/api/tasks", nil, nil)); got != "ok" {
 		t.Errorf("读应放行：%s", got)
 	}
+	rev := func(id string) string {
+		return code(c.Do(ctx, "POST", "/api/materials/"+id+"/revs", org.MaterialInput{Files: []org.MaterialFile{{Name: "a.md", Content: []byte("y")}}}, nil))
+	}
 	if got := add(o1.ID, false); got != "ok" || by != tk.ID+" 执行者" {
 		t.Errorf("往本部门加资料应放行、署名 %s 执行者：%s %q", tk.ID, got, by)
 	}
+	if got := rev(mine); got != "ok" {
+		t.Errorf("给本部门的细节资料加一版应放行：%s", got)
+	}
 	for what, got := range map[string]string{
-		"别的部门": add(o2.ID, false),
-		"总览":   add(o1.ID, true),
-		"建任务":  code(c.Do(ctx, "POST", "/api/tasks", map[string]string{"title": "x"}, nil)),
+		"别的部门":       add(o2.ID, false),
+		"总览":         add(o1.ID, true),
+		"给别的部门的资料加版": rev(theirs),
+		"给总览加版":      rev(overview),
+		"建任务":        code(c.Do(ctx, "POST", "/api/tasks", map[string]string{"title": "x"}, nil)),
 	} {
 		if got != "forbidden" {
 			t.Errorf("%s 应拒：%s", what, got)

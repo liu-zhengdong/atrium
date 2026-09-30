@@ -493,7 +493,8 @@ func TestNoteUnknown(t *testing.T) {
 {"type":"brand_new","x":2}
 {"type":"brand_new","x":3}
 `), 0o600)
-	tk := must(ledger.Add(ctx, db, ledger.NewTask{Title: "改帮助中心"}, "u1"))
+	dept := must(org.Add(ctx, db, org.NewDept{Name: "网页"}))
+	tk := must(ledger.Add(ctx, db, ledger.NewTask{Title: "改帮助中心", Org: dept.ID}, "u1"))
 	drafts := func() []ledger.Task {
 		return must(ledger.List(ctx, db, ledger.Filter{Class: workers.ParseClass, Status: []ledger.Status{ledger.Draft}}))
 	}
@@ -517,7 +518,7 @@ func TestNoteUnknown(t *testing.T) {
 	}
 	// 草稿满了：照常报上限错误，不静默吞掉。
 	for len(must(ledger.List(ctx, db, ledger.Filter{Status: []ledger.Status{ledger.Draft}, Limit: 500}))) < org.MaxDrafts {
-		must(ledger.Add(ctx, db, ledger.NewTask{Title: "占位", Draft: true}, "u1"))
+		must(ledger.Add(ctx, db, ledger.NewTask{Title: "占位", Org: dept.ID, Draft: true}, "u1"))
 	}
 	err = noteUnknown(ctx, db, tk.ID, workers.Run{Worker: "opencode", Log: log})
 	if ae := (*api.Error)(nil); !errors.As(err, &ae) || ae.Code != "limit" {

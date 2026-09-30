@@ -35,7 +35,7 @@ func (s Source) By(name string) string {
 const maxClass = 40
 
 // DraftHowTo 是记草稿的说明（k31 的做法）：负责人提示词与秘书会话开头都引用它，改只改这一处。
-const DraftHowTo = "绕了路、撞了限制、被纠正了，就记一条草稿：atrium task add 现象 --draft --source user（用户纠正）或 org（组织发现）" +
+const DraftHowTo = "绕了路、撞了限制、被纠正了，就记一条草稿：atrium task add 现象 --draft --org 部门 --source user（用户纠正）或 org（组织发现）" +
 	" --class 类名 --detail 依据、挡住了三个目标里的哪一个。类名按原因归（如「执行者可用性」），同一类用同一个名字：" +
 	"回执会列出已有的类，写成新名字的用 atrium task set tN --class 已有类名 并进去。用户亲手验收退回、取消任务时运行时已自动记一条。"
 

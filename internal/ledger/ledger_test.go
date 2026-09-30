@@ -173,16 +173,38 @@ func TestResultGoesToOwner(t *testing.T) {
 
 func TestDraftCap(t *testing.T) {
 	db, ctx := openDB(t), context.Background()
+	full, err := org.Add(ctx, db, org.NewDept{Name: "运行时"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := org.Add(ctx, db, org.NewDept{Name: "网页"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Add(ctx, db, NewTask{Title: "没部门", Draft: true}, "secretary"); code(err) != "usage" {
+		t.Fatalf("草稿要写部门，got %v", err)
+	}
 	for i := 0; i < org.MaxDrafts; i++ {
-		d, err := Add(ctx, db, NewTask{Title: "草稿", Draft: true}, "secretary")
+		d, err := Add(ctx, db, NewTask{Title: "草稿", Org: full.ID, Draft: true}, "secretary")
 		if err != nil || d.Status != Draft {
 			t.Fatalf("第 %d 件草稿：%+v %v", i+1, d, err)
 		}
 	}
-	if _, err := Add(ctx, db, NewTask{Title: "满了", Draft: true}, "secretary"); code(err) != "limit" {
-		t.Fatalf("草稿满了应报 limit，got %v", err)
+	_, err = Add(ctx, db, NewTask{Title: "满了", Org: full.ID, Draft: true}, "secretary")
+	var ae *api.Error
+	if !errors.As(err, &ae) || ae.Code != "limit" || !strings.Contains(ae.Message, "部门 "+full.ID+" 的") ||
+		!strings.Contains(ae.Message, "满了找部门负责人") || ae.Next != "atrium task ls --org "+full.ID+" --status draft" {
+		t.Fatalf("满了应报 limit，写清哪个部门、找谁、看哪：%+v", err)
 	}
-	todo, err := Add(ctx, db, NewTask{Title: "待派"}, "secretary")
+	// 一个部门满了不影响别的部门。
+	elsewhere, err := Add(ctx, db, NewTask{Title: "别的部门", Org: other.ID, Draft: true}, "secretary")
+	if err != nil {
+		t.Fatalf("别的部门照常记草稿：%v", err)
+	}
+	if _, err := Edit(ctx, db, elsewhere.ID, Patch{Org: ptr(full.ID)}, "secretary"); code(err) != "limit" {
+		t.Fatalf("草稿改到满了的部门应拒绝，got %v", err)
+	}
+	todo, err := Add(ctx, db, NewTask{Title: "待派", Org: full.ID}, "secretary")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -403,7 +425,7 @@ func TestSetOwner(t *testing.T) {
 	}
 
 	// 草稿：改处理人不唤醒，转待派时才交出去。
-	d, _ := Add(ctx, db, NewTask{Title: "草稿", Draft: true}, "secretary")
+	d, _ := Add(ctx, db, NewTask{Title: "草稿", Org: "o1", Draft: true}, "secretary")
 	if _, err := Edit(ctx, db, d.ID, owner("a1"), "secretary"); err != nil || len(assigned(d.ID)) != 0 {
 		t.Fatalf("草稿不唤醒：%v %v", assigned(d.ID), err)
 	}

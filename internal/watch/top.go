@@ -12,7 +12,6 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/cli"
 	"github.com/liu-zhengdong/atrium/internal/events"
 	"github.com/liu-zhengdong/atrium/internal/ledger"
-	"github.com/liu-zhengdong/atrium/internal/org"
 	"github.com/liu-zhengdong/atrium/internal/store"
 )
 
@@ -247,7 +246,7 @@ func Render(v View) string {
 	}
 	fmt.Fprintf(&b, "\n排队 %d", v.Queued)
 	if v.Drafts > 0 {
-		fmt.Fprintf(&b, " · 草稿 %s", org.Tally("drafts", v.Drafts))
+		fmt.Fprintf(&b, " · 草稿 %d", v.Drafts)
 	}
 	fmt.Fprintf(&b, " · 秘书%s", listenText(v.Secretary))
 	fmt.Fprintf(&b, "\n三个目标  %s", v.Goals.Line())

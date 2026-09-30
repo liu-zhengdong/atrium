@@ -87,7 +87,7 @@ type NewTask struct {
 	Repo     string   `json:"repo"`
 	Dir      string   `json:"dir"`
 	After    []string `json:"after"`
-	// Owner 是处理人：结果事件要处理地投给他（u1、secretary 或 aN），缺省为派活人。
+	// Owner 是处理人；负责人自己引起的结果回投派活人，其余按部门路由，缺省为派活人。
 	Owner string `json:"owner"`
 	// Draft：建成草稿（还没想清楚、条件还不够；不派活、不计时），缺省建成 todo。
 	Draft bool `json:"draft"`
@@ -788,7 +788,7 @@ func Apply(ctx context.Context, db *store.DB, id string, ev Event, actor, note s
 			payload["accept_by"] = ev.AcceptBy
 			payload["next"] = "atrium task accept " + id
 		}
-		return events.EmitTask(ctx, tx, p.Owner, events.Event{Kind: events.TaskStatus, Task: id, Dept: after.Org, Body: payload, By: actor})
+		return events.EmitTask(ctx, tx, p.Owner, p.By, events.Event{Kind: events.TaskStatus, Task: id, Dept: after.Org, Body: payload, By: actor})
 	})
 	if err != nil {
 		return Task{}, err

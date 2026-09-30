@@ -69,12 +69,13 @@ func result(kind string, body any) bool {
 }
 
 // Route 纯函数：任务事件投给谁、什么级别；只投要动手的那一位，不投返回 false。owner 是处理人（task add --owner，
-// 缺省派活的人），leader 是部门往上最近的负责人（没有为空）。
+// 缺省派活的人），assigner 是派活人，leader 是部门往上最近的负责人（没有为空）。正文的 by 是本次操作人。
 //   - 等验收（accept_by）投验收人：user 经秘书投给用户，leader 投部门负责人（没有投秘书）。
-//   - 结果按 LevelOf 的级别投处理人：处理人是负责人（aN）投它自己；秘书、用户派的与运行时建的，部门有负责人投负责人
-//     （由它收父任务、决定是否上交，秘书从上交收到），没有投秘书。运行时建的（审阅任务等）成功由运行时自己接着走，只知会。
+//   - 负责人自己引起的结果改投派活人：u1、secretary 投秘书，其他负责人投本人；派活人为空或就是处理人则不投。
+//   - 其余结果按 LevelOf 的级别投处理人：负责人（aN）投本人；秘书、用户派的与运行时建的，部门有负责人投负责人，
+//     没有投秘书。运行时建的（审阅任务等）成功由运行时自己接着走，只知会。
 //   - 过程（入队、拉起、交回一次、取消、改回 todo）不投：没有要动手的事。
-func Route(owner, leader, kind string, body any) (Delivery, bool) {
+func Route(owner, assigner, leader, kind string, body any) (Delivery, bool) {
 	accept := field(body, "accept_by")
 	if accept == "" && !result(kind, body) {
 		return Delivery{}, false
@@ -84,6 +85,14 @@ func Route(owner, leader, kind string, body any) (Delivery, bool) {
 	case accept == "user":
 		to = Secretary
 	case accept != "":
+	case api.IsRef(owner, "a") && field(body, "by") == owner:
+		if assigner == "" || assigner == owner {
+			return Delivery{}, false
+		}
+		to = assigner
+		if assigner == "u1" || assigner == Secretary {
+			to = Secretary
+		}
 	case api.IsRef(owner, "a"):
 		to = owner
 	case owner != "u1" && owner != Secretary && field(body, "to") == "done":

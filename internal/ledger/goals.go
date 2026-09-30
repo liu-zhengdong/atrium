@@ -56,7 +56,7 @@ type Goals struct {
 	All  Window `json:"all"`
 }
 
-// Line 是 top 里的一行（网页分两行显示 Week.Text 与 All.Text）。
+// Line 是 top 里的一行（网页不用 Text，按三个数自己排成一个目标一行）。
 func (g Goals) Line() string { return "近 7 天 " + g.Week.Text + " ｜ 累计 " + g.All.Text }
 
 // Measure 纯函数：算三个数。

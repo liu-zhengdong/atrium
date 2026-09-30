@@ -76,7 +76,9 @@ a.quiet{color:inherit}a.quiet:hover{color:var(--ink)}
 .today h2 .n{font-size:13px;font-weight:400;color:var(--ink3)}
 .today .row .time{width:auto;min-width:40px}
 .row .dept{color:var(--ink3);font-size:13px;white-space:nowrap}
-.today .facts{margin:4px 0 0}
+.goals{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:12px 24px;align-items:baseline;margin-top:4px;font-size:14px}
+.goals .h{font-size:12px;color:var(--ink3);text-align:right}.goals .num{text-align:right}
+.goals .why{display:block;color:var(--ink3);font-size:12px;margin-top:2px}
 .today .empty{padding:9px 0;text-align:left} /* 空态和一行一样高：没有内容的节不比有一条时更占地方 */
 
 .asks{display:flex;flex-direction:column;gap:8px}
@@ -230,7 +232,7 @@ b.logo{display:grid;place-items:center;border-radius:4px;background:var(--raise)
 .hosts{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px}
 .host{padding:14px 16px;border-radius:12px;background:var(--raise)}
 .host .n{font-weight:500;display:flex;align-items:center;gap:8px}
-.host .s{color:var(--ink2);font-size:13px;margin-top:4px}
+.host .s{color:var(--ink2);font-size:13px;margin-top:4px}.host .paused{color:var(--user-ink)}
 .slots{display:flex;gap:3px;margin-top:10px}
 .slots i{width:10px;height:10px;border-radius:3px;background:var(--hover)}
 .slots i.on{background:var(--ink)}
@@ -238,6 +240,7 @@ b.logo{display:grid;place-items:center;border-radius:4px;background:var(--raise)
 .combos{font-size:13px}
 .combo-row{display:grid;grid-template-columns:minmax(0,1fr) 44px 180px 42px;gap:12px;align-items:center;padding:10px 0;border-radius:6px;color:var(--ink);text-decoration:none}
 .combo-row:hover{background:var(--hover)}
+.combo-row.head{padding:0 0 2px;font-size:12px;color:var(--ink3)}.combo-row.head:hover{background:none}
 .combo-name{overflow-wrap:anywhere}
 .trust,.quiet{color:var(--ink3)}
 .combo-row .num{text-align:right}
@@ -254,7 +257,8 @@ b.logo{display:grid;place-items:center;border-radius:4px;background:var(--raise)
 .worker-runs .run-outcome{max-width:160px;text-align:right}
 @media(max-width:600px){.worker-runs>div{display:block}.worker-runs .run-outcome{display:block;max-width:none;text-align:left}}
 .worker-runs a{margin-left:8px}
-.worker-body,.layer pre{white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.8}
+.worker-body{font-size:14px}.worker-body h1,.worker-body h2,.worker-body h3{font-size:15px}
+.md-wait,.layer pre{white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.8}
 .layer{background:var(--raise);border-radius:10px;padding:12px;margin:10px 0}
 .layer summary .quiet{margin-left:auto;font-size:12px}
 .layer code{display:block;overflow-wrap:anywhere;font-size:12px}
@@ -340,7 +344,6 @@ details.full .result{margin-top:8px;font-size:13px;color:var(--ink2)}
 
 /* 资料：行首文件图标；抽屉比任务抽屉宽，能放宽到整个主内容区，正文按格式渲染（app.js 的 viewers） */
 .row .file{width:14px;height:14px;color:var(--ink3);justify-self:center}
-.row .title .note{margin-left:10px;color:var(--ink3);font-size:13px}
 /* 资料里的全部文件：图片出缩略图，其余一个文件图标；图片集打开就是它，有正文的折在正文下面 */
 .mfiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px;margin-top:10px}
 .mfiles a{display:flex;flex-direction:column;gap:4px;min-width:0;color:var(--ink2);font-size:12.5px}

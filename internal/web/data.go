@@ -1,6 +1,7 @@
 package web
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -104,12 +105,13 @@ type DeptBrief struct {
 	Stuck   int    `json:"stuck"`
 }
 
-// orgIndex 是全部部门（≤ org.MaxDepts）与每个部门整棵子树的在做、卡住数。
+// orgIndex 是全部部门（≤ org.MaxDepts）与每个部门整棵子树的在做、卡住数，另带身份与机器的名字（loadNames）。
 type orgIndex struct {
 	list     []DeptBrief
 	byID     map[string]*DeptBrief
 	parents  map[string]string
 	children map[string][]string
+	names    map[string]string
 }
 
 func loadOrg(ctx context.Context, q store.Querier) (*orgIndex, error) {
@@ -128,6 +130,9 @@ func loadOrg(ctx context.Context, q store.Querier) (*orgIndex, error) {
 		}
 	}
 	walk(forest)
+	if ix.names, err = loadNames(ctx, q); err != nil {
+		return nil, err
+	}
 	for i := range ix.list {
 		ix.byID[ix.list[i].ID] = &ix.list[i]
 	}
@@ -160,11 +165,36 @@ func loadOrg(ctx context.Context, q store.Querier) (*orgIndex, error) {
 	return ix, rows.Err()
 }
 
+// name 是页面上提到部门、身份、机器时写的名字；没登记的原样给短号。
 func (ix *orgIndex) name(id string) string {
 	if d := ix.byID[id]; d != nil {
 		return d.Name
 	}
-	return ""
+	if n, ok := ix.names[id]; ok {
+		return n
+	}
+	return id
+}
+
+// loadNames 是网页上会提到的身份与机器的名字（部门名在部门树里）：用户写「你」（网页是给你看的），秘书、负责人、机器取登记的名字。
+// 页面一律经它把短号换成名字，前端拿到的是同一份（Nav.Names）。
+func loadNames(ctx context.Context, q store.Querier) (map[string]string, error) {
+	out := map[string]string{"u1": "你", org.Secretary: "秘书"}
+	leaders, err := org.Leaders(ctx, q)
+	if err != nil {
+		return nil, err
+	}
+	for _, l := range leaders {
+		out[l.ID] = l.Name
+	}
+	list, err := hosts.List(ctx, q)
+	if err != nil {
+		return nil, err
+	}
+	for _, h := range list {
+		out[h.ID] = h.Name
+	}
+	return out, nil
 }
 
 // subtree 返回 id 及全部下属部门。
@@ -176,11 +206,12 @@ func (ix *orgIndex) subtree(id string) []string {
 	return out
 }
 
-// Nav 是侧栏：部门树与等你的件数。
+// Nav 是侧栏：部门树与等你的件数；Names 是身份与机器的名字，页面上提到它们时查这张表。
 type Nav struct {
-	Depts     []DeptBrief `json:"depts"`
-	Asks      int         `json:"asks"`
-	ShippedID int64       `json:"shipped_id"` // 最近 shipped 上报事件号；跨页面共用，不把任务结束算作上线
+	Depts     []DeptBrief       `json:"depts"`
+	Names     map[string]string `json:"names"`
+	Asks      int               `json:"asks"`
+	ShippedID int64             `json:"shipped_id"` // 最近 shipped 上报事件号；跨页面共用，不把任务结束算作上线
 }
 
 func loadNav(ctx context.Context, q store.Querier) (Nav, error) {
@@ -197,7 +228,7 @@ func loadNav(ctx context.Context, q store.Querier) (Nav, error) {
 		WHERE kind = ? AND json_extract(body, '$.kind') = ?`, events.LeaderEscalate, "shipped").Scan(&shippedID); err != nil {
 		return Nav{}, err
 	}
-	return Nav{Depts: nonNil(ix.list), Asks: len(asks), ShippedID: shippedID}, nil
+	return Nav{Depts: nonNil(ix.list), Names: ix.names, Asks: len(asks), ShippedID: shippedID}, nil
 }
 
 // Ask 是「等你」的一件：选项单等你挑，交付等你验收（部门的验收人是你），卡住的任务递到了你这层（往上没有负责人），
@@ -276,7 +307,8 @@ func loadAsks(ctx context.Context, q store.Querier, ix *orgIndex) ([]Ask, error)
 	}
 	for _, m := range marks {
 		if m.Until == 0 {
-			ups = append(ups, Ask{Kind: "worker", ID: m.Target(), Title: m.Target() + " " + m.Reason, Sub: m.Fix(), At: m.Since})
+			spec := workers.Spec{Tool: m.Tool, Model: m.Model}.String()
+			ups = append(ups, Ask{Kind: "worker", ID: m.Target(), Title: spec + "（" + ix.name(m.Host) + "）" + m.Reason, Sub: m.Fix(), At: m.Since})
 		}
 	}
 	return append(out, ups...), nil
@@ -301,7 +333,7 @@ func escalations(ctx context.Context, q store.Querier, ix *orgIndex) ([]Ask, err
 		if err := json.Unmarshal([]byte(raw), &b); err != nil {
 			return nil, fmt.Errorf("上报事件的内容坏了：%w", err)
 		}
-		out = append(out, Ask{Kind: "escalate", ID: task, Title: b.Note, Sub: b.From + " 上报：" + b.Label, Dept: dept, DeptName: ix.name(dept), At: at})
+		out = append(out, Ask{Kind: "escalate", ID: task, Title: b.Note, Sub: ix.name(b.From) + " 上报：" + b.Label, Dept: dept, DeptName: ix.name(dept), At: at})
 	}
 	return out, rows.Err()
 }
@@ -763,7 +795,7 @@ type Account struct {
 	Stale bool   `json:"stale"`
 }
 
-// Host 是一台机器与它的空位。
+// Host 是一台机器与它的空位；Paused 是这台机器（或全局）暂停着，到点不在它上面分派任务。
 type Host struct {
 	ID     string `json:"id"`
 	Name   string `json:"name"`
@@ -771,6 +803,7 @@ type Host struct {
 	Slots  int    `json:"slots"`
 	Busy   int    `json:"busy"`
 	Online bool   `json:"online"`
+	Paused bool   `json:"paused"`
 	Status string `json:"status"`
 }
 
@@ -790,9 +823,13 @@ func loadLegion(ctx context.Context, env *app.Env, now int64) (Legion, error) {
 	if err != nil {
 		return out, err
 	}
+	paused, err := pause.Active(ctx, db)
+	if err != nil {
+		return out, err
+	}
 	for _, h := range list {
 		c := hosts.Connection(h.Kind, h.Joined, h.JoinExpires, h.LastSeen, false, now)
-		row := Host{ID: h.ID, Name: h.Name, Kind: h.Kind, Slots: slots(h), Busy: busy[h.ID],
+		row := Host{ID: h.ID, Name: h.Name, Kind: h.Kind, Slots: slots(h), Busy: busy[h.ID], Paused: pause.Paused(paused, pause.Scope{Host: h.ID}),
 			Online: c == hosts.ConnLocal || c == hosts.ConnOnline, Status: hosts.ConnText(c, false, h.LastSeen, h.JoinExpires, now)}
 		if h.Kind == "remote" && !h.Joined && h.JoinExpires == 0 {
 			row.Status = "还没接入"
@@ -866,7 +903,11 @@ func loadTask(ctx context.Context, q store.Querier, id string) (TaskDetail, erro
 	if err != nil {
 		return TaskDetail{}, err
 	}
-	out := TaskDetail{Task: t, Steps: Steps, Step: step(t), State: state(t, h), Holder: holderText(t, h)}
+	names, err := loadNames(ctx, q)
+	if err != nil {
+		return TaskDetail{}, err
+	}
+	out := TaskDetail{Task: t, Steps: Steps, Step: step(t), State: state(t, h), Holder: holderText(t, h, names)}
 	if err := relations(ctx, q, &out); err != nil {
 		return out, err
 	}
@@ -877,7 +918,7 @@ func loadTask(ctx context.Context, q store.Querier, id string) (TaskDetail, erro
 		return out, err
 	}
 	if t.Source != "" {
-		if err := recorder(ctx, q, &out); err != nil {
+		if err := recorder(ctx, q, &out, names); err != nil {
 			return out, err
 		}
 	}
@@ -914,15 +955,13 @@ func loadTask(ctx context.Context, q store.Querier, id string) (TaskDetail, erro
 	return out, err
 }
 
-// recorder 填来源一行的记录人：任务分派人的名字（org.NameOf），负责人另给他的负责人抽屉地址。
-func recorder(ctx context.Context, q store.Querier, d *TaskDetail) error {
+// recorder 填来源一行的记录人：任务分派人的名字（loadNames），负责人另给他的负责人抽屉地址。
+func recorder(ctx context.Context, q store.Querier, d *TaskDetail, names map[string]string) error {
 	p, err := ledger.PartiesOf(ctx, q, d.Task.ID)
 	if err != nil || p.By == "" {
 		return err
 	}
-	if d.ByName, err = org.NameOf(ctx, q, p.By); err != nil {
-		return err
-	}
+	d.ByName = cmp.Or(names[p.By], p.By)
 	leaders, err := org.LeaderMap(ctx, q)
 	if err != nil {
 		return err
@@ -1016,18 +1055,19 @@ func holderOf(ctx context.Context, q store.Querier, t ledger.Task) (watch.Holder
 }
 
 // holderText 是「现在在等谁」：没结束的按等待对象说，结束了的按结果说。
-func holderText(t ledger.Task, h watch.Holder) string {
+// 要负责人、秘书动手的写上是谁（names 里的名字）；执行者是谁、在哪台机器，抽屉下面「执行者」「机器」两行写着，这里不重复；
+// 等你的、等运行时的，话里已说明。
+func holderText(t ledger.Task, h watch.Holder, names map[string]string) string {
 	if t.Status.Finished() && t.Status != ledger.Failed {
 		return finishedText(t)
 	}
-	if h.Who == "" {
-		return h.Text
+	switch h.Kind {
+	case "leader", "secretary":
+		return cmp.Or(names[h.Who], h.Who) + "：" + h.Text
+	case "worker":
+		return "执行者在做"
 	}
-	who := h.Who
-	if who == org.Secretary {
-		who = "秘书"
-	}
-	return who + "：" + h.Text
+	return h.Text
 }
 
 // ChoiceDetail 是选项单抽屉：agenda 的选项单加上部门名。

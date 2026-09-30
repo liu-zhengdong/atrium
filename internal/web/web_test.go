@@ -63,7 +63,7 @@ func TestStepHolder(t *testing.T) {
 	}{
 		{ledger.Task{Status: ledger.Todo}, 0, "idle", "没派"},
 		{ledger.Task{Status: ledger.Queued}, 0, "idle", "排队"},
-		{ledger.Task{Status: ledger.Running, Worker: "claude+opus:high", Host: "h1"}, 1, "run", "claude · h1"},
+		{ledger.Task{Status: ledger.Running, Worker: "claude+opus:high", Host: "h1"}, 1, "run", "claude"},
 		{ledger.Task{Status: ledger.Running}, 1, "run", "在做"},
 		{ledger.Task{Status: ledger.Running, Stage: ledger.StageGate}, 2, "run", "验收中"},
 		{ledger.Task{Status: ledger.Running, Stage: ledger.StageReview}, 2, "run", "审阅中"},
@@ -303,6 +303,17 @@ func TestRoutes(t *testing.T) {
 	// 表现与 atrium workers 同一份统计（workers.Stats）：拉起有了结果才计；不可用标记挂在它挡住的组合下。
 	exit, _ := json.Marshal(workers.Exit{N: 1, Outcome: workers.OutOK})
 	ledger.Record(ctx, db, task.ID, workers.ExitKind, "dispatch", string(exit))
+	// 机器暂停了，卡片上看得出（暂停范围按短号记，页面写机器名）。
+	if err := hosts.EnsureLocal(ctx, db, hosts.Info{}); err != nil {
+		t.Fatal(err)
+	}
+	ps := &pause.Store{DB: db}
+	ps.Set(ctx, "h1", "u1")
+	read("legion", &legion)
+	if len(legion.Hosts) != 1 || !legion.Hosts[0].Paused || legion.Hosts[0].Name != "本机" {
+		t.Errorf("暂停的机器：%+v", legion.Hosts)
+	}
+	ps.Clear(ctx, "h1")
 	workers.SetMark(ctx, db, workers.Mark{Tool: "claude", Host: "h1", Kind: workers.SignalSetup, Reason: "没登录", Since: store.Now()})
 	read("legion", &legion)
 	if len(legion.Workers) != len(workers.Tools)+1 || legion.Window != workers.StatWindow {
@@ -342,7 +353,7 @@ func TestRoutes(t *testing.T) {
 	// 等人处理的不可用标记进「等你」，解除就消失；额度用尽会自己恢复，不进。
 	workers.SetMark(ctx, db, workers.Mark{Tool: "kimi", Host: "h3", Kind: workers.SignalQuota, Reason: "额度用尽", Since: store.Now(), Until: store.Now() + 3600_000})
 	read("today", &today)
-	if n := len(today.Asks); n != 2 || today.Asks[1].Kind != "worker" || today.Asks[1].Title != "claude@h1 没登录" ||
+	if n := len(today.Asks); n != 2 || today.Asks[1].Kind != "worker" || today.Asks[1].Title != "claude（本机）没登录" ||
 		today.Asks[1].Sub != "登录或装好运行环境后 atrium workers edit --clear claude@h1" {
 		t.Errorf("不可用标记应进等你（跟在卡住的活后面）：%+v", today.Asks)
 	}
@@ -366,8 +377,25 @@ func TestRoutes(t *testing.T) {
 	events.Emit(ctx, db, events.Event{Kind: events.LeaderEscalate, Task: task.ID, Dept: sub.ID, Target: org.Secretary,
 		Body: map[string]any{"from": a.ID, "label": "无法解决", "note": "证书要你签"}})
 	read("today", &today)
-	if len(today.Asks) != 1 || today.Asks[0].Kind != "escalate" || today.Asks[0].Title != "证书要你签" || today.Asks[0].ID != task.ID {
+	if len(today.Asks) != 1 || today.Asks[0].Kind != "escalate" || today.Asks[0].Title != "证书要你签" || today.Asks[0].ID != task.ID ||
+		today.Asks[0].Sub != "运行时负责人 上报：无法解决" {
 		t.Errorf("上报应进等你：%+v", today.Asks)
+	}
+	// 页面上提到身份、机器都写名字：侧栏带着名字表，抽屉里等负责人时写负责人的名字。
+	names, err := loadNav(ctx, db)
+	if err != nil || names.Names["u1"] != "你" || names.Names[a.ID] != "运行时负责人" || names.Names["h1"] != "本机" {
+		t.Errorf("名字表：%+v %v", names.Names, err)
+	}
+	running := ledger.Task{Status: ledger.Running}
+	for h, want := range map[watch.Holder]string{
+		{Kind: "leader", Who: a.ID, Text: "等负责人验收"}:             "运行时负责人：等负责人验收",
+		{Kind: "secretary", Who: org.Secretary, Text: "待分派"}:    "秘书：待分派",
+		{Kind: "worker", Who: "claude+opus", Text: "执行者在做（h1）"}: "执行者在做",
+		{Kind: "user", Who: "u1", Text: "等你验收"}:                 "等你验收",
+	} {
+		if got := holderText(running, h, names.Names); got != want {
+			t.Errorf("抽屉里的等待对象 %+v：%q", h, got)
+		}
 	}
 	read("dept/"+sub.ID, &page)
 	if page.Leader == nil || page.Leader.Name != "运行时负责人" || page.Leader.Inherited ||

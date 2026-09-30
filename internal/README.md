@@ -132,11 +132,11 @@ type Module struct {
 
 - `org.Ancestors(ctx, q, "oN")` → 顶层到本部门的链；`org.Chain(ctx, q, "oN")` → 要点链（顶层在前，同部门按 pos）；`org.ChainLine(p)` → 派活附的一行「k3（o1）规矩——为什么」。
 - 用户全局原则：`org.Principles()` 现读服务主机 `~/AGENTS.md`，原文拼成一节（文件不存在为空）；执行者（含审阅者）、负责人、秘书的提示词都从这里取，排在部门要点之前。测试把 `HOME`／`USERPROFILE` 指向临时目录。
-- 技能索引：`org.SkillIndex(org.Skills(…), except)` 把全部技能拼成一节（名字、一句话、当前版 SKILL.md 路径），读的人按手上的活自取；执行者、负责人、秘书的提示词都附。执行者提示词里 `except` 是任务挂上的技能（它另有「按这份做法干」一节，索引不重复）。
+- 技能索引：`org.SkillIndex(org.Skills(…), except)` 把全部技能拼成一节（名字、一句话，入口 `org.SkillHowTo` 写一次），读的人在哪台机器上都用 `atrium skill ls <名字>` 自取，提示词里不给服务机路径；执行者、负责人、秘书的提示词都附。执行者提示词里 `except` 是任务挂上的技能（它另有「按这份做法干」一节，索引不重复）。
 - 上限表在 `org/limits.go`（`Limits`：会增长的东西 → 上限 → 满了找谁 → 怎么办）；满了一律 `org.Full(key, dept, used)`，计数 `org.Counts(ctx, q, dept)`（网页「6/7」，接口 `GET /api/limits?node=oN`）。
 - 上限只挡写入，不截读取：读路径按技术上限 `org.ReadCap`（1000）查，超了报错而不是少给；超了业务上限的（导入的旧数据）照样全部返回，给人看的地方用 `org.Tally`／`org.Over` 标「超限 8/7」，要点链用 `org.PointsOver` 在派活与负责人提示词里加一行。
 - 巡检每轮 `org.ScanNotices` 对照 `limit_notices`：刚到或超了且未提醒则 watch 发 `limit.full`（要处理）；部门负责人投 `org.Recipient`，秘书、用户及其余投秘书。回到上限以内才删已提醒，再超再发。判定纯函数 `org.DecideNotice`。
-- 派活（dispatch）：`org.GetSkill` 取提示词附的 SKILL.md 路径 `Path`（当前版，在 `skills-current/<名字>/`，技能之间的 `../<名字>/SKILL.md` 能打开对方当前版）、优先执行者 `Workers`、交付要查 `Checks`、要的凭据 `Secrets`；`org.SecretEnv(ctx, db, data, task.Org, names)` → 注入执行者的凭据（按部门往上找，找不到报错带修正命令）。
+- 派活（dispatch）：`org.GetSkill` 取优先执行者 `Workers`、交付要查 `Checks`、要的凭据 `Secrets`；`org.SecretEnv(ctx, db, data, task.Org, names)` → 注入执行者的凭据（按部门往上找，找不到报错带修正命令）。
 - 负责人唤醒：`org.Overview(ctx, q, data, dept)` 总览全文；`org.Materials(…, MaterialFilter{Org})` 细节清单。
 - 删部门（`org edit oN --delete [--into oM]`，`org/delete.go`）：存了部门编号的每张表都登记在那里——并入时挪走（`deptMovables`）、挡着要人先处理（`deptBlockers`）或随部门删掉（`DeleteDept` 的语句表）三者之一。新加这类表时同时登记，否则删部门会留下悬空引用。
 - 权限：`org.CheckReach(ctx, q, actor, dept)`（用户都行；负责人只到自己部门及下属）；`org.CheckUser(actor, 做什么)`（拍板、凭据只有用户）。

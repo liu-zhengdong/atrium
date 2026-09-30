@@ -211,9 +211,9 @@ step "技能、资料、凭据、选项单、周期任务（第二波 D）"
 mkdir -p "$work/skill/refs"; printf -- '---\ndescription: 修 bug 的做法\n---\n先复现再修\n' >"$work/skill/SKILL.md"; echo 附 >"$work/skill/refs/a.md"
 out=$(json skill add fix-bug "$work/skill" --checks pr_exists || true); has '.ok == false and (.error.message|test("--checks: 不认识的检查"))'
 out=$(json skill add fix-bug "$work/skill" --checks video); has '.result.rev == 1 and .result.summary == "修 bug 的做法" and .result.files == 2'
-[ -f "$(jq -r .result.path <<<"$out")" ] || fail "技能文件不在数据目录"
 out=$(json skill add fix-bug --workers claude); has '.result.rev == 2 and .result.workers == ["claude"] and .result.checks == ["video"]'
-out=$(json skill ls fix-bug); has '.result.others == ["refs/a.md"] and (.result.body|test("先复现"))'
+out=$(json skill ls fix-bug); has '.result.others == ["refs/a.md"] and (.result.body|test("先复现")) and (.next|test("skill ls fix-bug/<相对路径>"))'
+[ "$("$bin" skill ls fix-bug/refs/a.md)" = 附 ] || fail "skill ls 名字/相对路径 应输出附属文件原文"
 printf '部门是什么' >"$work/overview.md"; printf 'abc' >"$work/detail.md"
 out=$(json material add o2 "$work/overview.md" --overview --note 总览); has '.result.id == "m1" and .result.kind == "overview"'
 out=$(json material add o2 "$work/detail.md" --note 细节); has '.result.id == "m2"'
@@ -364,7 +364,7 @@ out=$(json task add 只交结论 --org "$acc_org"); msg=$(jq -r .result.id <<<"$
 json task run "$msg" --worker fakesh >/dev/null
 out=$(json task wait "$msg" --timeout 30); has '.result.task.status == "done"'
 grep -q "开 PR" "$ATRIUM_DATA/tasks/$msg/prompt-1.md" && fail "没有仓库的活提示词里不该要求开 PR"
-grep -q "^- fix-bug：修 bug 的做法——" "$ATRIUM_DATA/tasks/$msg/prompt-1.md" || fail "没挂技能的活提示词里也该有技能索引"
+grep -qx -- "- fix-bug：修 bug 的做法" "$ATRIUM_DATA/tasks/$msg/prompt-1.md" || fail "没挂技能的活提示词里也该有技能索引（只写名字与一句话，不给服务机路径）"
 out=$(json org edit o1 --accept -); has '.ok'
 
 step "本机交付：本机仓库没有远程 → 假执行者提交 → 关卡 → 等你验收 → 打回交回原执行者、第 3 次转受阻 → 再派 → 验收通过合进本机 main → 删任务工作树与分支"

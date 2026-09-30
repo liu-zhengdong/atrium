@@ -511,7 +511,7 @@ func TestSchedules(t *testing.T) {
 	other, _ := org.Add(ctx, db, org.NewDept{Name: "文章", Parent: root.ID})
 	now := store.Now()
 	add := func(dept, every, at, kind string) agenda.Schedule {
-		x, err := agenda.AddSchedule(ctx, db, "", agenda.NewSchedule{Org: dept, Title: "巡一遍", Kind: kind, Every: every, At: at}, "secretary", now, time.Local)
+		x, err := agenda.AddSchedule(ctx, db, agenda.NewSchedule{Org: dept, Title: "巡一遍", Kind: kind, Every: every, At: at}, "secretary", now, time.Local)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -604,7 +604,7 @@ func TestDeptHeadAndTaskLinks(t *testing.T) {
 		}
 	}
 
-	x, err := agenda.AddSchedule(ctx, db, "", agenda.NewSchedule{Org: sub.ID, Title: "调研", Kind: "research", Every: "7d"}, "secretary", store.Now(), time.Local)
+	x, err := agenda.AddSchedule(ctx, db, agenda.NewSchedule{Org: sub.ID, Title: "调研", Kind: "research", Every: "7d"}, "secretary", store.Now(), time.Local)
 	if err != nil {
 		t.Fatal(err)
 	}

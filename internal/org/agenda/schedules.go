@@ -122,7 +122,7 @@ func Schedules(ctx context.Context, q store.Querier, dept string) ([]Schedule, e
 }
 
 // AddSchedule 建一条周期任务；第一轮按 FirstDue。
-func AddSchedule(ctx context.Context, db *store.DB, data string, in NewSchedule, actor string, now int64, loc *time.Location) (Schedule, error) {
+func AddSchedule(ctx context.Context, db *store.DB, in NewSchedule, actor string, now int64, loc *time.Location) (Schedule, error) {
 	if in.Kind == "" {
 		in.Kind = "task"
 	}
@@ -153,7 +153,7 @@ func AddSchedule(ctx context.Context, db *store.DB, data string, in NewSchedule,
 			return err
 		}
 		if in.Skill != "" {
-			if _, err := org.GetSkill(ctx, tx, data, in.Skill); err != nil {
+			if _, err := org.GetSkill(ctx, tx, in.Skill); err != nil {
 				return err
 			}
 		}

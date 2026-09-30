@@ -64,6 +64,8 @@ func TestWorkerRule(t *testing.T) {
 	cases := map[string]WorkerAccess{
 		"GET /api/tasks":                   WorkerRead,
 		"GET /api/materials/{id}":          WorkerRead,
+		"GET /api/skills/{name}":           WorkerRead,
+		"POST /api/skills":                 WorkerDeny,
 		"GET /api/tasks/{id}/log":          WorkerRead,
 		"POST /api/materials":              WorkerMaterial,
 		"POST /api/materials/{id}/revs":    WorkerMaterial,

@@ -664,7 +664,7 @@ func TestHostNeedLocalOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	x, err := agenda.AddSchedule(ctx, db, "", agenda.NewSchedule{Org: d.ID, Title: "巡检", Kind: "patrol", Every: "7d"}, "u1", store.Now(), time.UTC)
+	x, err := agenda.AddSchedule(ctx, db, agenda.NewSchedule{Org: d.ID, Title: "巡检", Kind: "patrol", Every: "7d"}, "u1", store.Now(), time.UTC)
 	if err != nil {
 		t.Fatal(err)
 	}

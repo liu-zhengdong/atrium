@@ -17,7 +17,7 @@ import (
 // 且只加载给定 MCP 的已验证入口；仍读个人 MCP。
 // opencode 1.18.32 的 CONFIG_DIR/CONFIG_CONTENT 追加或合并配置，不能隔离全局 MCP；
 // 不改 XDG_CONFIG_HOME，以免 shell 子进程丢失 gh 配置与 git 凭据入口。
-// 两者始终带 chrome-devtools MCP，由 MCP 启动专用资料目录的 Chrome。
+// 两者始终带 chrome-devtools MCP；入口持锁使用专用资料目录，被占时用 --isolated。
 // computer use 操作本机应用；Browser 插件需要 Chrome 扩展，不带。
 // 用户应用操作由 k26 管；界面验证使用临时资料目录的无头环境。
 // macOS 取 mcp_servers.computer-use；Windows 取 computer-use 插件与 node_repl。
@@ -45,7 +45,7 @@ func LocalTools(tool string, req Request) (Request, error) {
 }
 
 func chromeMCP() map[string]any {
-	return map[string]any{"command": "npx", "args": []string{"-y", "chrome-devtools-mcp@latest", "--no-usage-statistics"}}
+	return map[string]any{"command": "atrium", "args": []string{"workers", "chrome-mcp"}}
 }
 
 // ComputerUseOverrides 仅取 computer use 的表；通用 TOML 库处理跨行值和带引号的键。

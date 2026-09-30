@@ -153,7 +153,7 @@ func TestUnifiedMCP(t *testing.T) {
 					}
 				}
 			}
-			want := map[string]any{"command": "npx", "args": []any{"-y", "chrome-devtools-mcp@latest", "--no-usage-statistics"}}
+			want := map[string]any{"command": "atrium", "args": []any{"workers", "chrome-mcp"}}
 			if !reflect.DeepEqual(server, want) {
 				t.Fatalf("%s: %+v", tool, server)
 			}

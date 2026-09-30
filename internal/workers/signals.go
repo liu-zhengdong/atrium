@@ -350,10 +350,12 @@ func thinkingExhausted(tail string) (Signal, bool) {
 }
 
 // Ending 是正常退出后看日志判的结局（纯函数）：Known 为假表示日志判不了，按退出码算。
+// Line 是判出结局的那一行日志（收尾事件、命中 done_match／error_match 的行）；通用命令行没见到结束行的推断没有这一行。
 type Ending struct {
 	Known  bool   `json:"known"`
 	OK     bool   `json:"ok"`
 	Reason string `json:"reason,omitempty"`
+	Line   string `json:"-"`
 }
 
 // Ended 按工具的日志结构判结局：stream-json 看最后的 result 事件（codex 看 turn.completed／turn.failed）；通用命令行按 done_match / error_match。
@@ -364,7 +366,7 @@ func (a *Driver) Ended(tail string) Ending {
 			re := regexp.MustCompile(a.cli.ErrorMatch)
 			for i := len(lines) - 1; i >= 0; i-- {
 				if re.MatchString(lines[i]) {
-					return Ending{Known: true, Reason: "日志命中出错标记（error_match）：" + oneLine(lines[i])}
+					return Ending{Known: true, Reason: "日志命中出错标记（error_match）：" + oneLine(lines[i]), Line: lines[i]}
 				}
 			}
 		}
@@ -372,7 +374,7 @@ func (a *Driver) Ended(tail string) Ending {
 			re := regexp.MustCompile(a.cli.DoneMatch)
 			for _, l := range lines {
 				if re.MatchString(l) {
-					return Ending{Known: true, OK: true}
+					return Ending{Known: true, OK: true, Line: l}
 				}
 			}
 			return Ending{Known: true, Reason: "日志里没见到结束标记（done_match），像是没做完就退出了"}
@@ -384,32 +386,40 @@ func (a *Driver) Ended(tail string) Ending {
 	}
 	lines := strings.Split(tail, "\n")
 	for i := len(lines) - 1; i >= 0; i-- {
-		e := parseEvent(lines[i])
-		switch {
-		case e == nil:
-		case e.str("type") == "result":
-			if e["is_error"] == true {
-				return Ending{Known: true, Reason: "执行者报错收尾：" + oneLine(e.str("result")+" "+e.str("subtype"))}
-			}
-			return Ending{Known: true, OK: true}
-		case e.str("event") == "result":
-			r := e.obj("result")
-			if r.str("status") == "SUCCESS" {
-				return Ending{Known: true, OK: true}
-			}
-			return Ending{Known: true, Reason: "执行者报错收尾：" + oneLine(r.str("status")+" "+r.str("error"))}
-		case e.str("type") == "turn.completed":
-			return Ending{Known: true, OK: true}
-		case e.str("type") == "turn.failed":
-			return Ending{Known: true, Reason: "执行者报错收尾：" + oneLine(e.obj("error").str("message"))}
-		case e.str("type") == "step_finish":
-			if r := e.obj("part").str("reason"); r == "length" {
-				return Ending{Known: true, Reason: "上下文或输出长度用尽"}
-			}
-			return Ending{Known: true, OK: true}
+		if e, ok := eventEnding(parseEvent(lines[i])); ok {
+			e.Line = lines[i]
+			return e
 		}
 	}
 	return Ending{}
+}
+
+// eventEnding 认一条收尾事件；不是收尾事件（或不是 JSON）时 ok 为假。
+func eventEnding(e event) (Ending, bool) {
+	switch {
+	case e == nil:
+	case e.str("type") == "result":
+		if e["is_error"] == true {
+			return Ending{Known: true, Reason: "执行者报错收尾：" + oneLine(e.str("result")+" "+e.str("subtype"))}, true
+		}
+		return Ending{Known: true, OK: true}, true
+	case e.str("event") == "result":
+		r := e.obj("result")
+		if r.str("status") == "SUCCESS" {
+			return Ending{Known: true, OK: true}, true
+		}
+		return Ending{Known: true, Reason: "执行者报错收尾：" + oneLine(r.str("status")+" "+r.str("error"))}, true
+	case e.str("type") == "turn.completed":
+		return Ending{Known: true, OK: true}, true
+	case e.str("type") == "turn.failed":
+		return Ending{Known: true, Reason: "执行者报错收尾：" + oneLine(e.obj("error").str("message"))}, true
+	case e.str("type") == "step_finish":
+		if r := e.obj("part").str("reason"); r == "length" {
+			return Ending{Known: true, Reason: "上下文或输出长度用尽"}, true
+		}
+		return Ending{Known: true, OK: true}, true
+	}
+	return Ending{}, false
 }
 
 func asMap(v any) map[string]any { m, _ := v.(map[string]any); return m }

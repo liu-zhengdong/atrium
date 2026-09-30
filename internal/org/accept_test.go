@@ -74,13 +74,13 @@ func TestEditAccept(t *testing.T) {
 	if err := set(sub.ID, "boss"); err == nil {
 		t.Fatal("非法验收人应拒绝")
 	}
-	if _, err := DeleteDept(ctx, db, top.ID); err == nil {
+	if _, err := DeleteDept(ctx, db, top.ID, DeptPatch{}); err == nil {
 		t.Fatal("还有下属时应拒绝删")
 	}
-	if _, err := DeleteDept(ctx, db, sub.ID); err != nil {
+	if _, err := DeleteDept(ctx, db, sub.ID, DeptPatch{}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := DeleteDept(ctx, db, top.ID); err != nil {
+	if _, err := DeleteDept(ctx, db, top.ID, DeptPatch{}); err != nil {
 		t.Fatalf("设了验收人的部门应能删：%v", err)
 	}
 	var n int

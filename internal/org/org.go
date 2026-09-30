@@ -264,7 +264,7 @@ func addRepos(ctx context.Context, tx *sql.Tx, id string, list []string) error {
 }
 
 // DeptPatch 是 org edit 的输入；nil 表示不改。Leader 给 "-" 表示清掉；Parent 给 "-" 表示挪到顶层。
-// Delete 为真时删掉这个部门（DeleteDept），不能与别的字段一起给。
+// Delete 为真时删掉这个部门（DeleteDept，路由按它分开），不能与别的字段一起给；Into 只和 Delete 一起给：并入哪个部门。
 type DeptPatch struct {
 	Name     *string  `json:"name,omitempty"`
 	Parent   *string  `json:"parent,omitempty"`
@@ -277,17 +277,22 @@ type DeptPatch struct {
 	RepoAdd  []string `json:"repo_add,omitempty"`
 	RepoDrop []string `json:"repo_rm,omitempty"`
 	Delete   bool     `json:"delete,omitempty"`
+	Into     *string  `json:"into,omitempty"`
+}
+
+// edits 判定有没有要改的字段（Delete、Into 之外）。
+func (p DeptPatch) edits() bool {
+	return p.Name != nil || p.Parent != nil || p.What != nil || p.Uses != nil || p.Now != nil || p.Next != nil ||
+		p.Leader != nil || p.Accept != nil || len(p.RepoAdd) > 0 || len(p.RepoDrop) > 0
 }
 
 func Edit(ctx context.Context, db *store.DB, id string, p DeptPatch) (Dept, error) {
-	none := p.Name == nil && p.Parent == nil && p.What == nil && p.Uses == nil && p.Now == nil && p.Next == nil &&
-		p.Leader == nil && p.Accept == nil && len(p.RepoAdd) == 0 && len(p.RepoDrop) == 0
 	switch {
-	case p.Delete && !none:
-		return Dept{}, api.Usage("--delete: 不和别的字段一起给")
 	case p.Delete:
-		return DeleteDept(ctx, db, id)
-	case none:
+		return Dept{}, api.Usage("--delete: 删部门走 DeleteDept")
+	case p.Into != nil:
+		return Dept{}, api.Usage("--into: 只和 --delete 一起给")
+	case !p.edits():
 		return Dept{}, api.Usage("没有要改的字段").WithNext("atrium org edit --help")
 	}
 	if p.Name != nil {

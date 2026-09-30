@@ -131,8 +131,16 @@ func FactsOf(ctx context.Context, q store.Querier, t ledger.Task) (Facts, error)
 		}
 	}
 	if t.Status == ledger.Todo {
+		if f.DepEnded, err = depEnded(ctx, q, f.Deps); err != nil {
+			return f, err
+		}
 		if f.OpenChildren, f.Children, err = ledger.Children(ctx, q, t.ID); err != nil {
 			return f, err
+		}
+		if f.Children > 0 && f.OpenChildren == 0 {
+			if f.ChildEnded, err = childEnded(ctx, q, t.ID); err != nil {
+				return f, err
+			}
 		}
 	}
 	p, err := latestProc(ctx, q, t.ID)
@@ -143,6 +151,39 @@ func FactsOf(ctx context.Context, q store.Querier, t ledger.Task) (Facts, error)
 		f.ProgressAt = progressOf(t.ID, f.Proc.PID)
 	}
 	return f, nil
+}
+
+// depEnded 取已结束的依赖各自结束的时刻（至多 50 个依赖，逐个读）。
+func depEnded(ctx context.Context, q store.Querier, deps []ledger.DepState) (map[string]int64, error) {
+	out := map[string]int64{}
+	for _, d := range deps {
+		if !d.Status.Finished() {
+			continue
+		}
+		dt, err := ledger.Get(ctx, q, d.ID)
+		if err != nil {
+			return nil, err
+		}
+		if dt.FinishedAt != nil {
+			out[d.ID] = *dt.FinishedAt
+		}
+	}
+	return out, nil
+}
+
+// childEnded 取子任务里最晚结束的时刻（看最近建的 500 个）。
+func childEnded(ctx context.Context, q store.Querier, id string) (int64, error) {
+	kids, err := ledger.List(ctx, q, ledger.Filter{Parent: id, Status: []ledger.Status{ledger.Done, ledger.Failed, ledger.Cancelled}, Limit: 500})
+	if err != nil {
+		return 0, err
+	}
+	var at int64
+	for _, k := range kids {
+		if k.FinishedAt != nil {
+			at = max(at, *k.FinishedAt)
+		}
+	}
+	return at, nil
 }
 
 // upOf 是任务所属部门的负责人的上一层（部门往上跳过这位负责人的下一位）；没有更上一层返回空。

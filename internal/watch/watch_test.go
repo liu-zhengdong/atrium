@@ -120,6 +120,88 @@ func TestHolderBrokenDeps(t *testing.T) {
 	}
 }
 
+// t501：待派任务归负责人时从开始要他处理的那一刻计时，不按任务自己的 updated_at；
+// 久放的任务依赖刚断，先叫醒负责人，30 分钟后才可能上交。
+func TestLeaderSince(t *testing.T) {
+	now := int64(1000 * minute)
+	old := now - 5*60*minute // 放了 5 小时
+	todo := ledger.Task{ID: "t1", Status: ledger.Todo, UpdatedAt: old}
+	dep := func(id string, s ledger.Status) ledger.DepState { return ledger.DepState{ID: id, Status: s} }
+	cases := []struct {
+		name  string
+		f     Facts
+		since int64
+	}{
+		{"久放的 todo 依赖断了：从断的那一刻算", Facts{Task: todo, Deps: []ledger.DepState{dep("t2", ledger.Cancelled)},
+			DepEnded: map[string]int64{"t2": now}}, now},
+		{"断了两个：从先断的算", Facts{Task: todo, Deps: []ledger.DepState{dep("t2", ledger.Failed), dep("t3", ledger.Cancelled)},
+			DepEnded: map[string]int64{"t2": now - 10*minute, "t3": now}}, now - 10*minute},
+		{"断了一个、别的后来完成：仍从断的算", Facts{Task: todo, Deps: []ledger.DepState{dep("t2", ledger.Failed), dep("t3", ledger.Done)},
+			DepEnded: map[string]int64{"t2": now - 10*minute, "t3": now}}, now - 10*minute},
+		{"断了之后负责人改过任务：从改的时刻算", Facts{Task: ledger.Task{ID: "t1", Status: ledger.Todo, UpdatedAt: now},
+			Deps: []ledger.DepState{dep("t2", ledger.Cancelled)}, DepEnded: map[string]int64{"t2": now - 10*minute}}, now},
+		{"建任务时依赖早就断了：从建的时刻算", Facts{Task: todo, Deps: []ledger.DepState{dep("t2", ledger.Cancelled)},
+			DepEnded: map[string]int64{"t2": old - 60*minute}}, old},
+		{"依赖都完成、待派活：从最后完成的算", Facts{Task: todo, Deps: []ledger.DepState{dep("t2", ledger.Done), dep("t3", ledger.Done)},
+			DepEnded: map[string]int64{"t2": now - 10*minute, "t3": now}}, now},
+		{"子任务都结束、等收尾：从最后结束的算", Facts{Task: todo, Children: 3, ChildEnded: now}, now},
+		{"没有依赖和子任务：从任务改动的时刻算", Facts{Task: todo}, old},
+	}
+	for _, c := range cases {
+		c.f.Owner = "a2"
+		h := HolderOf(c.f)
+		if h.Role != RoleLeader || h.Since != c.since {
+			t.Errorf("%s：起点 %d 分，应为 %d 分（%+v）", c.name, h.Since/minute, c.since/minute, h)
+			continue
+		}
+		for _, d := range []struct {
+			after int64
+			want  Action
+		}{{29 * minute, Keep}, {30 * minute, Notify}, {59 * minute, Notify}, {60 * minute, Escalate}} {
+			if got := Decide(h, Obs{}, h.Since+d.after); got != d.want {
+				t.Errorf("%s：起点后 %d 分应 %q，得 %q", c.name, d.after/minute, d.want, got)
+			}
+		}
+	}
+}
+
+// 巡检一轮：放了 5 小时的待派任务依赖刚取消，不上交；过 30 分钟先叫醒 o2 的负责人 a2，不发给上一层 a1。
+func TestTickBrokenDepWakesOwnerFirst(t *testing.T) {
+	env, ctx := setup(t)
+	dep, _ := ledger.Add(ctx, env.DB, ledger.NewTask{Title: "前置", Org: "o2"}, "u1")
+	task, err := ledger.Add(ctx, env.DB, ledger.NewTask{Title: "后续", Org: "o2", After: []string{dep.ID}}, "u1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	env.DB.Exec(`UPDATE tasks SET updated_at = ? WHERE id = ?`, store.Now()-5*60*minute, task.ID)
+	if _, err := ledger.Apply(ctx, env.DB, dep.ID, ledger.Event{Kind: ledger.Cancel}, "u1", ""); err != nil {
+		t.Fatal(err)
+	}
+	overdues := func(who string) []events.Row {
+		var out []events.Row
+		rows, _ := events.Pending(ctx, env.DB, who, false, 10)
+		for _, r := range rows {
+			if r.Kind == events.Overdue && r.Task == task.ID {
+				out = append(out, r)
+			}
+		}
+		return out
+	}
+	if err := Tick(ctx, env); err != nil {
+		t.Fatal(err)
+	}
+	if a1, a2 := overdues("a1"), overdues("a2"); len(a1)+len(a2) != 0 {
+		t.Fatalf("依赖刚断不该到期：a1 %+v，a2 %+v", a1, a2)
+	}
+	env.DB.Exec(`UPDATE tasks SET finished_at = ? WHERE id = ?`, store.Now()-31*minute, dep.ID)
+	if err := Tick(ctx, env); err != nil {
+		t.Fatal(err)
+	}
+	if a1, a2 := overdues("a1"), overdues("a2"); len(a1) != 0 || len(a2) != 1 {
+		t.Fatalf("断了 31 分钟应只叫醒 a2：a1 %+v，a2 %+v", a1, a2)
+	}
+}
+
 func TestDecide(t *testing.T) {
 	now := int64(100 * minute)
 	worker := func(role Role, since int64) Holder { return Holder{Kind: "worker", Role: role, Since: since} }

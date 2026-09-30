@@ -98,6 +98,8 @@ type rig struct {
 
 func newRig(t *testing.T) *rig {
 	theHub = newHub()
+	loadavg = func() float64 { return 0 }
+	t.Cleanup(func() { loadavg = readLoadavg })
 	dir := t.TempDir()
 	db, err := store.Open(filepath.Join(dir, "atrium.db"))
 	if err != nil {

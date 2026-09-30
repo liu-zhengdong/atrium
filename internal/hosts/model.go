@@ -24,8 +24,9 @@ const (
 
 // CLI 是一台机器上某个编码 CLI 的情况。LoggedIn 为 nil 表示看不出。
 type CLI struct {
-	Installed bool  `json:"installed"`
-	LoggedIn  *bool `json:"logged_in"`
+	Version   string `json:"version,omitempty"`
+	Installed bool   `json:"installed"`
+	LoggedIn  *bool  `json:"logged_in"`
 }
 
 // Info 是机器的自我介绍（代理接入与每次重连时报，本机服务启动时报）。

@@ -69,7 +69,7 @@ func ProbeFault(exe string, r ProbeResult) (reason, lines string) {
 	case r.Code != 0:
 		return fmt.Sprintf("自检 %s --version 退出码 %d", exe, r.Code), lines
 	}
-	return "", ""
+	return "", lines
 }
 
 func clip(s string, n int) string {
@@ -101,7 +101,7 @@ func Probe(ctx context.Context, env map[string]string, tools []workers.Tool) Pro
 				mu.Unlock()
 			} else {
 				mu.Lock()
-				c := CLI{Installed: true}
+				c := CLI{Installed: true, Version: lines}
 				home := env[platform.EnvKey(runtime.GOOS, "HOME")]
 				if runtime.GOOS == "windows" {
 					home = env["USERPROFILE"]

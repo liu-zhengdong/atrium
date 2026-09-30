@@ -29,7 +29,7 @@ func Commands(t *cli.Table, mods []app.Module) {
 		Run: func(c *cli.Ctx) error { return start(c) }})
 	t.Add(cli.Command{Path: "serve", Summary: "服务进程入口（由 start 拉起）", Local: true, Hidden: true,
 		Run: func(c *cli.Ctx) error { return Serve(mods, c.Env.Getenv) }})
-	t.Add(cli.Command{Path: "status", Summary: "看服务是否在跑、端口、暂停范围", Local: true,
+	t.Add(cli.Command{Path: "status", Summary: "看服务或代理是否在跑、数据目录", Local: true,
 		Run: func(c *cli.Ctx) error { return status(c) }})
 	t.Add(cli.Command{Path: "stop", Summary: "停下服务（在途请求排空后退出）", Local: true,
 		Flags: []cli.Flag{{Name: "force", Bool: true, Help: "服务不响应时强制结束进程"}},
@@ -121,6 +121,9 @@ func status(c *cli.Ctx) error {
 	}
 	info, ok := running(p)
 	if !ok {
+		if handled, err := agentStatus(c, p); handled || err != nil {
+			return err
+		}
 		msg := "服务没在运行（数据目录 " + p.Data + "）"
 		if info.PID != 0 {
 			msg += fmt.Sprintf("；登记文件里的 pid %d 已不响应", info.PID)

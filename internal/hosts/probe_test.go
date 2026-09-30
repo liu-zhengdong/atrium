@@ -20,8 +20,8 @@ func TestProbeFault(t *testing.T) {
 		r            ProbeResult
 		reason, keep string
 	}{
-		{"跑通", ProbeResult{Output: "codex-cli 0.157.1\n"}, "", ""},
-		{"跑通但有杂讯也算通", ProbeResult{Output: "warning: x\n1.0\n"}, "", ""},
+		{"跑通", ProbeResult{Output: "codex-cli 0.157.1\n"}, "", "codex-cli 0.157.1"},
+		{"跑通但有杂讯也算通", ProbeResult{Output: "warning: x\n1.0\n"}, "", "warning: x；1.0"},
 		{"非 0 退出，留前三行非空行", ProbeResult{Code: 1, Output: "\n No active Node.js version.\n\nRun nvm use\nl3\nl4\n"},
 			"自检 codex --version 退出码 1", "No active Node.js version.；Run nvm use；l3"},
 		{"超时", ProbeResult{TimedOut: true, Code: -1, Output: "starting"}, "自检 codex --version 20 秒没结束", "starting"},
@@ -63,7 +63,7 @@ func TestProbe(t *testing.T) {
 		env = map[string]string{"PATH": bin, "PATHEXT": ".EXE", "HOSTS_FAKE_WORKER": "probe", "SYSTEMROOT": os.Getenv("SYSTEMROOT")}
 	}
 	report := Probe(context.Background(), env, []workers.Tool{{Name: "custom-cli", Exe: "codex"}, {Name: "opencode", Exe: "opencode"}})
-	if !report.CLIs["custom-cli"].Installed || len(report.CLIs) != 1 {
+	if report.CLIs["custom-cli"].Version != "codex-cli 9.9.9" || !report.CLIs["custom-cli"].Installed || len(report.CLIs) != 1 {
 		t.Fatalf("仅实测跑通的自定义命令可用：%+v", report)
 	}
 	got := report.Failed
@@ -132,7 +132,7 @@ func TestAgentProbeRoute(t *testing.T) {
 	host := a.Cfg.Host
 	hostClient := &api.Client{Base: g.server.URL, Token: a.Cfg.Token}
 	report := func(failed []ProbeFailure) {
-		if err := hostClient.Do(ctx, "POST", "/api/agent/probe", ProbeReport{CLIs: map[string]CLI{"codex": {Installed: true}}, Failed: failed}, nil); err != nil {
+		if err := hostClient.Do(ctx, "POST", "/api/agent/probe", ProbeReport{CLIs: map[string]CLI{"codex": {Installed: true, Version: "codex-cli 9.9.9"}}, Failed: failed}, nil); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -152,6 +152,10 @@ func TestAgentProbeRoute(t *testing.T) {
 		t.Fatalf("%+v %v", c, err)
 	}
 	report(nil)
+	h, err := Get(ctx, g.env.DB, host)
+	if err != nil || h.Info.CLIs["codex"].Version != "codex-cli 9.9.9" || !strings.Contains(formatView(View{Host: h}), "codex-cli 9.9.9") {
+		t.Fatalf("版本应经过上报、持久化与显示：%+v %v", h, err)
+	}
 	if marks, _ := workers.Marks(ctx, g.env.DB, store.Now()); len(marks) != 0 {
 		t.Fatalf("跑通后应解除：%+v", marks)
 	}

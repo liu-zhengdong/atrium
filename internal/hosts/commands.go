@@ -154,7 +154,7 @@ func Commands(t *cli.Table) {
 			return c.Done(r, text, "atrium host ls "+id)
 		}})
 	t.Group("agent", "远程代理")
-	dataFlag := cli.Flag{Name: "data", Value: "目录", Help: "代理数据目录（缺省 ATRIUM_AGENT_DATA 或 ~/.atrium-agent）"}
+	dataFlag := cli.Flag{Name: "data", Value: "目录", Help: "代理数据目录（缺省 ATRIUM_DATA 或 ~/.atrium-v2）"}
 	// 代理的两条命令在远程机器上跑，照 host add 的回执抄，不列在帮助里（帮助末尾一行点名）。
 	t.Add(cli.Command{Path: "agent", Summary: "在远程机器上跑代理（前台）：第一次用 --server 与 --token 接入", Local: true, Hidden: true,
 		Flags: []cli.Flag{
@@ -209,6 +209,11 @@ func formatView(v View) string {
 		var clis []string
 		for name, c := range v.Info.CLIs {
 			s := name
+			if c.Version != "" {
+				s += " " + c.Version
+			} else {
+				s += "（版本未知）"
+			}
 			switch {
 			case c.LoggedIn == nil:
 				s += "（登录看不出）"

@@ -359,7 +359,7 @@ type Today struct {
 	Running     []Row        `json:"running"`
 	Queued      int          `json:"queued"`
 	Drafts      int          `json:"drafts"` // 草稿只给数，点开到根部门的任务页
-	Goals       ledger.Goals `json:"goals"`  // 三个目标的数（与 top 同一份）
+	Goals       ledger.Goals `json:"goals"`  // 三个目标的数（与 top 同一份）；页面只写近 7 天，累计在 top 里
 	Shipped     []Row        `json:"shipped"`
 	ShippedMore int          `json:"shipped_more"` // 今天完成但超出列表上限、没列出的件数
 	Paused      []string     `json:"paused"`       // 暂停范围（all、oN、hN）；空表示没暂停
@@ -879,7 +879,6 @@ type TaskDetail struct {
 	Step      int            `json:"step"`
 	State     string         `json:"state"`
 	Holder    string         `json:"holder"`
-	HostName  string         `json:"host_name"`
 	Trace     *workers.Trace `json:"trace"`   // 最近一次拉起的经过（与 task log 同一份解析）；还没拉起过为空
 	Live      bool           `json:"live"`    // 执行者正在干（执行这一步）
 	RunAt     int64          `json:"run_at"`  // 最近一次拉起的时刻
@@ -908,7 +907,7 @@ func loadTask(ctx context.Context, q store.Querier, id string) (TaskDetail, erro
 	if err != nil {
 		return TaskDetail{}, err
 	}
-	out := TaskDetail{Task: t, Steps: Steps, Step: step(t), State: state(t, h), Holder: holderText(t, h, names)}
+	out := TaskDetail{Task: t, Steps: stepsOf(t), Step: step(t), State: state(t, h), Holder: holderText(t, h, names)}
 	if err := relations(ctx, q, &out); err != nil {
 		return out, err
 	}
@@ -925,12 +924,6 @@ func loadTask(ctx context.Context, q store.Querier, id string) (TaskDetail, erro
 	}
 	if t.Org != "" {
 		if err := q.QueryRowContext(ctx, `SELECT name FROM departments WHERE id = ?`, t.Org).Scan(&out.DeptName); err != nil {
-			return out, err
-		}
-	}
-	if t.Host != "" {
-		err := q.QueryRowContext(ctx, `SELECT name FROM hosts WHERE id = ?`, t.Host).Scan(&out.HostName)
-		if err != nil && !store.IsNotFound(err) {
 			return out, err
 		}
 	}
@@ -1056,7 +1049,7 @@ func holderOf(ctx context.Context, q store.Querier, t ledger.Task) (watch.Holder
 }
 
 // holderText 是「现在在等谁」：没结束的按等待对象说，结束了的按结果说。
-// 要负责人、秘书动手的写上是谁（names 里的名字）；执行者是谁、在哪台机器，抽屉下面「执行者」「机器」两行写着，这里不重复；
+// 要负责人、秘书动手的写上是谁（names 里的名字）；执行者是谁、在哪台机器，抽屉下面「执行者」一行写着，这里不重复；
 // 等你的、等运行时的，话里已说明。
 func holderText(t ledger.Task, h watch.Holder, names map[string]string) string {
 	if t.Status.Finished() && t.Status != ledger.Failed {

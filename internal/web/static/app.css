@@ -57,6 +57,10 @@ a{color:inherit;text-decoration:none}
 
 /* 今天 */
 .hello{font-size:28px;font-weight:600;margin:0;text-wrap:balance}
+/* 标题行右侧一行小字写三个目标（近 7 天），比标题轻得多 */
+.page-head{display:flex;align-items:baseline;gap:8px 24px;flex-wrap:wrap}
+.goals{margin:0 0 0 auto;font-size:13px;color:var(--ink2)}
+.goals span{color:var(--ink3);margin-right:8px}
 .pulse-line{margin:8px 0 0;color:var(--ink2)}
 .pulse-line .paused{color:var(--user-ink);font-weight:500;white-space:nowrap}.pulse-line .paused svg{width:13px;height:13px;margin-right:5px;vertical-align:-1px}
 a.quiet{color:inherit}a.quiet:hover{color:var(--ink)}
@@ -67,18 +71,21 @@ a.quiet{color:inherit}a.quiet:hover{color:var(--ink)}
 .section h2 .sort{margin-left:auto;font-size:12px;color:var(--ink3);display:inline-flex;align-items:center;gap:4px}
 .section h2 .sort svg{width:12px;height:12px}
 .section h2 .sort:hover{color:var(--ink)}
-/* 今天页：节标题是一级标签（比行重），件数跟在后面；四节逐级 subgrid 共用一套列，列宽取全页最宽的那格，节与节之间对齐 */
-.today{display:grid;grid-template-columns:16px minmax(0,1fr) auto auto auto;column-gap:12px}
+/* 今天页：节标题是一级标签（比行重），件数跟在后面；三块逐级 subgrid 共用一套列，列宽取全页最宽的那格，节与节之间对齐；
+   后三列给够两种页签内容的宽度（部门名、多久一轮、「10-01 09:00」），切页签时不跳 */
+.today{display:grid;grid-template-columns:16px minmax(0,1fr) minmax(84px,auto) minmax(96px,auto) minmax(76px,auto);column-gap:12px}
 .today>.section,.today .rows,.today .row{grid-column:1/-1;display:grid;grid-template-columns:subgrid}
 .today .section>:not(.rows){grid-column:1/-1}
 .today .rows>.more{grid-column:1/-1}
 .today .section h2{font-size:15px;font-weight:600;color:var(--ink);margin-bottom:6px}
 .today h2 .n{font-size:13px;font-weight:400;color:var(--ink3)}
+/* 第三块用页签当节标题（今天完成 | 接下来 7 天），和部门页的页签同一套 */
+.today .section>.tabs{margin:0 0 6px -12px}
+.today .tabs button{font-size:15px;font-weight:600;color:var(--ink3);display:inline-flex;align-items:baseline;gap:8px}
+.today .tabs button.on{color:var(--ink)}
+.today .tabs .n{font-size:13px;font-weight:400;color:var(--ink3)}
 .today .row .time{width:auto;min-width:40px}
 .row .dept{color:var(--ink3);font-size:13px;white-space:nowrap}
-.goals{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:12px 24px;align-items:baseline;margin-top:4px;font-size:14px}
-.goals .h{font-size:12px;color:var(--ink3);text-align:right}.goals .num{text-align:right}
-.goals .why{display:block;color:var(--ink3);font-size:12px;margin-top:2px}
 .today .empty{padding:9px 0;text-align:left} /* 空态和一行一样高：没有内容的节不比有一条时更占地方 */
 
 .asks{display:flex;flex-direction:column;gap:8px}
@@ -160,6 +167,7 @@ button.lead:hover{background:var(--hover)}
 .crumb.up .id{margin-right:6px}
 .dbody h3{font-size:19px;font-weight:600;margin:4px 0 6px;text-wrap:balance}
 .dbody .sub-t{color:var(--ink2);font-size:13px;margin:0}
+.dbody .done-line{margin:6px 0 0} /* 结束了的任务：结果写在标题下一行，不用灰底状态块 */
 .steps{display:flex;margin:26px 0 8px}
 .step{flex:1;display:flex;flex-direction:column;align-items:center;gap:8px;font-size:12px;color:var(--ink3);position:relative}
 .step::before{content:"";position:absolute;top:5px;left:-50%;right:50%;height:2px;background:var(--line)}
@@ -211,12 +219,24 @@ button.lead:hover{background:var(--hover)}
 @media (prefers-reduced-motion:reduce){.phase.run .pd,.pips i.run{animation:none}}
 
 .opts{display:flex;flex-direction:column;gap:8px;margin:20px 0}
-.opt{display:grid;grid-template-columns:20px 1fr;gap:12px;padding:14px;border-radius:12px;background:var(--raise);text-align:left;border:1.5px solid transparent}
+/* 选项单：一项是一个可点开的按钮，收起时标题、能得到什么、代价各一行（超出截断）；点开看全文与为什么现在、不做会怎样 */
+.opt{display:grid;grid-template-columns:20px 1fr 16px;gap:12px;width:100%;padding:12px 14px;border-radius:12px;background:var(--raise);text-align:left;border:1.5px solid transparent;cursor:pointer;font:inherit;color:inherit}
 .opt:hover{background:var(--hover)}
 .opt.on{border-color:var(--user);background:var(--user-soft)} /* 你选的项 */
-.opt .t{font-weight:500;display:flex;gap:8px;align-items:baseline;flex-wrap:wrap}
+.opt>div{min-width:0}
+.opt .pos{color:var(--ink3);font-size:13px;line-height:22px}
+.opt .t{font-weight:500;display:flex;gap:8px;align-items:baseline;flex-wrap:wrap;line-height:22px}
+.opt .rec{font-size:11px;font-weight:500;color:var(--user-ink);background:var(--user-soft);padding:1px 6px;border-radius:5px}
+.opt .pick{font-size:11px;color:var(--user-ink);font-weight:500}
 .opt .g{color:var(--ink2);font-size:13px;margin-top:2px}
-.opt .cost{font:12px var(--sans);color:var(--ink3);margin-top:6px}
+.opt .cost{font-size:13px;color:var(--ink3);margin-top:2px}
+.opt .cost b{font-weight:500;margin-right:6px}
+.opt:not(.open) .g,.opt:not(.open) .cost{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.opt .why{display:grid;grid-template-columns:auto 1fr;gap:4px 10px;margin:10px 0 0;font-size:13px}
+.opt .why dt{color:var(--ink3)}.opt .why dd{margin:0;color:var(--ink2)}
+.opt-more{color:var(--ink3);align-self:start;margin-top:3px}
+.opt-more svg{width:14px;height:14px;transition:transform .15s}
+.opt.open .opt-more svg{transform:rotate(90deg)}
 
 
 /* 执行者 */
@@ -288,6 +308,7 @@ b.logo{display:grid;place-items:center;border-radius:4px;background:var(--raise)
   .today .row .dept,.today .row .who{display:none}
   .today .row .time{display:block}
   .today .row.trouble .who{display:block}.today .row.trouble .time{display:none}
+  .goals{margin-left:0;flex-basis:100%} /* 窄屏三个目标另起一行 */
   .accts{grid-template-columns:auto 1fr;row-gap:4px}
   .acct .r{grid-column:2;text-align:left}
 }
@@ -300,19 +321,11 @@ b.logo{display:grid;place-items:center;border-radius:4px;background:var(--raise)
 .intro dt{color:var(--ink3)}.intro dd{margin:0;color:var(--ink2);white-space:pre-line}
 .rule .t .why{display:block;color:var(--ink3);font-size:12px;margin-top:2px}
 .tabs .cap.over{color:var(--bad)}
-.opt{grid-template-columns:20px 1fr}
-.opt .pick{font-size:11px;color:var(--user-ink);font-weight:500}
 .status-line{margin:14px 0 0;color:var(--ink2);font-size:13px}
 .dot.off{background:transparent;border:1.5px solid var(--line)}
 .drawer{box-shadow:none;visibility:hidden;transition:transform .22s ease,visibility 0s .22s}
 .open .drawer{box-shadow:var(--drawer-shadow);visibility:visible;transition:transform .22s ease}
 @media (prefers-reduced-motion:reduce){.drawer,.open .drawer{transition:none}}
-.opt .rec{font-size:11px;color:var(--ink);font-weight:500}
-.opt details{margin-top:6px}
-.opt summary{display:flex;gap:6px;align-items:center;color:var(--ink3);font-size:12px;cursor:pointer;list-style:none}
-.opt summary::-webkit-details-marker{display:none}
-.opt summary:hover{color:var(--ink)}
-.opt .whyt{margin-top:6px;font-size:13px;color:var(--ink2)}
 
 /* 定时任务：行、部门页一节、今天页「接下来 7 天」、抽屉 */
 .rep{width:14px;height:14px;color:var(--ink3);justify-self:center}
@@ -323,9 +336,9 @@ b.logo{display:grid;place-items:center;border-radius:4px;background:var(--raise)
 .status-line.warn{color:var(--bad)}
 details.full{margin-top:22px}
 details.full summary{display:flex;gap:8px;align-items:center;color:var(--ink3);font-size:13px;cursor:pointer;list-style:none}
-/* 折起的「为什么现在」「详述」「N 个文件」：与其他折叠一样带箭头，展开时转下 */
-.opt summary svg,details.full summary svg{width:14px;height:14px;flex-shrink:0}
-.opt details[open]>summary svg,details.full[open]>summary svg{transform:rotate(90deg)}
+/* 折起的「详述」「N 个文件」：与其他折叠一样带箭头，展开时转下 */
+details.full summary svg{width:14px;height:14px;flex-shrink:0}
+details.full[open]>summary svg{transform:rotate(90deg)}
 details.full summary::-webkit-details-marker{display:none}
 details.full summary:hover{color:var(--ink2)}
 details.full .result{margin-top:8px;font-size:13px;color:var(--ink2)}

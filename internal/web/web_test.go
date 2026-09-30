@@ -68,10 +68,11 @@ func TestStepHolder(t *testing.T) {
 		{ledger.Task{Status: ledger.Running, Stage: ledger.StageGate}, 2, "run", "验收中"},
 		{ledger.Task{Status: ledger.Running, Stage: ledger.StageReview}, 2, "run", "审阅中"},
 		{ledger.Task{Status: ledger.Running, Stage: ledger.StageAccept}, 2, "run", "等验收"},
-		{ledger.Task{Status: ledger.Running, Stage: ledger.StageMerge}, 3, "run", "合入队列"},
-		{ledger.Task{Status: ledger.Running, Stage: ledger.StageMerged}, 4, "run", "等发版"},
-		{ledger.Task{Status: ledger.Done, Stage: ledger.StageReleased}, 5, "done", "已上线"},
-		{ledger.Task{Status: ledger.Done}, 5, "done", "完成"},
+		{ledger.Task{Repo: "o/r", Status: ledger.Running, Stage: ledger.StageMerge}, 3, "run", "合入队列"},
+		{ledger.Task{Repo: "o/r", Status: ledger.Running, Stage: ledger.StageMerged}, 4, "run", "等发版"},
+		{ledger.Task{Repo: "o/r", Status: ledger.Done, Stage: ledger.StageReleased}, 5, "done", "已上线"},
+		{ledger.Task{Status: ledger.Done}, 3, "done", "完成"}, // 没有仓库的只到验收，三步走完
+		{ledger.Task{Status: ledger.Done, Repo: "o/r"}, 5, "done", "完成"},
 		{ledger.Task{Status: ledger.Blocked, PR: "#1"}, 2, "bad", "卡住"},
 		{ledger.Task{Status: ledger.Failed, Worker: "x"}, 1, "bad", "失败"},
 		{ledger.Task{Status: ledger.Cancelled}, 0, "off", "取消"},
@@ -82,6 +83,9 @@ func TestStepHolder(t *testing.T) {
 		if step(c.t) != c.step || state(c.t, h) != c.state || who(c.t, h) != c.who {
 			t.Errorf("%s/%s：step %d state %s who %s", c.t.Status, c.t.Stage, step(c.t), state(c.t, h), who(c.t, h))
 		}
+	}
+	if n, m := len(stepsOf(ledger.Task{Dir: "/x"})), len(stepsOf(ledger.Task{Repo: "o/r"})); n != 3 || m != 5 {
+		t.Errorf("没有仓库的应只到验收：%d 步，有仓库的 %d 步", n, m)
 	}
 	// 待派的：依赖先于子任务（依赖没好不会拆着做）；拆成子任务在做的行首算在做。
 	dep := func(id string, s ledger.Status) ledger.DepState { return ledger.DepState{ID: id, Status: s} }
@@ -110,6 +114,16 @@ func TestStepHolder(t *testing.T) {
 		if st, got := state(x, h), who(x, h); st != c.state || got != c.who {
 			t.Errorf("%s 依赖 %v 子任务 %d/%d：得到 %s %q，应为 %s %q", c.status, c.deps, c.open, c.all, st, got, c.state, c.who)
 		}
+	}
+}
+
+func TestUsageText(t *testing.T) {
+	if s := usageText(workers.Usage{}); s != "" {
+		t.Errorf("四项都读不到应不给：%q", s)
+	}
+	n := int64(12)
+	if s := usageText(workers.Usage{Tokens: workers.Tokens{Output: &n}}); !strings.Contains(s, "输出 12") {
+		t.Errorf("读到一项应照常给：%q", s)
 	}
 }
 

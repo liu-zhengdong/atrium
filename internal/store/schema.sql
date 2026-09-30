@@ -239,7 +239,7 @@ CREATE TABLE IF NOT EXISTS materials (
 );
 CREATE INDEX IF NOT EXISTS materials_department ON materials (department, title);
 
--- 资料每一版的全部文件（含正文）：部门二进制总量按这里的 binary 文件合计。
+-- 资料每一版的全部文件（含正文）的元数据。
 CREATE TABLE IF NOT EXISTS material_files (
   id     TEXT NOT NULL,
   rev    INTEGER NOT NULL,
@@ -249,6 +249,11 @@ CREATE TABLE IF NOT EXISTS material_files (
   binary INTEGER NOT NULL,
   PRIMARY KEY (id, rev, path),
   FOREIGN KEY (id, rev) REFERENCES materials (id, rev)
+);
+
+-- 资料正文计量一次性重算的完成标记；与计量更新同事务写入。
+CREATE TABLE IF NOT EXISTS material_metering (
+  version INTEGER PRIMARY KEY CHECK (version = 1)
 );
 
 -- 机器：本机 h1，远程 hN。接入码与机器令牌只存哈希；info、load 是代理上报的 JSON；repos 是自动派活能接的仓库（JSON 数组，"*" 为全部）。

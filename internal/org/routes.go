@@ -1,12 +1,23 @@
 package org
 
 import (
+	"context"
+
 	"github.com/liu-zhengdong/atrium/internal/api"
 	"github.com/liu-zhengdong/atrium/internal/app"
 )
 
 func Module() app.Module {
-	return app.Module{Name: "org", Commands: Commands, Routes: Routes}
+	var initErr error
+	return app.Module{Name: "org", Commands: Commands,
+		Routes: func(r *api.Router, env *app.Env) {
+			initErr = initMaterials(context.Background(), env)
+			if initErr == nil {
+				Routes(r, env)
+			}
+		},
+		Run: func(context.Context, *app.Env) error { return initErr },
+	}
 }
 
 // Show 是 org show 的内容：部门本身、直接下属、自己的要点与从上级继承来的要点。

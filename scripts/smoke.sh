@@ -3,6 +3,7 @@
 # 只动自己起的服务（记 pid），不碰用户在跑的服务与 ~/.atrium-v2。
 # Mac、Linux 与 Windows（Git Bash）上都能跑；平台差异都在用到 $win 的地方。
 set -euo pipefail
+export PYTHONUTF8=1   # Windows 重定向输出时也按 UTF-8 生成中文测试数据。
 
 root=$(cd "$(dirname "$0")/.." && pwd)
 work=$(mktemp -d "${TMPDIR:-/tmp}/atrium-smoke.XXXXXX")

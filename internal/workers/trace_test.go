@@ -53,6 +53,32 @@ func TestTraceGrokWindowsLog(t *testing.T) {
 	}
 }
 
+// 真实日志（t649 的 grok，三行精简）：server_tool_use（web_search）是真实一步要显示，
+// web_search_tool_result 是网址列表认出但不展开；thinking 认出不显示。
+func TestTraceGrokServerTool(t *testing.T) {
+	tr, err := ReadTrace("grok", "testdata/grok-t649.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tr.Unknown != 0 || tr.Ended || len(tr.Segments) != 1 {
+		t.Fatalf("得到 %+v", tr)
+	}
+	var searches []Command
+	for _, c := range tr.Segments[0].Cmds {
+		if strings.HasPrefix(c.Cmd, "web_search ") {
+			searches = append(searches, c)
+		}
+	}
+	if len(searches) != 3 {
+		t.Fatalf("应有 3 条 web_search，得到 %+v", tr.Segments[0].Cmds)
+	}
+	for _, c := range searches {
+		if c.State != CmdOK || c.Out != "" {
+			t.Errorf("命令 %+v", c)
+		}
+	}
+}
+
 func TestReadTracePartialLine(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "run.log")
 	if err := os.WriteFile(path, []byte("完整行\n最后半行"), 0600); err != nil {

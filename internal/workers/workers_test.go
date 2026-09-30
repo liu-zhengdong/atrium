@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"reflect"
 	"slices"
@@ -283,6 +284,17 @@ func TestResolveAndRefusal(t *testing.T) {
 		!reflect.DeepEqual(r.Layers, []string{"harness/claude", "models/opus", "combos/claude+opus"}) {
 		t.Fatalf("叠加：%+v", r)
 	}
+	// 档案写的模型与标识里的只差 provider 前缀：两种写法是同一个执行者，ID 按档案写的，目录里只一行。
+	must("combos/opencode+deepseek-v4.1-flash", "---\nmodel: opencode-go/deepseek-v4.1-flash\n---\n")
+	for _, id := range []string{"opencode+deepseek-v4.1-flash", "opencode+opencode-go/deepseek-v4.1-flash:high"} {
+		r, err := Resolve(ctx, db, id)
+		if err != nil || r.Spec.Model != "opencode-go/deepseek-v4.1-flash" || r.CLIModel != r.Spec.Model {
+			t.Errorf("%s：%+v %v", id, r, err)
+		}
+	}
+	if ids, _ := List(ctx, db); slices.ContainsFunc(ids, func(r Row) bool { return r.ID == "opencode+deepseek-v4.1-flash" }) {
+		t.Errorf("目录里还有不带前缀的那行：%+v", ids)
+	}
 	// 只写工具：模型取 harness 的 model。
 	r, _ = Resolve(ctx, db, "claude")
 	if r.ID != "claude+sonnet" || r.Rules.EffectiveMaxRisk() != "low" {
@@ -352,6 +364,14 @@ func TestClassify(t *testing.T) {
 		{"读不到文件不算缺运行环境", 1, "Error: ENOENT: no such file or directory, open 'a.txt'\n", SignalNone, time.Time{}},
 		// t330 现场 agy 里 Claude 模型撞额度的原文（#543）
 		{"agy Claude 模型额度", 1, "API error (attempt 5): RESOURCE_EXHAUSTED (code 429): Individual quota reached. Resets in 2h57m45s\n", SignalQuota, now.Add(2*time.Hour + 57*time.Minute + 45*time.Second)},
+		// t349、t352 现场 agy+gemini-3.8-flash-high 的收尾：没有 RESOURCE_EXHAUSTED、没有恢复时刻
+		{"agy Individual quota reached", 1, `{"event":"result","result":{"status":"ERROR","error":"Individual quota reached"}}`, SignalQuota, time.Time{}},
+		{"纯文本 quota reached", 1, "Individual quota reached\n", SignalQuota, time.Time{}},
+		{"quota 在后", 1, "Error: You exceeded your current quota, please check your plan\n", SignalQuota, time.Time{}},
+		{"下划线连写", 1, `{"type":"error","error":{"code":"quota_exceeded"}}`, SignalQuota, time.Time{}},
+		{"限定词 limit 在前", 1, "Error: Rate limit hit\n", SignalQuota, time.Time{}},
+		{"上下文 limit 不算额度", 1, "Error: context limit reached\n", SignalNone, time.Time{}},
+		{"单词里的 hit 不算", 1, "Error: whitelist quota config missing\n", SignalNone, time.Time{}},
 		{"agy 结果事件里的额度", 1, `{"event":"result","result":{"status":"ERROR","error":"RESOURCE_EXHAUSTED (code 429): Individual quota reached. Resets in 12m"}}`, SignalQuota, now.Add(12 * time.Minute)},
 		// t342 现场 agy 不认不带强度的模型名的原文（#563）
 		{"agy 模型名无效", 1, `invalid model selection (--model "gemini-3.8-flash" --effort "")` + "\n", SignalModel, time.Time{}},
@@ -364,7 +384,7 @@ func TestClassify(t *testing.T) {
 		{"长度用尽但有正文", 0, `{"type":"step_finish","part":{"reason":"length","tokens":{"reasoning":100,"output":900}}}`, SignalNone, time.Time{}},
 	}
 	for _, c := range cases {
-		s := Classify(c.code, c.tail, now)
+		s := Classify(c.code, "", c.tail, now)
 		if s.Kind != c.kind {
 			t.Errorf("%s：得到 %+v", c.name, s)
 		}
@@ -379,6 +399,64 @@ func TestClassify(t *testing.T) {
 		}
 		if !c.reset.IsZero() && s.ResetAt != c.reset.UnixMilli() {
 			t.Errorf("%s：恢复时刻 %v，应为 %v", c.name, time.UnixMilli(s.ResetAt).UTC(), c.reset)
+		}
+	}
+}
+
+// 报文认不出的出错退出按行为判：一步没做的算零步骤出错退出，做过事的不算。样本是现场日志尾巴的写法。
+func TestClassifyNoStart(t *testing.T) {
+	now := time.Date(2026, 9, 30, 10, 0, 0, 0, time.UTC)
+	read := func(f string) string {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+	// t497、t535 现场：opencode 交给工具的模型名少了 opencode-go/ 前缀，1～2 秒退出码 1，日志只有这一行
+	unknown := `{"type":"error","timestamp":1790730960000,"sessionID":"ses_2f1c9a7e0ffeYk3QpLx8Rm1Vb","error":{"name":"UnknownError","data":{"message":"Unexpected server error"}}}` + "\n"
+	cases := []struct {
+		name, worker string
+		code         int
+		tail, kind   string
+	}{
+		{"opencode UnknownError 零步骤", "opencode+deepseek-v4.1-flash", 1, unknown, SignalNoStart},
+		// t392 codex+gpt-6-sol 在 h3、h1 各一次退出码 1：原日志没拿到，按 codex 的事件写成开了线程、一步没做
+		{"codex 零步骤退出码 1", "codex+gpt-6-sol", 1, `{"type":"thread.started","thread_id":"0199a213-81c0-7800-8aa1-bbab2a035a53"}` + "\n" + `{"type":"turn.started"}` + "\n", SignalNoStart},
+		{"日志是空的", "codex+gpt-6-sol", 1, "", SignalNoStart},
+		{"干了活之后退出码 1", "opencode+deepseek-v4.1-flash", 1, read("testdata/opencode-sample.jsonl") + unknown, SignalNone},
+		{"agy 做了 23 步后退出码 1", "agy+gemini-3.8-flash-high", 1, read("testdata/agy-t349.jsonl"), SignalNone},
+		{"退出码 0 不判", "opencode+deepseek-v4.1-flash", 0, unknown, SignalNone},
+		{"接管拿不到退出码不判", "opencode+deepseek-v4.1-flash", ExitUnknown, unknown, SignalNone},
+		{"通用命令行数不出步骤不判", "mycli", 1, "boom\n", SignalNone},
+		{"尾巴读满、开头被截的不判", "opencode+deepseek-v4.1-flash", 1, strings.Repeat("x", TailBytes) + "\n" + unknown, SignalNone},
+		{"认得出的原因照原因判", "opencode+deepseek-v4.1-flash", 1, `{"type":"error","error":{"name":"APIError","data":{"message":"Overloaded"}}}`, SignalTransient},
+	}
+	for _, c := range cases {
+		s := Classify(c.code, c.worker, c.tail, now)
+		if s.Kind != c.kind {
+			t.Errorf("%s：得到 %+v", c.name, s)
+		}
+	}
+	if s := Classify(1, "opencode+deepseek-v4.1-flash", unknown, now); !strings.Contains(s.Evidence, "UnknownError") || !strings.Contains(s.Reason, "退出码 1") {
+		t.Errorf("证据应是那行报错、原因带退出码：%+v", s)
+	}
+	// 从日志尾巴一路判到标记：三段现场样本都标「工具+模型@机器」且到期解除，干了活的不标
+	agyQuota := `{"event":"result","result":{"status":"ERROR","error":"Individual quota reached"}}`
+	marks := []struct {
+		worker, tail, target string
+		ok                   bool
+	}{
+		{"opencode+deepseek-v4.1-flash", unknown, "opencode+deepseek-v4.1-flash@h1", true},
+		{"agy+gemini-3.8-flash-high", agyQuota, "agy+gemini-3.8-flash-high@h1", true},
+		{"codex+gpt-6-sol", `{"type":"turn.started"}`, "codex+gpt-6-sol@h1", true},
+		{"opencode+deepseek-v4.1-flash", read("testdata/opencode-sample.jsonl") + unknown, "", false},
+	}
+	for _, c := range marks {
+		w, _ := ParseWorker(c.worker)
+		m, ok := MarkOf(Classify(1, c.worker, c.tail, now), w, "h1", now)
+		if ok != c.ok || (ok && (m.Target() != c.target || m.Until != now.Add(Hold).UnixMilli())) {
+			t.Errorf("%s：%v %+v", c.worker, ok, m)
 		}
 	}
 }
@@ -430,11 +508,12 @@ func TestMarkOf(t *testing.T) {
 		until  int64
 	}{
 		{"额度用尽按报文恢复", Signal{Kind: SignalQuota, ResetAt: reset}, true, "agy+claude-opus-4-6-thinking@h3", reset},
-		{"额度用尽读不出恢复时刻", Signal{Kind: SignalQuota}, true, "agy+claude-opus-4-6-thinking@h3", now.Add(QuotaHold).UnixMilli()},
+		{"额度用尽读不出恢复时刻", Signal{Kind: SignalQuota}, true, "agy+claude-opus-4-6-thinking@h3", now.Add(Hold).UnixMilli()},
 		{"没登录标整个工具、等人处理", Signal{Kind: SignalSetup, Reason: "没登录"}, true, "agy@h3", 0},
 		{"缺运行环境标整个工具、等人处理", Signal{Kind: SignalSetup, Reason: "缺运行环境"}, true, "agy@h3", 0},
 		{"模型名无效等人处理", Signal{Kind: SignalModel}, true, "agy+claude-opus-4-6-thinking@h3", 0},
 		{"临时错误不标", Signal{Kind: SignalTransient}, false, "", 0},
+		{"零步骤出错退出标工具+模型、到期解除", Signal{Kind: SignalNoStart, Reason: "零步骤出错退出（退出码 1，原因不明）"}, true, "agy+claude-opus-4-6-thinking@h3", now.Add(Hold).UnixMilli()},
 		{"思考耗尽不标", Signal{Kind: SignalThinking}, false, "", 0},
 	}
 	for _, c := range cases {

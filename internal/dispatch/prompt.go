@@ -132,7 +132,7 @@ func RouteExit(in ExitInput) Route {
 	}
 	s := in.Signal
 	switch s.Kind {
-	case workers.SignalQuota, workers.SignalSetup, workers.SignalModel:
+	case workers.SignalQuota, workers.SignalSetup, workers.SignalModel, workers.SignalNoStart:
 		// 「工具+模型@机器」已标不可用，重新排队挑执行者与机器就不会再挑到它；都标了就派不出去转受阻
 		return Route{"requeue", s.Reason}
 	case workers.SignalThinking:

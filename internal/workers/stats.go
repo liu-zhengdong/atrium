@@ -22,7 +22,7 @@ const StatWindow = 20
 const (
 	OutOK     = "ok"     // 正常交付
 	OutQuota  = "quota"  // 额度用尽
-	OutSetup  = "setup"  // 起不来：没登录、缺运行环境
+	OutSetup  = "setup"  // 起不来：没登录、缺运行环境、零步骤出错退出
 	OutFail   = "fail"   // 其他失败：模型名无效、临时错误、思考耗尽、出错退出、卡死
 	OutBounce = "bounce" // 交付被交回（关卡、审阅、验收、合入退回）
 )
@@ -40,12 +40,12 @@ type Exit struct {
 	Reason  string `json:"reason,omitempty"`
 }
 
-// OutcomeOf 把退出信号翻成这次拉起的结果（纯函数）：额度用尽、起不来各一类；没有信号且正常收尾算交付；其余算其他失败。
+// OutcomeOf 把退出信号翻成这次拉起的结果（纯函数）：额度用尽、起不来（含零步骤出错退出）各一类；没有信号且正常收尾算交付；其余算其他失败。
 func OutcomeOf(sig Signal, ended bool) string {
 	switch {
 	case sig.Kind == SignalQuota:
 		return OutQuota
-	case sig.Kind == SignalSetup:
+	case sig.Kind == SignalSetup, sig.Kind == SignalNoStart:
 		return OutSetup
 	case sig.Kind == SignalNone && ended:
 		return OutOK

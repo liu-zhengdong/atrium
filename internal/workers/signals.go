@@ -18,6 +18,7 @@ const (
 	SignalThinking  = "thinking"  // 思考耗尽单次输出：换执行者一次
 	SignalSetup     = "setup"     // 工具在这台机器上起不来（没登录、缺运行环境）：标记「工具@机器」，重新排队
 	SignalModel     = "model"     // 工具不认这个模型名：标记「工具+模型@机器」，重新排队
+	SignalNoStart   = "nostart"   // 出错退出、认不出原因、一步没做：标记「工具+模型@机器」到期自动解除，重新排队
 )
 
 // Signal 是从退出码与日志尾巴判出来的信号。
@@ -79,10 +80,19 @@ func parseEvent(line string) event {
 func (e event) str(k string) string { s, _ := e[k].(string); return s }
 func (e event) obj(k string) event  { m, _ := e[k].(map[string]any); return m }
 
+// 额度措辞的两半：limit 只认带限定词的（context、token 之类的 limit 不是额度）；动词前不能紧挨字母（white 里的 hit 不算）。
+const (
+	quotaNoun = `(?:quota|(?:usage|session|rate|request|monthly|daily|weekly|5[-_\s]?hour|spend(?:ing)?|your)[\s_]+limits?)`
+	quotaVerb = `(?:^|[^a-z])(?:reached|exceeded|exhausted|hit|depleted|insufficient)`
+)
+
 var (
-	errorWordRE = regexp.MustCompile(`(?i)\b(?:error|failed|limit reached|limit exceeded|too many requests|usage limits? will reset|spend(?:ing)? limit)\b|HTTP/\S+ 429|额度.{0,20}(?:用尽|不足|超限)|余额不足`)
-	quotaMarkRE = regexp.MustCompile(`(?i)(?:usage|session|rate|request|monthly|daily|5[-_\s]?hour)[\s_]+limits?\s+(?:reached|exceeded|hit|exhausted)|exhausted your quota|RESOURCE_EXHAUSTED|hit (?:your|the) [^\n]{0,40}limits?|usage limits? will reset|set (?:a|your) spend(?:ing)? limit|rate_limit_error|(?:insufficient|exceeded|exhausted)[_\s]+quota|quota[_\s]+(?:exceeded|exhausted|limit|depleted)|too many requests|(?:额度|用量|余额)[^\n]{0,20}(?:用尽|不足|超限|达到上限|已满)`)
-	setups      = []struct {
+	errorWordRE = regexp.MustCompile(`(?i)\b(?:error|failed)\b|HTTP/\S+ 429`)
+	// quotaMarkRE：额度类名词与「用尽」类动词在同一行、前后任意顺序，外加几种固定说法。
+	quotaMarkRE = regexp.MustCompile(`(?i)` + quotaNoun + `[^\n]{0,40}?` + quotaVerb + `|` + quotaVerb + `[^\n]{0,40}?` + quotaNoun +
+		`|RESOURCE_EXHAUSTED|rate_limit_error|usage limits? will reset|set (?:a|your) spend(?:ing)? limit|too many requests` +
+		`|(?:额度|用量|余额)[^\n]{0,20}(?:用尽|不足|超限|达到上限|已满)`)
+	setups = []struct {
 		re     *regexp.Regexp
 		reason string
 	}{
@@ -117,7 +127,7 @@ func errorReport(tail string) string {
 	for _, line := range strings.Split(tail, "\n") {
 		e := parseEvent(line)
 		if e == nil {
-			if errorWordRE.MatchString(line) {
+			if errorWordRE.MatchString(line) || quotaMarkRE.MatchString(line) {
 				last = strings.TrimSpace(line)
 			} else if last != "" && retryHintRE.MatchString(line) {
 				last += "\n" + strings.TrimSpace(line)
@@ -173,9 +183,10 @@ func oneLine(s string) string {
 	return s
 }
 
-// Classify 判执行者退出时的信号（纯函数）：先额度用尽，再思考耗尽，再起不来（没登录、缺运行环境）、模型名无效，最后供应商临时错误。
-// 退出码 0 不判额度、起不来、模型名无效与临时错误（跑完了就交关卡）；ExitUnknown 不判后三种。
-func Classify(exitCode int, tail string, now time.Time) Signal {
+// Classify 判执行者退出时的信号（纯函数）：先额度用尽，再思考耗尽，再起不来（没登录、缺运行环境）、模型名无效，再供应商临时错误；
+// 报文都认不出、而这一轮一步没做的，按行为算零步骤出错退出（见 idle）。worker 是这一轮的执行者标识，数步骤要按它的工具解析日志。
+// 退出码 0 不判额度、起不来、模型名无效、临时错误与零步骤（跑完了就交关卡）；ExitUnknown 不判后四种。
+func Classify(exitCode int, worker, tail string, now time.Time) Signal {
 	report := errorReport(tail)
 	if exitCode != 0 && report != "" && (quotaMarkRE.MatchString(report) || http429RE.MatchString(report)) {
 		s := Signal{Kind: SignalQuota, Reason: "额度用尽", Evidence: oneLine(report)}
@@ -212,8 +223,22 @@ func Classify(exitCode int, tail string, now time.Time) Signal {
 				return Signal{Kind: SignalTransient, Reason: "供应商或网络临时错误：" + t.kind, Evidence: oneLine(text)}
 			}
 		}
+		if idle(worker, tail) {
+			return Signal{Kind: SignalNoStart, Reason: fmt.Sprintf("零步骤出错退出（退出码 %d，原因不明）", exitCode), Evidence: oneLine(text)}
+		}
 	}
 	return Signal{}
+}
+
+// idle：这一轮一步没做——日志里没有一次工具调用，也没说一句话（按 Trace 的分段数）。
+// 工具不带解析（通用命令行）的数不出步骤，不算；尾巴读满 TailBytes 的日志前面还有东西（可能是一条超长的工具输出被截了头），也不算。
+func idle(worker, tail string) bool {
+	if !Traceable(worker) || len(tail) >= TailBytes {
+		return false
+	}
+	p := NewParser(worker)
+	p.Feed(tail)
+	return len(p.t.Segments) == 0
 }
 
 // endedOK：日志里最后的收尾事件是正常收尾（之前的报错已被越过）。

@@ -18,6 +18,7 @@ func TestOutcomeOf(t *testing.T) {
 	}{
 		{SignalQuota, false, OutQuota},
 		{SignalSetup, false, OutSetup},
+		{SignalNoStart, false, OutSetup},
 		{SignalModel, false, OutFail},
 		{SignalTransient, true, OutFail},
 		{SignalThinking, true, OutFail},

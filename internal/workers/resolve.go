@@ -168,6 +168,9 @@ func Resolve(ctx context.Context, q store.Querier, id string) (Resolved, error) 
 		return Resolved{}, err
 	}
 	rules.Model = cliModel
+	if ModelKey(cliModel) == ModelKey(model) {
+		model = cliModel // 同一模型只差 provider 前缀（deepseek-v4.1-flash 与 opencode-go/deepseek-v4.1-flash）时按档案写的算，目录、统计、标记只有一个名字
+	}
 	full := Spec{Tool: s.Tool, Model: model, Effort: s.Effort}
 	out := Resolved{ID: full.String(), Spec: full, CLIModel: cliModel, Rules: rules, Body: body, Adapter: a, Layers: []string{}}
 	for _, l := range layers {

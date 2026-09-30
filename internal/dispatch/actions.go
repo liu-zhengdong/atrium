@@ -177,7 +177,7 @@ func Requeue(ctx context.Context, env *app.Env, id string, why watch.Why) error 
 		if err != nil && !os.IsNotExist(err) {
 			return err
 		}
-		marked, err := markUnavailable(ctx, env.DB, *run, workers.Classify(1, tail, time.Now()))
+		marked, err := markUnavailable(ctx, env.DB, *run, workers.Classify(1, run.Worker, tail, time.Now()))
 		if err != nil {
 			return err
 		}

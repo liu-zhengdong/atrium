@@ -29,8 +29,13 @@ func TestShowWithStoredQuota(t *testing.T) {
 		Windows: []quota.Window{{ID: "week", Used: 25, ResetsAt: now + 84*3600_000, Period: 168 * 3600}}}}); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := db.ExecContext(ctx, "INSERT INTO quota_cache (account, tool, body, read_at) VALUES (?, ?, ?, ?)",
+		"openquota", "openquota", `{"rows":[{"providerId":"antigravity","usedPercent":30,"periodElapsedPercent":50}]}`, now); err != nil {
+		t.Fatal(err)
+	}
 	for _, c := range []struct{ name, want string }{
 		{"trae", "trae  没有额度读数"}, {"claude", "claude  富余 +25.0%"},
+		{"agy", "antigravity  富余 +20.0%"},
 	} {
 		d, err := showWithQuota(ctx, env, c.name)
 		if err != nil {
@@ -52,6 +57,19 @@ func TestShowWithStoredQuota(t *testing.T) {
 	}
 }
 
+func TestResolvedAccount(t *testing.T) {
+	for _, tc := range []struct{ tool, account string }{
+		{"agy", "antigravity"}, {"claude", "claude"}, {"trae", "trae"}, {"fake", "fake"},
+	} {
+		for _, model := range []string{"", "model-a", "model-b"} {
+			r := Resolved{Spec: Spec{Tool: tc.tool, Model: model}}
+			if got := r.Account(); got != tc.account {
+				t.Fatalf("%s：账号 %s，期望 %s", r.Spec, got, tc.account)
+			}
+		}
+	}
+}
+
 func TestQuotaDetail(t *testing.T) {
 	zero, spare := 0.0, 12.5
 	lines := []quota.Line{
@@ -64,11 +82,12 @@ func TestQuotaDetail(t *testing.T) {
 		{"trae", "trae  没有额度读数"},
 		{"claude", "claude  富余 +12.5%"},
 		{"agy", "antigravity  富余 +0.0%（旧读数）"},
-		{"codex", "codex  有额度读数，富余未知"},
+		{"codex", "codex  有额度读数，富余未知（来源未提供可计算的周期进度）"},
 		{"kimi", "kimi  没有额度读数"},
 	} {
 		t.Run(c.tool, func(t *testing.T) {
-			if got := quotaText(quotaFor(c.tool, lines)); got != c.want {
+			r := Resolved{Spec: Spec{Tool: c.tool}}
+			if got := quotaText(quotaFor(r.Account(), lines)); got != c.want {
 				t.Fatalf("得到 %q，期望 %q", got, c.want)
 			}
 		})

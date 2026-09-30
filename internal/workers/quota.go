@@ -22,8 +22,7 @@ func showWithQuota(ctx context.Context, env *app.Env, name string) (Detail, erro
 	return d, nil
 }
 
-func quotaFor(tool string, lines []quota.Line) quota.Line {
-	account := quota.AccountOf(tool)
+func quotaFor(account string, lines []quota.Line) quota.Line {
 	for _, line := range lines {
 		if line.Account == account {
 			return line
@@ -38,7 +37,7 @@ func quotaText(line quota.Line) string {
 	case line.UsedPercent == nil:
 		text += "没有额度读数"
 	case line.SparePercent == nil:
-		text += "有额度读数，富余未知"
+		text += "有额度读数，富余未知（来源未提供可计算的周期进度）"
 	default:
 		text += fmt.Sprintf("富余 %+.1f%%", *line.SparePercent)
 	}

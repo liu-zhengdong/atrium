@@ -73,7 +73,12 @@ type Resolved struct {
 }
 
 // Account 是额度账号：同一工具的模型共享一份额度。
-func (r Resolved) Account() string { return r.Spec.Tool }
+func (r Resolved) Account() string {
+	if r.Spec.Tool == "agy" {
+		return "antigravity"
+	}
+	return r.Spec.Tool
+}
 
 // Endpoint 是档案写的自定义端点；没写为 nil。
 func (r Resolved) Endpoint() *Endpoint {

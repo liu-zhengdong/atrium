@@ -18,14 +18,6 @@ const lastGood = 6 * 3600_000
 // Accounts 是分派任务认识的全部账号（与执行者工具对应：agy 的账号是 antigravity）。
 var Accounts = []string{"claude", "codex", "opencode", "kimi", "grok", "cursor", "antigravity"}
 
-// AccountOf 是执行者工具对应的额度账号。
-func AccountOf(tool string) string {
-	if tool == "agy" {
-		return "antigravity"
-	}
-	return tool
-}
-
 // Line 是 quota 一览的一行，也是判富余的依据。
 type Line struct {
 	Pace
@@ -101,6 +93,11 @@ func Lines(builtin map[string]Line, oq []Pace) []Line {
 	for _, p := range oq {
 		if p.Account == "" {
 			continue
+		}
+		// 来源给了周期进度时，沿用同一富余公式；没有周期依据就保持未知。
+		if p.SparePercent == nil && p.UsedPercent != nil && p.ElapsedPct != nil &&
+			*p.UsedPercent >= 0 && *p.UsedPercent <= 100 && *p.ElapsedPct >= 0 && *p.ElapsedPct <= 100 {
+			p.SparePercent = ptr(round1(*p.ElapsedPct - *p.UsedPercent))
 		}
 		cur, ok := byAcct[p.Account]
 		if ok && cur.UsedPercent != nil {

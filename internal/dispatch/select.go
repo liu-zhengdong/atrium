@@ -55,7 +55,7 @@ func (d *dispatcher) view(ctx context.Context, t ledger.Task, risk string, exclu
 			continue
 		}
 		seen[r.ID] = true
-		f := Fact{ID: r.ID, Tool: r.Spec.Tool, Model: r.Spec.Model, Account: accountOf(r.Spec.Tool), Trust: r.Rules.EffectiveTrust(),
+		f := Fact{ID: r.ID, Tool: r.Spec.Tool, Model: r.Spec.Model, Account: r.Account(), Trust: r.Rules.EffectiveTrust(),
 			MaxRisk: r.Rules.EffectiveMaxRisk(), Refusal: r.Rules.Refusal(risk, true),
 			Exclusive: r.Adapter.Exclusive, Stat: workers.Count(stats[workers.Combo(r.ID)]), Fails: workers.Fails(stats[workers.Combo(r.ID)], ShakyWindow)}
 		if _, builtin := workers.Builtin(r.Spec.Tool); iso && builtin {

@@ -9,7 +9,8 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/api"
 )
 
-// 周期任务的时间判定：纯函数，表驱动测试。时刻是 Unix 毫秒；--at 按 loc 的本机钟点，跨夏令时仍是同一钟点。
+// 定时任务的时间判定：纯函数，表驱动测试。时刻是 Unix 毫秒；--at 按 loc 的本机钟点，跨夏令时仍是同一钟点。
+// 周期为 0 的是一次性的（--on）：next_at 那一刻触发一次，生成任务后这条删掉。
 
 const (
 	minute   = int64(time.Minute / time.Millisecond)
@@ -64,11 +65,38 @@ func ParseAt(s string, every int64) (int, error) {
 	return h*60 + mi, nil
 }
 
+// OnDefaultAt 是 --on 没给 --at 时的钟点。
+const OnDefaultAt = "09:00"
+
+// ParseOn：--on YYYY-MM-DD [--at HH:MM] → 那一天那个本机钟点；已经过去的拒绝。
+func ParseOn(on, at string, now int64, loc *time.Location) (int64, error) {
+	d, err := time.ParseInLocation("2006-01-02", on, loc)
+	if err != nil {
+		return 0, api.Usage("--on: 写成 2026-10-08 这样的日期，收到 %q", on)
+	}
+	if at == "" {
+		at = OnDefaultAt
+	}
+	m, err := ParseAt(at, day)
+	if err != nil {
+		return 0, err
+	}
+	t := time.Date(d.Year(), d.Month(), d.Day(), m/60, m%60, 0, 0, loc)
+	if t.UnixMilli() <= now {
+		return 0, api.Usage("--on: %s 已经过去（现在 %s），写以后的日期或更晚的 --at", t.Format("2006-01-02 15:04"),
+			time.UnixMilli(now).In(loc).Format("2006-01-02 15:04"))
+	}
+	return t.UnixMilli(), nil
+}
+
 func AtText(at int) string { return fmt.Sprintf("%02d:%02d", at/60, at%60) }
 
-// Cadence 是给人看的周期：「每周三 09:00」「每 2 周 周三」「每天 09:00」「每 12 小时」；星期按下一轮在 loc 里算。
-// 命令行与网页共用这一份。
+// Cadence 是给人看的周期：「每周三 09:00」「每 2 周 周三」「每天 09:00」「每 12 小时」，一次性的是「一次 10-08 10:00」；
+// 星期按下一轮在 loc 里算。命令行与网页共用这一份。
 func Cadence(x Schedule, loc *time.Location) string {
+	if x.Once {
+		return "一次 " + time.UnixMilli(x.NextAt).In(loc).Format("01-02 15:04")
+	}
 	clock := ""
 	if x.At != "" {
 		clock = " " + x.At
@@ -139,7 +167,7 @@ func CatchUp(due, every int64, at *int, now int64, loc *time.Location) (slots in
 	return slots, next
 }
 
-// Verdict 是巡检时一条周期任务该做什么。
+// Verdict 是巡检时一条定时任务该做什么。
 type Verdict struct {
 	Kind   string // wait 没到点；run 生成一轮；skip 上一轮没结束，本轮跳过
 	Next   int64  // 下一轮
@@ -148,9 +176,13 @@ type Verdict struct {
 }
 
 // Due：停机错过好几轮只补一轮；上一轮没结束（open 非空）就跳过。
+// 一次性的（every 为 0）到点就生成（停机错过的恢复后补这一次），没有上一轮也没有下一轮，Next 为 0。
 func Due(nextAt, every int64, at *int, open string, now int64, loc *time.Location) Verdict {
 	if nextAt > now {
 		return Verdict{Kind: "wait", Next: nextAt}
+	}
+	if every == 0 {
+		return Verdict{Kind: "run"}
 	}
 	slots, next := CatchUp(nextAt, every, at, now, loc)
 	if open != "" {

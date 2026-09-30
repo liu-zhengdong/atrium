@@ -259,11 +259,11 @@ func Prompt(in PromptInput) string {
 	w("- 记草稿：%s", ledger.DraftHowTo)
 	w("- 资料：material ls 按部门列全部资料，material ls mN 取正文、mN/<相对路径> 取这条资料里的其他文件（二进制加 --out 文件），material add oN 新建一条资料（一个目录是一条，同名也是新的）、material add mN 给已有资料加一版；跨部门的事先查别的部门已有的资料再调研，不直接搜数据目录")
 	w("- 给执行者的输入（样本、设计稿、参考文件）先 material add，任务说明里写 mN、不写本机路径：执行者可能派到别的机器，资料在哪台都取得到。执行者做的给人看的成品，由它自己交进任务所在部门的资料")
-	w("- 周期任务：schedule add/ls/rm/run")
+	w("- 定时任务：schedule add/ls/rm/run")
 	w("- 备忘：memo edit 文本（覆盖写；只放跨任务、下次醒来先要知道的提示，任务进展写进 task note；超过 %d 字会被拒，先精简）", org.MaxMemo)
 	w("")
 	w("## 权限边界（服务端按你的令牌强制，越权会被拒）")
-	w("- 可以：动你负责的部门及其下属的任务、要点、资料、周期任务，改介绍；在下属负责人管的区域里建、改、裁撤部门，登记新负责人时用 leader add <名字> --org oN 一步绑定部门，或用 org edit oN --leader <aN|-> 撤换、清除。直接下属负责人最多 %d 位，同一位可管多个部门。管辖分派任务部门（%s）的负责人还能改执行者档案、解除不可用标记（atrium workers edit，--clear 解除）。", org.MaxDirectLeaders, ProfileDept)
+	w("- 可以：动你负责的部门及其下属的任务、要点、资料、定时任务，改介绍；在下属负责人管的区域里建、改、裁撤部门，登记新负责人时用 leader add <名字> --org oN 一步绑定部门，或用 org edit oN --leader <aN|-> 撤换、清除。直接下属负责人最多 %d 位，同一位可管多个部门。管辖分派任务部门（%s）的负责人还能改执行者档案、解除不可用标记（atrium workers edit，--clear 解除）。", org.MaxDirectLeaders, ProfileDept)
 	w("- 不可以：在自己直接管的地方改结构，或动管辖之外的部门。需要建分工时用 atrium leader escalate <要建什么、为什么> --kind beyond 上报；上一层收到后自己动手建（即审批），或回复不同意。不能停机或操作服务。")
 	w("")
 	w("## 上报（发给 %s；只有这三类才上报，其余自己处理）", in.Upstream)
@@ -292,14 +292,14 @@ const (
 	RuleRead                      // 只读，放行
 	RuleTaskRef                   // 路径 {id} 是任务：任务的部门在管辖内；请求体里的 org、parent 也要在
 	RuleTaskCreate                // 建任务：请求体里的 org 或 parent 必须给且在管辖内
-	RuleDeptRef                   // 路径 {id} 是部门（部门下的要点、资料、周期任务）
+	RuleDeptRef                   // 路径 {id} 是部门（部门下的要点、资料、定时任务）
 	RuleDeptPatch                 // 改部门：介绍在管辖内，结构在下属区域
 	RuleDeptCreate                // 建部门：父部门在下属区域
 	RuleLeaderCreate              // 登记负责人：一步绑定的部门在下属区域
 	RulePointRef                  // 路径 {id} 是要点
 	RuleMaterialRef               // 路径 {id} 是资料
-	RuleScheduleRef               // 路径 {id} 是周期任务
-	RuleBodyDept                  // 建资料、周期任务：请求体里的 org／department 必须给且在管辖内
+	RuleScheduleRef               // 路径 {id} 是定时任务
+	RuleBodyDept                  // 建资料、定时任务：请求体里的 org／department 必须给且在管辖内
 	RuleMemo                      // 自己的备忘（由 memo 路由按身份判）
 	RuleEventsAck                 // 确认事件：只能是发给自己的
 	RuleEscalate                  // 上报

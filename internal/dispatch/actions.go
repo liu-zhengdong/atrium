@@ -138,7 +138,7 @@ func ReadLog(ctx context.Context, env *app.Env, id string, offset int64, wait ti
 	}
 }
 
-// hook 接上 watch 的重新入队、周期任务与审阅任务的分派任务、改说明的补充说明（服务进程里，Routes 装配时调）。
+// hook 接上 watch 的重新入队、定时任务与审阅任务的分派任务、改说明的补充说明（服务进程里，Routes 装配时调）。
 func hook(env *app.Env) {
 	watch.Use(watch.Hooks{Requeue: func(ctx context.Context, task string, why watch.Why) error {
 		return Requeue(ctx, env, task, why)

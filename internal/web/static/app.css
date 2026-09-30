@@ -277,9 +277,9 @@ b.logo{display:grid;place-items:center;border-radius:4px;background:var(--raise)
   .page{padding:20px 16px 32px}
   .row{grid-template-columns:16px minmax(0,1fr) auto;--indent:14px}
   .row .time{display:none} /* 窄屏留行尾标签（等 tN、卡住）不留时间：状态比多久前更要紧 */
-  .row.sched:not(.trouble) .who{display:none} /* 周期任务：下一轮比多久一轮要紧，用下一轮顶替标签；出了问题留问题 */
+  .row.sched:not(.trouble) .who{display:none} /* 定时任务：下一轮比多久一轮要紧，用下一轮顶替标签；出了问题留问题 */
   .row.sched:not(.trouble) .time{display:block}
-  .today{grid-template-columns:16px minmax(0,1fr) auto} /* 今天页窄屏只留时间；部门、谁在抽屉里看，出了问题的周期任务留问题 */
+  .today{grid-template-columns:16px minmax(0,1fr) auto} /* 今天页窄屏只留时间；部门、谁在抽屉里看，出了问题的定时任务留问题 */
   .today .row .dept,.today .row .who{display:none}
   .today .row .time{display:block}
   .today .row.trouble .who{display:block}.today .row.trouble .time{display:none}
@@ -309,7 +309,7 @@ b.logo{display:grid;place-items:center;border-radius:4px;background:var(--raise)
 .opt summary:hover{color:var(--ink)}
 .opt .whyt{margin-top:6px;font-size:13px;color:var(--ink2)}
 
-/* 周期任务：行、部门页一节、今天页「接下来 7 天」、抽屉 */
+/* 定时任务：行、部门页一节、今天页「接下来 7 天」、抽屉 */
 .rep{width:14px;height:14px;color:var(--ink3);justify-self:center}
 .row.sched .time{width:auto;min-width:52px;white-space:nowrap}
 .warn{color:var(--bad)}

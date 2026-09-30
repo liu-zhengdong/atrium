@@ -75,7 +75,7 @@ func Text(r Report, data string) string {
 			fmt.Fprintf(&b, "    - %s\n", n)
 		}
 	}
-	b.WriteString("  没搬：任务历史、选项单、周期任务、凭据、章程正文（新版没有这些旧形态）\n")
+	b.WriteString("  没搬：任务历史、选项单、定时任务、凭据、章程正文（新版没有这些旧形态）\n")
 	if len(r.Over) > 0 {
 		b.WriteString("超了上限、已照样导入，请整理：\n")
 		for _, o := range r.Over {

@@ -53,7 +53,7 @@ func RemoteRepo(ctx context.Context, repo string) (string, error) {
 }
 
 // hostNeed 是这件活对机器的要求：仓库按远程的写法比对机器登记的仓库；本机克隆换算不出 origin、有工作地点（本机文件夹）、
-// 是体验巡检那样的周期任务一轮（agenda.LocalOnly）就只派本机。
+// 是体验巡检那样的定时任务一轮（agenda.LocalOnly）就只派本机。
 func hostNeed(ctx context.Context, q store.Querier, w workers.Spec, t ledger.Task) (HostNeed, error) {
 	n := HostNeed{Tool: w.Tool, Model: w.Model, Repo: t.Repo, Urgent: t.Priority == ledger.Urgent}
 	if t.Dir != "" {

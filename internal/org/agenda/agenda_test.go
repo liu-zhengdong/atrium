@@ -413,7 +413,7 @@ func TestScheduleTick(t *testing.T) {
 	}
 }
 
-// 体验巡检每轮只派本机；其他种类、不是周期任务生成的任务不受影响。
+// 体验巡检每轮只派本机；其他种类、不是定时任务生成的任务不受影响。
 func TestLocalOnly(t *testing.T) {
 	env, dept := setup(t)
 	ctx := context.Background()

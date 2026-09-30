@@ -169,8 +169,8 @@ func TestLeaderGuard(t *testing.T) {
 		{"本部门递选项单", "POST", "/api/choices", choice("o2"), "ok"},
 		{"别处递选项单", "POST", "/api/choices", choice("o3"), "forbidden"},
 		{"拍板", "POST", "/api/choices/c1/decide", map[string]any{"picks": []int{1}}, "forbidden"},
-		{"本部门周期任务", "POST", "/api/schedules", map[string]any{"org": "o2", "title": "巡检", "every": "1d"}, "ok"},
-		{"别处周期任务", "POST", "/api/schedules", map[string]any{"org": "o3", "title": "巡检", "every": "1d"}, "forbidden"},
+		{"本部门定时任务", "POST", "/api/schedules", map[string]any{"org": "o2", "title": "巡检", "every": "1d"}, "ok"},
+		{"别处定时任务", "POST", "/api/schedules", map[string]any{"org": "o3", "title": "巡检", "every": "1d"}, "forbidden"},
 		// 报告连图片一次加：请求体过 1MB，权限判定要读全再判，不能截断（t449）。
 		{"本部门加过 1MB 的资料", "POST", "/api/materials", org.MaterialInput{Org: "o2", Title: "t449-show", Note: "报告", Files: []org.MaterialFile{
 			{Name: "report.md", Content: []byte("# 报告\n![](images/arch.png)\n")},

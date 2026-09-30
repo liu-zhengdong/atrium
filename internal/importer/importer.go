@@ -592,7 +592,7 @@ func nullInt(n sql.NullInt64) any {
 	return nil
 }
 
-// setCounters：各短号计数器接着旧库的最大值往后（任务、选项单、周期任务虽不搬，号也不复用）。
+// setCounters：各短号计数器接着旧库的最大值往后（任务、选项单、定时任务虽不搬，号也不复用）。
 func setCounters(ctx context.Context, old *sql.DB, tx *sql.Tx, rep *Report) error {
 	src := map[string]string{"t": "tasks", "o": "org_nodes", "k": "org_points", "a": "org_leaders", "c": "choices",
 		"m": "materials", "h": "hosts", "s": "schedules"}

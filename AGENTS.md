@@ -17,7 +17,7 @@ Atrium 是 AI 组织的运行底座（方向见讨论 [#260](https://github.com/
 | 底座     | `store`、`config`、`api`、`cli`、`app`、`platform`  | SQLite 与短号、数据目录、HTTP 与认证、命令表、模块装配、三平台差异   |
 | 服务     | `service`、`pause`                                  | 单实例后台服务、平滑重启、令牌；一键停机                             |
 | 任务账本 | `ledger`                                            | 任务树、依赖、状态机（改状态只经 `ledger.Apply`）                    |
-| 组织     | `org`、`org/leaders`、`org/agenda`                  | 部门、要点、身份、备忘、技能、资料、凭据、上限；负责人唤醒与权限；选项单、周期任务 |
+| 组织     | `org`、`org/leaders`、`org/agenda`                  | 部门、要点、身份、备忘、技能、资料、凭据、上限；负责人唤醒与权限；选项单、定时任务 |
 | 事件     | `events`、`secretary`                               | 事件落库与投递、`events wait/ack`；注入 Claude Code 秘书会话、状态栏 |
 | 执行     | `dispatch`、`workers`、`hosts`、`quota`             | 分派任务队列、挑执行者与机器、适配器与档案、远程代理、额度               |
 | 交付     | `gates`、`merge`、`release`、`watch`                | 查事实做交付检查与审阅、合入队列、自升级上线、等待对象与处理时限、检测无进展任务、重启后继续跟进       |

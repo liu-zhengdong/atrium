@@ -299,7 +299,7 @@ type Today struct {
 	Soon    Soon         `json:"soon"`
 }
 
-// Soon 是今天页「接下来 7 天」：7 天内到点的周期任务（按下一轮先后），更远的只给条数。
+// Soon 是今天页「接下来 7 天」：7 天内到点的定时任务（按下一轮先后），更远的只给条数。
 type Soon struct {
 	Rows  []Sched `json:"rows"`
 	Later int     `json:"later"`
@@ -541,7 +541,7 @@ func loadDept(ctx context.Context, q store.Querier, data, id string) (DeptPage, 
 	return page, nil
 }
 
-// Sched 是周期任务的一行：部门页、今天页「接下来 7 天」、抽屉共用。
+// Sched 是定时任务的一行：部门页、今天页「接下来 7 天」、抽屉共用。
 type Sched struct {
 	ID       string `json:"id"`
 	Org      string `json:"org"`
@@ -549,6 +549,7 @@ type Sched struct {
 	Kind     string `json:"kind,omitempty"` // 体验巡检、调研才写；自定义的不写
 	Title    string `json:"title"`
 	Cadence  string `json:"cadence"` // 多久一轮（agenda.Cadence，与 schedule ls 同一份）
+	Once     bool   `json:"once"`    // 一次性的：到点生成一次后删掉，没有下一轮
 	NextAt   int64  `json:"next_at"`
 	Paused   bool   `json:"paused"` // 在暂停范围内：到点不生成
 	Last     *Row   `json:"last"`   // 上一轮生成的任务；还没跑过为空
@@ -563,7 +564,7 @@ func toSched(ctx context.Context, q store.Querier, x agenda.Schedule, ix *orgInd
 		chain = append(chain, id)
 	}
 	r := Sched{ID: x.ID, Org: x.Org, DeptName: ix.name(x.Org), Title: x.Title,
-		Cadence: agenda.Cadence(x, time.Local), NextAt: x.NextAt, Paused: pause.Paused(paused, pause.Scope{Orgs: chain}),
+		Cadence: agenda.Cadence(x, time.Local), Once: x.Once, NextAt: x.NextAt, Paused: pause.Paused(paused, pause.Scope{Orgs: chain}),
 		Skips: x.Skips, Note: x.LastNote, Trouble: strings.Contains(x.LastNote, agenda.DispatchFailed)}
 	if x.Kind != "task" {
 		r.Kind = agenda.Kinds[x.Kind]
@@ -582,7 +583,7 @@ func toSched(ctx context.Context, q store.Querier, x agenda.Schedule, ix *orgInd
 	return r, nil
 }
 
-// SchedDetail 是周期任务抽屉：一行的内容加上详述、技能、谁建的、最近几轮。
+// SchedDetail 是定时任务抽屉：一行的内容加上详述、技能、谁建的、最近几轮。
 type SchedDetail struct {
 	Sched
 	Detail    string `json:"detail"`
@@ -797,7 +798,7 @@ type TaskDetail struct {
 	Kids      []Row          `json:"kids"`    // 直接的子任务（按建立先后）
 	Waits     []Row          `json:"waits"`   // 它要等的（依赖，含已结束的）
 	Waiters   []Row          `json:"waiters"` // 在等它的
-	// 由哪条周期任务生成（sN），它交出的或它选自的选项单（cN）；没有为空。
+	// 由哪条定时任务生成（sN），它交出的或它选自的选项单（cN）；没有为空。
 	Schedule string `json:"schedule,omitempty"`
 	Choice   string `json:"choice,omitempty"`
 	// 带来源的：任务分派人（记录人）的名字，是负责人时给他的负责人抽屉地址「oN/aN」（负责的第一个部门/身份）。

@@ -20,7 +20,7 @@ const dueBatch = 100
 // 复用 last_note 保留失败原因并停止自动重试，schedule run 成功后清掉。
 const scheduleLoopError = "后台处理出错："
 
-// Tick 巡检一次到点的周期任务。暂停范围内的不动（下一轮时间不变，恢复后只补一轮）。
+// Tick 巡检一次到点的定时任务。暂停范围内的不动（下一轮时间不变，恢复后只补一轮；一次性的恢复后补这一次）。
 func Tick(ctx context.Context, env *app.Env, now int64, loc *time.Location) error {
 	rows, err := env.DB.QueryContext(ctx, `SELECT `+scheduleCols+` FROM schedules WHERE next_at <= ? AND last_note NOT LIKE ? ORDER BY next_at LIMIT ?`, now, scheduleLoopError+"%", dueBatch)
 	if err != nil {
@@ -40,8 +40,10 @@ func Tick(ctx context.Context, env *app.Env, now int64, loc *time.Location) erro
 		if x.scanErr != nil {
 			return x.scanErr
 		}
-		if _, err := ParseEvery(x.Every); err != nil {
-			return fmt.Errorf("%s 的周期间隔不合法：%w", x.ID, err)
+		if !x.Once {
+			if _, err := ParseEvery(x.Every); err != nil {
+				return fmt.Errorf("%s 的周期间隔不合法：%w", x.ID, err)
+			}
 		}
 		if x.atMinute != nil {
 			if _, err := ParseAt(x.At, x.EveryMs); err != nil {
@@ -99,7 +101,7 @@ func Tick(ctx context.Context, env *app.Env, now int64, loc *time.Location) erro
 	})
 }
 
-// 有周期任务新建时唤醒巡检循环重新算等多久。
+// 有定时任务新建时唤醒巡检循环重新算等多久。
 var (
 	wakeMu sync.Mutex
 	wakeCh = make(chan struct{}, 1)
@@ -114,7 +116,7 @@ func wake() {
 	}
 }
 
-// Run 是周期任务的后台循环：睡到最早的下一轮（最多一分钟），醒来巡检一次。
+// Run 是定时任务的后台循环：睡到最早的下一轮（最多一分钟），醒来巡检一次。
 func Run(ctx context.Context, env *app.Env) error {
 	for {
 		if err := Tick(ctx, env, store.Now(), time.Local); err != nil {

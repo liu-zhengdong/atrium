@@ -207,7 +207,7 @@ out=$(json secretary bridge --install-hook --dir "$dir"); has '.result.added'
 out=$(json secretary bridge --install-hook --dir "$dir"); has '.result.added == false'
 jq -e '.model == "x" and (.hooks.SessionStart[0].hooks[0].command == "atrium secretary bridge --detach")' "$dir/.claude/settings.local.json" >/dev/null || fail "hook 写得不对"
 
-step "技能、资料、凭据、选项单、周期任务（第二波 D）"
+step "技能、资料、凭据、选项单、定时任务（第二波 D）"
 mkdir -p "$work/skill/refs"; printf -- '---\ndescription: 修 bug 的做法\n---\n先复现再修\n' >"$work/skill/SKILL.md"; echo 附 >"$work/skill/refs/a.md"
 out=$(json skill add fix-bug "$work/skill" --checks pr_exists || true); has '.ok == false and (.error.message|test("--checks: 不认识的检查"))'
 out=$(json skill add fix-bug "$work/skill" --checks video); has '.result.rev == 1 and .result.summary == "修 bug 的做法" and .result.files == 2'

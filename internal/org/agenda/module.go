@@ -1,4 +1,4 @@
-// Package agenda 是组织里会生成任务的两样东西：选项单（用户拍板后建任务）与周期任务（到点建任务并派发）。
+// Package agenda 是组织里会生成任务的两样东西：选项单（用户拍板后建任务）与定时任务（到点建任务并派发）。
 // 它要调 ledger 建任务，所以与 org 分开：org 被 events 引用（投递对象），org 再引用 ledger 会成环。
 package agenda
 
@@ -90,16 +90,21 @@ func Routes(r *api.Router, env *app.Env) {
 		if err != nil {
 			return nil, err
 		}
-		t, err := RunNow(q.Context(), env, id, time.Local)
-		if err != nil && t.ID == "" {
+		x, err := GetSchedule(q.Context(), db, id)
+		if err != nil {
 			return nil, err
 		}
-		x, gerr := GetSchedule(q.Context(), db, id)
-		if gerr != nil {
-			return nil, gerr
+		t, runErr := RunNow(q.Context(), env, id, time.Local)
+		if runErr != nil && t.ID == "" {
+			return nil, runErr
 		}
-		if err != nil {
-			return nil, api.Conflict("%s 已生成 %s，但%v", id, t.ID, err).WithNext("atrium task run " + t.ID)
+		if !x.Once { // 一次性的已删，回的是删前那条
+			if x, err = GetSchedule(q.Context(), db, id); err != nil {
+				return nil, err
+			}
+		}
+		if runErr != nil {
+			return nil, api.Conflict("%s 已生成 %s，但%v", id, t.ID, runErr).WithNext("atrium task run " + t.ID)
 		}
 		return ScheduleRun{Schedule: x, Task: t}, nil
 	})
@@ -159,8 +164,10 @@ func parsePicks(list []string) ([]int, error) {
 }
 
 func scheduleLine(x Schedule) string {
-	s := fmt.Sprintf("%s  %s  %s  %s  %s  下一轮 %s", x.ID, x.Org, Kinds[x.Kind], Cadence(x, time.Local), x.Title,
-		time.UnixMilli(x.NextAt).Local().Format("01-02 15:04"))
+	s := fmt.Sprintf("%s  %s  %s  %s  %s", x.ID, x.Org, Kinds[x.Kind], Cadence(x, time.Local), x.Title)
+	if !x.Once {
+		s += "  下一轮 " + time.UnixMilli(x.NextAt).Local().Format("01-02 15:04")
+	}
 	if x.LastTask != "" {
 		s += "  上一轮 " + x.LastTask
 	}
@@ -294,11 +301,12 @@ func Commands(t *cli.Table) {
 			}
 			return c.Done(ch, text, "atrium task run "+first)
 		}})
-	t.Group("schedule", "周期任务")
-	t.Add(cli.Command{Path: "schedule add", Args: "<oN> <标题>", Summary: fmt.Sprintf("到点在部门下生成一件任务并派发（每部门上限 %d 条）", org.MaxSchedules),
+	t.Group("schedule", "定时任务")
+	t.Add(cli.Command{Path: "schedule add", Args: "<oN> <标题>", Summary: fmt.Sprintf("到点在部门下生成一件任务并派发，按周期反复或指定那天一次（每部门上限 %d 条）", org.MaxSchedules),
 		Flags: []cli.Flag{
 			{Name: "every", Value: "周期", Help: "7d、1d、12h、2w（至少 1h）"},
-			{Name: "at", Value: "HH:MM", Help: "本机钟点（只给整天的周期）"},
+			{Name: "on", Value: "YYYY-MM-DD", Help: "只在这天触发一次，生成任务后这条自动删除（与 --every 二选一；停机错过的恢复后补上）"},
+			{Name: "at", Value: "HH:MM", Help: "本机钟点：--every 只给整天的周期；--on 缺省 " + OnDefaultAt},
 			{Name: "kind", Value: "种类", Help: "task 自定义（缺省）/ patrol 体验巡检（每轮只派本机）/ research 调研（写 choice.json 出选项单）"},
 			{Name: "detail", Value: "文字", Help: "每轮任务的详述"},
 			{Name: "skill", Value: "名字", Help: "每轮任务用的技能"},
@@ -315,18 +323,19 @@ func Commands(t *cli.Table) {
 			if err := c.MaxArgs(2); err != nil {
 				return err
 			}
-			if c.Str("every") == "" {
-				return api.Usage("--every: 不能为空（如 7d）")
-			}
-			in := NewSchedule{Org: dept, Title: title, Kind: c.Str("kind"), Every: c.Str("every"), At: c.Str("at"),
+			in := NewSchedule{Org: dept, Title: title, Kind: c.Str("kind"), Every: c.Str("every"), On: c.Str("on"), At: c.Str("at"),
 				Detail: c.Str("detail"), Skill: c.Str("skill")}
 			var x Schedule
 			if err := c.Call("POST", "/api/schedules", in, &x); err != nil {
 				return err
 			}
-			return c.Done(x, "已建周期任务 "+scheduleLine(x), "atrium schedule run "+x.ID)
+			next := "atrium schedule run " + x.ID
+			if x.Once {
+				next = "atrium schedule ls --node " + x.Org
+			}
+			return c.Done(x, "已建定时任务 "+scheduleLine(x), next)
 		}})
-	t.Add(cli.Command{Path: "schedule ls", Summary: "列周期任务：下一轮、上一轮、最近一笔",
+	t.Add(cli.Command{Path: "schedule ls", Summary: "列定时任务：下一轮、上一轮、最近一笔",
 		Flags: []cli.Flag{{Name: "node", Value: "oN", Help: "只看这个部门的"}},
 		Run: func(c *cli.Ctx) error {
 			var list []Schedule
@@ -334,7 +343,7 @@ func Commands(t *cli.Table) {
 				return err
 			}
 			if len(list) == 0 {
-				return c.Done(list, "没有周期任务", "atrium schedule add <oN> <标题> --every 7d")
+				return c.Done(list, "没有定时任务", "atrium schedule add <oN> <标题> --every 7d")
 			}
 			var b strings.Builder
 			for _, x := range list {
@@ -342,7 +351,7 @@ func Commands(t *cli.Table) {
 			}
 			return c.Done(list, b.String(), "atrium schedule run "+list[0].ID)
 		}})
-	t.Add(cli.Command{Path: "schedule rm", Args: "<sN>", Summary: "删周期任务（已生成的任务不动）",
+	t.Add(cli.Command{Path: "schedule rm", Args: "<sN>", Summary: "删定时任务（已生成的任务不动）",
 		Run: func(c *cli.Ctx) error {
 			id, err := c.Arg(0, "<sN>")
 			if err != nil {
@@ -352,9 +361,9 @@ func Commands(t *cli.Table) {
 			if err := c.Call("DELETE", "/api/schedules/"+url.PathEscape(id), nil, &x); err != nil {
 				return err
 			}
-			return c.Done(x, "已删周期任务 "+x.ID+" "+x.Title, "atrium schedule ls --node "+x.Org)
+			return c.Done(x, "已删定时任务 "+x.ID+" "+x.Title, "atrium schedule ls --node "+x.Org)
 		}})
-	t.Add(cli.Command{Path: "schedule run", Args: "<sN>", Summary: "马上生成一轮并派发（不改下一轮时间）",
+	t.Add(cli.Command{Path: "schedule run", Args: "<sN>", Summary: "马上生成一轮并派发（不改下一轮时间；一次性的生成后即删）",
 		Run: func(c *cli.Ctx) error {
 			id, err := c.Arg(0, "<sN>")
 			if err != nil {
@@ -364,7 +373,11 @@ func Commands(t *cli.Table) {
 			if err := c.Call("POST", "/api/schedules/"+url.PathEscape(id)+"/run", nil, &res); err != nil {
 				return err
 			}
-			text, next, err := events.AsyncNext(c, fmt.Sprintf("%s 生成了 %s「%s」并已派发", id, res.Task.ID, res.Task.Title), "atrium task wait "+res.Task.ID)
+			text := fmt.Sprintf("%s 生成了 %s「%s」并已派发", id, res.Task.ID, res.Task.Title)
+			if res.Schedule.Once {
+				text += "；这条一次性的定时任务已删"
+			}
+			text, next, err := events.AsyncNext(c, text, "atrium task wait "+res.Task.ID)
 			if err != nil {
 				return err
 			}

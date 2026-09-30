@@ -3,6 +3,7 @@ package web
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
@@ -36,11 +37,38 @@ func TestMaterialType(t *testing.T) {
 		{"报告.pdf", true, "application/pdf", "frame-ancestors 'self'", false}, // Chrome 不在沙箱里渲染 pdf
 		{"表.xlsx", true, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "sandbox;", false},
 		{"logs.zip", true, "application/octet-stream", "sandbox;", false},
+		{"app.js", false, "text/plain; charset=utf-8", "sandbox;", false}, // 原地址不给脚本类型
+		{"style.css", false, "text/plain; charset=utf-8", "sandbox;", false},
 	} {
-		ctype, csp := materialType(c.name, c.binary)
+		ctype, csp := materialType(c.name, c.binary, false)
 		if ctype != c.ctype || !strings.HasPrefix(csp, c.csp) || strings.Contains(csp, "allow-scripts") != c.scriptsOpen ||
 			strings.Contains(csp, "allow-same-origin") || !strings.Contains(csp, "frame-ancestors 'self'") {
 			t.Errorf("%s：%q %q", c.name, ctype, csp)
+		}
+	}
+	// 沙箱页面地址：脚本、样式按真实类型，其余同原地址
+	for name, want := range map[string]string{"app.JS": "text/javascript; charset=utf-8", "m.mjs": "text/javascript; charset=utf-8",
+		"style.css": "text/css; charset=utf-8", "d.json": "application/json", "f.woff2": "font/woff2", "page.html": "text/html; charset=utf-8", "a.md": "text/plain; charset=utf-8"} {
+		if ctype, csp := materialType(name, false, true); ctype != want || !strings.HasPrefix(csp, "sandbox") {
+			t.Errorf("沙箱页面 %s：%q %q", name, ctype, csp)
+		}
+	}
+}
+
+// 沙箱页面的键：只认同一个密钥给同一条资料算出的。
+func TestFrameKey(t *testing.T) {
+	secret, other := []byte("secret-a"), []byte("secret-b")
+	key := frameKey(secret, "m2")
+	if id, ok := frameID(secret, key); !ok || id != "m2" {
+		t.Fatalf("自己的键：%q %v", id, ok)
+	}
+	_, mac, _ := strings.Cut(key, "-")
+	for _, seg := range []string{
+		"m2", "m2-", "m3-" + mac, // 拿 m2 的键去开 m3
+		key[:len(key)-1], key + "A", frameKey(other, "m2"), "-" + mac,
+	} {
+		if _, ok := frameID(secret, seg); ok {
+			t.Errorf("%q 不该认", seg)
 		}
 	}
 }
@@ -154,6 +182,45 @@ func TestMaterialRoute(t *testing.T) {
 		if res, _ := get(c.path, ""); res.StatusCode != c.code {
 			t.Errorf("%s 应 %d，得到 %d", c.path, c.code, res.StatusCode)
 		}
+	}
+	// html 正文的沙箱地址从部门页接口取；只有它放行跨域读，且只开这一条资料
+	res, body := get("/ui/api/dept/"+dept.ID, "")
+	var page struct {
+		Result struct {
+			Materials []struct{ ID, Frame string } `json:"materials"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal([]byte(body), &page); err != nil || res.StatusCode != 200 {
+		t.Fatalf("部门页：%d %s", res.StatusCode, body)
+	}
+	frames := map[string]string{}
+	for _, m := range page.Result.Materials {
+		frames[m.ID] = m.Frame
+	}
+	if !strings.HasPrefix(frames[site.ID], "/ui/frame/"+site.ID+"-") || frames[md.ID] == frames[site.ID] {
+		t.Fatalf("沙箱地址：%v", frames)
+	}
+	res, body = get(frames[site.ID]+"images/a.png", "")
+	if res.StatusCode != 200 || body != string(png) || res.Header.Get("Access-Control-Allow-Origin") != "null" ||
+		!strings.Contains(res.Header.Get("Content-Security-Policy"), "sandbox") {
+		t.Errorf("沙箱地址取文件：%d %v", res.StatusCode, res.Header)
+	}
+	for _, c := range []struct {
+		path  string
+		code  int
+		allow string
+	}{
+		{frames[md.ID] + "images/a.png", 404, "null"},                                        // 这把键只开 md 那条
+		{strings.Replace(frames[site.ID], site.ID+"-", md.ID+"-", 1) + "report.md", 404, ""}, // 换了资料号，键对不上
+		{"/ui/frame/" + site.ID + "/index.html", 404, ""},
+		{"/ui/material/" + site.ID + "/index.html", 200, ""}, // 原地址不放行
+	} {
+		if res, _ := get(c.path, ""); res.StatusCode != c.code || res.Header.Get("Access-Control-Allow-Origin") != c.allow {
+			t.Errorf("%s：%d %v", c.path, res.StatusCode, res.Header)
+		}
+	}
+	if res, _ := get(frames[site.ID]+"index.html", "evil.example:"+strconv.Itoa(port)); res.StatusCode != 403 {
+		t.Errorf("沙箱地址外来 Host 应 403，得到 %d", res.StatusCode)
 	}
 	if res, _ := get("/ui/material/"+md.ID, "evil.example:"+strconv.Itoa(port)); res.StatusCode != 403 {
 		t.Errorf("外来 Host 应 403，得到 %d", res.StatusCode)

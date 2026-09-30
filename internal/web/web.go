@@ -1,10 +1,11 @@
 // Package web 是只读网页：静态文件 embed 进二进制，托管在 /；数据走只读接口 /ui/api/…，
 // 实时靠一条 SSE（/ui/stream，数据变了推 changed，页面只重取）。
-// 不登录：服务只听 127.0.0.1，网页与只读接口再核对 Host 头（挡 DNS 重绑定），不发 CORS 头。设计稿 ~/Atrium/design/atrium-ui.html。
+// 不登录：服务只听 127.0.0.1，网页与只读接口再核对 Host 头（挡 DNS 重绑定），不发 CORS 头（只有资料的沙箱页面例外，见 material.go）。设计稿 ~/Atrium/design/atrium-ui.html。
 // 契约见 internal/README.md。
 package web
 
 import (
+	"crypto/rand"
 	"embed"
 	"io/fs"
 	"net/http"
@@ -25,7 +26,8 @@ var staticFS embed.FS
 
 // Module 是本包接入点：命令 map（与一次性的 import，见 importer 包）、网页路由、变化推送循环。
 func Module() app.Module {
-	w := &web{hub: newHub()}
+	w := &web{hub: newHub(), secret: make([]byte, 32)}
+	rand.Read(w.secret)
 	return app.Module{
 		Name: "web",
 		Commands: func(t *cli.Table) {
@@ -38,8 +40,9 @@ func Module() app.Module {
 }
 
 type web struct {
-	hub *hub
-	env *app.Env
+	hub    *hub
+	env    *app.Env
+	secret []byte // 派生资料沙箱页面的键（见 material.go），只在内存里
 }
 
 func (w *web) routes(r *api.Router, env *app.Env) {
@@ -63,7 +66,11 @@ func (w *web) routes(r *api.Router, env *app.Env) {
 		if err != nil {
 			return nil, err
 		}
-		return loadDept(req.Context(), env.DB, env.Paths.Data, id)
+		page, err := loadDept(req.Context(), env.DB, env.Paths.Data, id)
+		for i := range page.Materials {
+			page.Materials[i].Frame = "/ui/frame/" + frameKey(w.secret, page.Materials[i].ID) + "/"
+		}
+		return page, err
 	})
 	w.data(r, "GET /ui/api/task/{id}", func(req *http.Request) (any, error) {
 		id, err := ref(req, "t")
@@ -88,6 +95,7 @@ func (w *web) routes(r *api.Router, env *app.Env) {
 	})
 	r.Raw("GET /ui/material/{id}", w.local(w.material))
 	r.Raw("GET /ui/material/{id}/{rel...}", w.local(w.material))
+	r.Raw("GET /ui/frame/{key}/{rel...}", w.local(w.frame))
 	r.Raw("GET /ui/stream", w.local(w.hub.serve))
 }
 

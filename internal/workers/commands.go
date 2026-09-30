@@ -247,6 +247,9 @@ func Commands(t *cli.Table) {
 	ledger.HistoryText[ExitKind] = ExitText
 	ledger.HistoryText[RecountKind] = RecountText
 	t.Group("workers", "执行者：可派的组合、档案与近期拉起统计")
+	t.Add(cli.Command{Path: "workers chrome-mcp", Local: true, Hidden: true,
+		Summary: "执行者 Chrome MCP 入口", Args: "[-- MCP 参数]",
+		Run: func(c *cli.Ctx) error { return runChromeMCP(c.Args, os.Stdin, c.Env.Stdout, c.Env.Stderr) }})
 	t.Add(cli.Command{Path: "workers", Args: "[执行者或 层/名]",
 		Summary: "列执行者（组合、信任、近 20 次拉起的结果、哪台上不可用）；给名字看叠加后的档案与每次拉起的明细，或一层原文",
 		Run: func(c *cli.Ctx) error {

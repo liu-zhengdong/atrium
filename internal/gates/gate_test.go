@@ -242,7 +242,8 @@ func TestGateEnding(t *testing.T) {
 		{"没改动、没做成", true, "h3 上读不到设计稿\n交付结论：没做成", false, ledger.Blocked, "没做成（h3 上读不到设计稿）"},
 		{"没仓库、停下等决定", false, "两个方案等负责人定\n交付结论：没做成", false, ledger.Blocked, "没做成（两个方案等负责人定）"},
 		{"没仓库、没写结论", false, "没做成，没改代码也没开 PR", false, ledger.Blocked, "没写「交付结论"},
-		{"上一轮的完成不算", false, "交付结论：完成", true, ledger.Blocked, "没写「交付结论"},
+		{"没仓库、空回复", false, "", false, ledger.Blocked, "这一轮没记到执行者的回复"},
+		{"上一轮的完成不算", false, "交付结论：完成", true, ledger.Blocked, "这一轮没记到执行者的回复"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -271,6 +272,11 @@ func TestGateEnding(t *testing.T) {
 			}
 			if e.queued(task.ID) {
 				t.Fatal("没做成不该交回重跑")
+			}
+			if c.reply == "" || c.stale {
+				if note := e.lastNote(task.ID); !strings.Contains(note, "这一轮没记到执行者的回复（atrium task log "+task.ID+" 看原始输出）") {
+					t.Fatalf("空回复应提示查看本任务原始输出：%s", note)
+				}
 			}
 		})
 	}

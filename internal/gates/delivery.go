@@ -194,6 +194,9 @@ func (g *Gate) checkEnding(ctx context.Context, t ledger.Task) (checked, error) 
 	if err != nil {
 		return checked{}, err
 	}
+	if reply == "" {
+		return checked{block: fmt.Sprintf("这一轮没记到执行者的回复（atrium task log %s 看原始输出）", t.ID)}, nil
+	}
 	next := fmt.Sprintf("；读执行者的回复（atrium task log %s）后补说明重派，或收尾 atrium task set %s --status done", t.ID, t.ID)
 	done, why, ok := ParseEnding(reply)
 	switch {

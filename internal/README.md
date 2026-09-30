@@ -164,7 +164,7 @@ type Module struct {
 - **拉起与模型**：在 `workers/adapter.go` 接适配器，或用 `workers/cli.go` 的 `protocol: cli` 档案，核对提示词、模型、强度、端点与凭据环境的传递（叠加与模型映射在 `workers/resolve.go`）。
 - **完成与日志**：核对 `workers/signals.go` 的 `Ended` 与 `workers/cli.go` 的完成匹配，并在 `workers/tracers.go`、`workers/trace.go` 验证 JSON 事件解析或纯文本原文，日志样本放 `workers/testdata/`。
 - **可用性**：用没登录、额度用尽、模型名无效的日志样本验证 `workers/signals.go` 的 `Classify` 与 `workers/marks.go` 的 `MarkOf`，确认失败能分类并挡住后续分派任务。
-- **额度**：以 `workers.Resolved.Account` 的工具名经 `quota.AccountOf` 得到额度账号，自带读取接在 `quota/readers.go` 并登记 `quota/merge.go` 的 `Accounts`，或核对 OpenQuota 的 `providerId` 与账号一致（`quota/openquota.go`、`quota/merge.go`），在执行者详情确认 `quota.Last` 已有读数。
+- **额度**：由 `workers.Resolved.Account()` 唯一给出额度账号，调用方直接使用，自带读取接在 `quota/readers.go` 并登记 `quota/merge.go` 的 `Accounts`，或核对 OpenQuota 的 `providerId` 与账号一致（`quota/openquota.go`、`quota/merge.go`），在执行者详情用假读数确认 `quota.Last` 的已用、周期进度与富余；缺周期依据不能把剩余百分比当富余。无法读取账号用量或余额时，在档案正文明确写「无读数」、原因及自动挑人的处理（如 `auto=false` 只接点名派活，无法保证用户留份额）。
 - **远程能力**：确认 `workers/tools.go` 的 `ToolCatalog` 包含命令，`hosts/agent.go` 能取得目录并经 `hosts/probe.go` 上报可用性，登录判定在 `hosts/info.go`。
 - **补充说明与并发**：核对 `workers/adapter.go` 的 `Tell`、会话续接与 `Exclusive`（通用命令行档案在 `workers/cli.go`），确认 `dispatch/actions.go` 的补充说明和 `dispatch/pick.go` 的并发约束适用。
 - **自动挑人**：在档案明确 `auto`、`trust`、`max_risk`，用 `workers/profile.go`、`workers/refusal.go` 与 `dispatch/select.go` 核对是否参与自动挑人及能接的风险。

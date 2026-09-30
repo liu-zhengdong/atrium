@@ -4,14 +4,14 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"sync"
 
 	"github.com/liu-zhengdong/atrium/internal/ledger"
 	"github.com/liu-zhengdong/atrium/internal/store"
+	"github.com/liu-zhengdong/atrium/internal/worktree"
 )
 
 // local 交付方式：本机仓库、不经 GitHub。关卡在本机查任务分支的提交与改动；落地把任务分支合进本机主分支
-// （主工作树当前所在的分支），再清理任务工作树与分支。
+// （主工作树当前所在的分支）；任务结束后由 dispatch 统一回收工作树与分支。
 
 // localWorkspace 取本机交付的工作树登记：本机仓库只派本机（dispatch 的 hostNeed），登记在远程就是错的。
 func localWorkspace(ctx context.Context, q store.Querier, id string) (Worktree, error) {
@@ -41,14 +41,11 @@ func (g *Gate) checkLocal(ctx context.Context, t ledger.Task) (checked, error) {
 	return checked{note: "关卡通过（本机交付）：" + facts.Diff}, nil
 }
 
-// localLanding 让本机交付的落地一件一件来（关卡循环与 task accept 会同时落地），免得两件同时动同一个主分支。
-var localLanding sync.Mutex
-
 // landLocal 把任务分支合进本机主分支：主分支已在任务分支里就直接快进，否则先在任务工作树里合入主分支
-// （冲突交回原执行者，不碰主工作树），再快进主分支；最后删任务工作树与分支。
+// （冲突交回原执行者，不碰主工作树），再快进主分支。
 func (g *Gate) landLocal(ctx context.Context, t ledger.Task) (landed, error) {
-	localLanding.Lock()
-	defer localLanding.Unlock()
+	worktree.LocalMutation.Lock()
+	defer worktree.LocalMutation.Unlock()
 	w, err := localWorkspace(ctx, g.DB, t.ID)
 	if err != nil {
 		return landed{}, err
@@ -100,11 +97,5 @@ func (g *Gate) landLocal(ctx context.Context, t ledger.Task) (landed, error) {
 	if err != nil {
 		return landed{}, err
 	}
-	if _, err := main("worktree", "remove", w.Dir); err != nil {
-		return landed{}, err
-	}
-	if _, err := main("branch", "-d", f.Branch); err != nil {
-		return landed{}, err
-	}
-	return landed{note: fmt.Sprintf("合进本机 %s（%s，%s），删了工作树与分支 %s", f.Base, how, short(head), f.Branch)}, nil
+	return landed{note: fmt.Sprintf("合进本机 %s（%s，%s）", f.Base, how, short(head))}, nil
 }

@@ -10,7 +10,6 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -43,11 +42,13 @@ const actor = "runtime"
 
 // dispatcher 是服务进程里派活的内存状态：本机在跑的执行者进程。
 type dispatcher struct {
-	env   *app.Env
-	mu    sync.Mutex
-	procs map[string]*proc
-	kick  chan struct{}
-	wg    sync.WaitGroup
+	env             *app.Env
+	mu              sync.Mutex
+	procs           map[string]*proc
+	kick            chan struct{}
+	wg              sync.WaitGroup
+	reclaimAfter    int64 // 遗留工作树扫描的分页游标，不随任务总数增长
+	reclaimDeferred bool  // 本轮有进程未退或代理离线，需要继续巡检
 	// retired：本实例的派活循环已退出（服务停下或平滑重启）。之后看到的退出不收尾，交给新服务接管时按日志收。
 	retired atomic.Bool
 }
@@ -77,71 +78,6 @@ func (d *dispatcher) procOf(task string) *proc {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	return d.procs[task]
-}
-
-// Run 是派活循环：先接管服务重启前在跑的执行者，再等账本变化或定时，每次按队列顺序派。
-func Run(ctx context.Context, env *app.Env) error {
-	d := get(env)
-	defer d.retired.Store(true)
-	if err := d.adopt(ctx); err != nil {
-		return err
-	}
-	for {
-		ch := ledger.Changed()
-		if err := d.reap(ctx); err != nil {
-			if ctx.Err() != nil {
-				return nil
-			}
-			return err
-		}
-		if err := d.pump(ctx); err != nil {
-			if ctx.Err() != nil {
-				return nil
-			}
-			return err
-		}
-		select {
-		case <-ctx.Done():
-			return nil
-		case <-ch:
-		case <-d.kick:
-		case <-time.After(10 * time.Second): // 暂停解除、额度恢复、机器空出来不经账本
-		}
-	}
-}
-
-func isAPI(err error) bool {
-	var ae *api.Error
-	return errors.As(err, &ae)
-}
-
-// reap 结束已不该跑的执行者：任务被人改成受阻、取消、完成（task set），或被 watch 收了尾，进程还活着就结束它。
-func (d *dispatcher) reap(ctx context.Context) error {
-	d.mu.Lock()
-	list := make([]*proc, 0, len(d.procs))
-	for _, p := range d.procs {
-		list = append(list, p)
-	}
-	d.mu.Unlock()
-	for _, p := range list {
-		if p.stopReason() != "" {
-			continue
-		}
-		t, err := ledger.Get(ctx, d.env.DB, p.task)
-		if err != nil {
-			return err
-		}
-		last, err := workers.LastRun(ctx, d.env.DB, p.task)
-		if err != nil {
-			return err
-		}
-		if t.Status == ledger.Running && t.Stage == ledger.StageNone && last != nil && last.N == p.run.N {
-			continue
-		}
-		p.setStop("gone")
-		d.kill(ctx, p)
-	}
-	return nil
 }
 
 // pump 按队列顺序派一轮。依赖还没完成的跳过，依赖失败或取消的转受阻；单件任务派不出去的原因（没人能接、仓库不对……）
@@ -830,17 +766,7 @@ func (d *dispatcher) adopt(ctx context.Context) error {
 			return fmt.Errorf("接管 %s：%w", t.ID, err)
 		}
 		p := &proc{task: t.ID, run: *run, adapter: w.Adapter, remote: run.Host != LocalHost, pending: map[string]bool{}, done: make(chan struct{})}
-		if p.remote {
-			d.track(p, d.remoteWaiter(p, run.RemoteRun))
-			continue
-		}
-		pid := run.PID
-		d.track(p, func() int {
-			for platform.Alive(pid) {
-				time.Sleep(2 * time.Second)
-			}
-			return workers.ExitUnknown
-		})
+		d.adoptProc(p)
 	}
 	return nil
 }

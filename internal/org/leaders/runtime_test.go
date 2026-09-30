@@ -68,9 +68,40 @@ func fixture(t *testing.T) (*app.Env, *hub, *httptest.Server) {
 	moduleFor(h).Routes(r, env)
 	events.Routes(r, env) // 真的事件接口：负责人令牌按真实路由形状过权限判定
 	agenda.Routes(r, env)
+	// 改档案与解除标记的真处理在 workers。本包测试引它会成环（workers 调 SetLauncher），
+	// 所以只挂同形路由：权限判定走 RuleFor 与 InScope，处理函数不写档案。
+	noop := func(q *api.Req) (any, error) { return map[string]bool{"ok": true}, nil }
+	r.Handle("POST /api/workers/edit", noop)
+	r.Handle("POST /api/workers/clear", noop)
 	srv := httptest.NewServer(r)
 	t.Cleanup(srv.Close)
 	return env, h, srv
+}
+
+// profileLine 造出档案所属部门，返回一个管辖不到它的负责人。
+// 夹具是 o1（a1）→ o2（a2）。档案部门挂在 o2 下且不设负责人，a2 沿管辖包含它；新负责人只管另一个顶层部门。
+func profileLine(t *testing.T, db *store.DB) string {
+	t.Helper()
+	ctx := context.Background()
+	who, err := org.AddLeader(ctx, db, org.NewLeader{Name: "线外", Workers: []string{"fake"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := org.Add(ctx, db, org.NewDept{Name: "线外", Leader: who.ID}); err != nil {
+		t.Fatal(err)
+	}
+	var id string
+	for i := 0; i < 20 && id != ProfileDept; i++ {
+		d, err := org.Add(ctx, db, org.NewDept{Name: "派活", Parent: "o2"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		id = d.ID
+	}
+	if id != ProfileDept {
+		t.Fatalf("没有建出档案部门 %s，最后是 %s", ProfileDept, id)
+	}
+	return who.ID
 }
 
 func code(err error) string {
@@ -190,6 +221,32 @@ func TestLeaderGuard(t *testing.T) {
 	// 用户令牌不受影响。
 	if err := user.Do(ctx, "POST", "/api/tasks/t2/notes", map[string]string{"text": "x"}, nil); err != nil {
 		t.Fatalf("用户令牌：%v", err)
+	}
+	// 执行者档案归派活部门：挂在 o2 下，a2 的管辖包含它；另一位负责人只管线外的顶层部门。
+	outside := profileLine(t, env.DB)
+	tokOut, _ := h.issue(outside)
+	byLeader := map[string]*api.Client{"a2": a2, outside: {Base: srv.URL, Token: tokOut}}
+	for _, c := range []struct{ name, leader, want string }{
+		{"o9 线上的负责人能改档案、解除标记", "a2", "ok"},
+		{"线外的负责人改档案、解除标记被拒", outside, "forbidden"},
+	} {
+		for _, call := range []struct {
+			path string
+			body any
+		}{
+			{"/api/workers/edit", map[string]string{"name": "harness/fake"}},
+			{"/api/workers/clear", map[string]string{"target": "fake"}},
+		} {
+			err := byLeader[c.leader].Do(ctx, "POST", call.path, call.body, nil)
+			if got := code(err); got != c.want {
+				t.Errorf("%s %s：%s，应为 %s（%v）", c.name, call.path, got, c.want, err)
+			}
+			var ae *api.Error
+			if c.want == "forbidden" && (!errors.As(err, &ae) || !strings.Contains(ae.Message, "执行者档案") ||
+				!strings.Contains(ae.Message, ProfileDept) || !strings.Contains(ae.Message, "上交") || !strings.Contains(ae.Next, "leader escalate")) {
+				t.Errorf("%s %s 应说明归 %s 的负责人管、要上交：%v", c.name, call.path, ProfileDept, err)
+			}
+		}
 	}
 	// 作废后 401。
 	h.revoke(tok)

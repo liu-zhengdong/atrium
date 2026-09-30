@@ -100,6 +100,8 @@ func TestRuleFor(t *testing.T) {
 		"PUT /api/secrets/{org}/{name}":     RuleDeny,
 		"POST /api/hosts":                   RuleDeny,
 		"POST /api/tasks/{id}/merge/ignore": RuleTaskRef,
+		"POST /api/workers/edit":            RuleWorkerProfile,
+		"POST /api/workers/clear":           RuleWorkerProfile,
 	}
 	for p, want := range cases {
 		if got := RuleFor(p); got != want {
@@ -224,7 +226,8 @@ func TestPrompt(t *testing.T) {
 	}
 	p := Prompt(in)
 	for _, want := range []string{"负责人 a2（运行时）", "o3 服务（o1 / o2 / o3）", "是什么：单实例后台服务", "k1（o1）简洁优先——长期成本",
-		"总览正文", "也归你管的下属部门：o22 网页、o23 导入", "等 t5 合入", "#11", "t5（o3）", "atrium events ack 11 12", "投给 a1", "--kind shipped", "--kind stuck", "权限边界", "material ls 按部门列全部资料", "说明里写 mN、不写本机路径"} {
+		"总览正文", "也归你管的下属部门：o22 网页、o23 导入", "等 t5 合入", "#11", "t5（o3）", "atrium events ack 11 12", "投给 a1", "--kind shipped", "--kind stuck", "权限边界", "material ls 按部门列全部资料", "说明里写 mN、不写本机路径",
+		"管辖派活部门（" + ProfileDept + "）的负责人还能改执行者档案、解除不可用标记"} {
 		if !strings.Contains(p, want) {
 			t.Errorf("提示词缺 %q", want)
 		}

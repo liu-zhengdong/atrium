@@ -75,7 +75,9 @@ func (d *dispatcher) view(ctx context.Context, t ledger.Task, risk string, exclu
 			if err != nil {
 				return PickView{}, err
 			}
-			if choice.Kind != "run" {
+			if choice.Kind == "queue" {
+				f.Waiting = choice.Reason
+			} else if choice.Kind != "run" {
 				f.Unavailable = choice.Reason
 			}
 		}

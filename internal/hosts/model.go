@@ -35,8 +35,8 @@ type Info struct {
 	Arch       string         `json:"arch"`
 	CPUs       int            `json:"cpus"`
 	Version    string         `json:"version"`
-	Data       string         `json:"data"` // 代理数据目录
-	CLIs       map[string]CLI `json:"clis"`
+	Data       string         `json:"data"`        // 代理数据目录
+	CLIs       map[string]CLI `json:"clis"`        // nil 尚未自检；空 map 自检完成但无可用工具
 	MaxWorkers int            `json:"max_workers"` // 按核数算的执行者上限
 }
 
@@ -159,6 +159,9 @@ func fit(c Candidate, n Need, pinned bool) (ok bool, later bool, reason string) 
 		return false, false, c.ID + " 已暂停接活"
 	}
 	if n.Tool != "" {
+		if c.CLIs == nil {
+			return false, true, c.ID + " 尚未完成工具自检，自检就绪后再派"
+		}
 		cli := c.CLIs[n.Tool]
 		if !cli.Installed {
 			return false, false, fmt.Sprintf("%s 上没装 %s", c.ID, n.Tool)
@@ -265,7 +268,7 @@ func Choose(cands []Candidate, n Need, pinned string) Choice {
 	if localNever == "" {
 		localNever = "本机接不了"
 	}
-	return Choice{Kind: "queue", Reason: localNever + "，也没有别的机器能接，有机器能接时再拉起"}
+	return Choice{Kind: "refuse", Reason: localNever + "，也没有别的机器能接"}
 }
 
 func refNum(id string) int {

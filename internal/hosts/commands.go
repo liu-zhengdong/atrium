@@ -220,6 +220,9 @@ func formatView(v View) string {
 		sort.Strings(clis)
 		if len(clis) == 0 {
 			clis = []string{"没装"}
+			if v.Info.CLIs == nil {
+				clis = []string{"尚未完成工具自检"}
+			}
 		}
 		fmt.Fprintf(&b, "编码 CLI：%s\n", strings.Join(clis, "、"))
 	}

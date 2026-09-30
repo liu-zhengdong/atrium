@@ -21,6 +21,7 @@ type Fact struct {
 	Refusal     string // 档案是否接受自动派活（workers.Rules.Refusal）
 	Problem     string // 档案写得不对、模型与强度不搭
 	Unavailable string // 没有符合任务条件的可用主机，或隔离实例不允许
+	Waiting     string // 主机暂未就绪；仍符合条件，等待后再派
 	Exclusive   bool
 	Preferred   int          // 技能里的优先顺序（1 起）；0 不是
 	Stat        workers.Stat // 近 StatWindow 次表现，仅供展示
@@ -67,7 +68,7 @@ type PickView struct {
 	Candidates  []Candidate `json:"candidates"`
 	Recommended string      `json:"recommended,omitempty"`
 	Reason      string      `json:"reason"`
-	// Waiting：有能接的但都正忙（独占工具在跑），等它空下来；为假且没有推荐表示没人能接。
+	// Waiting：有符合条件的候选，但工具正忙或主机暂未就绪；为假且没有推荐表示没人能接。
 	Waiting bool `json:"waiting,omitempty"`
 }
 
@@ -92,6 +93,7 @@ func Pick(in PickInput) PickView {
 	v := PickView{Risk: in.Risk, Candidates: []Candidate{}}
 	type row struct {
 		c     Candidate
+		wait  string
 		pref  int
 		order int
 	}
@@ -130,9 +132,9 @@ func Pick(in PickInput) PickView {
 			pref = 1 << 30
 		}
 		if c.Eligible {
-			ok = append(ok, row{c, pref, i})
+			ok = append(ok, row{c, f.Waiting, pref, i})
 		} else {
-			no = append(no, row{c, pref, i})
+			no = append(no, row{c, f.Waiting, pref, i})
 		}
 	}
 	sort.SliceStable(ok, func(i, j int) bool {
@@ -159,7 +161,7 @@ func Pick(in PickInput) PickView {
 		v.Candidates = append(v.Candidates, r.c)
 	}
 	for _, r := range ok {
-		if r.c.Busy {
+		if r.c.Busy || r.wait != "" {
 			continue
 		}
 		v.Recommended = r.c.ID
@@ -193,6 +195,10 @@ func Pick(in PickInput) PickView {
 	}
 	if len(ok) > 0 {
 		v.Waiting = true
+		if ok[0].wait != "" {
+			v.Reason = ok[0].c.ID + "：" + ok[0].wait
+			return v
+		}
 		v.Reason = "能接的都正忙（独占工具在跑）：" + ok[0].c.ID + " 空下来就派"
 		return v
 	}

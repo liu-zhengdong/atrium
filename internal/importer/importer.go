@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"net/url"
 	"os"
-	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -348,9 +347,9 @@ func importSkills(ctx context.Context, old *sql.DB, tx *sql.Tx, stage string, re
 	return rows.Err()
 }
 
-// importMaterials 搬当前版本（没被新版本取代、没归档）。新版一份资料只有一个文件：
-// 单文件资料保留原短号；目录资料第一个文件保留原短号，其余每个文件发新短号（标题是目录内相对路径，与 material add 目录时一致）。
-// 文件写到 stage/materials/<mN>/r<rev>/<文件名>，提交后挪到数据目录。
+// importMaterials 搬当前版本（没被新版本取代、没归档），保留原短号。目录资料还是一条：标题是原名称，
+// 文件按目录内相对路径放，正文按 org.PickEntry 认（认不出就没有正文，打开列出全部文件）。
+// 文件写到 stage/materials/<mN>/r<rev>/<相对路径>，提交后挪到数据目录。
 func importMaterials(ctx context.Context, old *sql.DB, tx *sql.Tx, depts map[string]bool, oldData, stage string, rep *Report) error {
 	rows, err := old.QueryContext(ctx, `SELECT m.id, m.node_id, m.name, m.note, m.version, m.created_by, m.created_at,
 		m.archived_at IS NOT NULL, m.superseded_by IS NOT NULL, COALESCE(v.manifest, '')
@@ -408,8 +407,9 @@ func importMaterials(ctx context.Context, old *sql.DB, tx *sql.Tx, depts map[str
 			note = m.name
 		}
 		src := filepath.Join(oldData, "materials", ref, fmt.Sprintf("v%d", m.version))
-		var made []string
-		for i, e := range entries {
+		var files []org.MaterialFileInfo
+		size, n, bin := 0, 0, 0
+		for _, e := range entries {
 			if !safeRel(e.Path) {
 				return fmt.Errorf("资料 %s 清单里有不安全的路径 %q", ref, e.Path)
 			}
@@ -417,38 +417,47 @@ func importMaterials(ctx context.Context, old *sql.DB, tx *sql.Tx, depts map[str
 			if err != nil {
 				return fmt.Errorf("资料 %s：%w", ref, err)
 			}
-			id := ref
-			if i > 0 {
-				if id, err = store.NextID(ctx, tx, "m"); err != nil {
-					return err
-				}
-			}
-			base := path.Base(e.Path)
-			n, binary := org.Units(content)
-			if err := writeNew(filepath.Join(stage, "materials", id, fmt.Sprintf("r%d", m.version), base), content); err != nil {
+			u, binary := org.Units(content)
+			if err := writeNew(filepath.Join(stage, "materials", ref, fmt.Sprintf("r%d", m.version), filepath.FromSlash(e.Path)), content); err != nil {
 				return err
-			}
-			if _, err := tx.ExecContext(ctx, `INSERT INTO materials (id, rev, department, kind, title, note, file, size, units, binary, created_by, created_at)
-				VALUES (?, ?, ?, 'detail', ?, ?, ?, ?, ?, ?, ?, ?)`, id, m.version, dept, e.Path, note, base, len(content), n, binary, m.by, m.at); err != nil {
-				return err
-			}
-			if _, ok := units[dept]; !ok {
-				order = append(order, dept)
-			}
-			units[dept] += n
-			if binary {
-				bins[dept] += len(content)
 			}
 			if len(content) > org.MaxMaterialFile<<20 {
-				rep.Over = append(rep.Over, fmt.Sprintf("资料 %s 的 %s 有 %d MB，超过单个文件 %d MB", id, e.Path, org.MB(len(content)), org.MaxMaterialFile))
+				rep.Over = append(rep.Over, fmt.Sprintf("资料 %s 的 %s 有 %d MB，超过单个文件 %d MB", ref, e.Path, org.MB(len(content)), org.MaxMaterialFile))
 			}
-			made = append(made, id)
-			it.Imported++
+			files = append(files, org.MaterialFileInfo{Path: e.Path, Size: len(content), Units: u, Binary: binary})
+			size += len(content)
+			if binary {
+				bin += len(content)
+			} else {
+				n += u
+			}
 		}
-		if len(entries) > 1 {
-			it.Notes = append(it.Notes, fmt.Sprintf("%s 是 %d 个文件的目录资料，拆成 %s…%s 各一份（标题是目录内路径）",
-				ref, len(entries), made[0], made[len(made)-1]))
+		entry, err := org.PickEntry(files, "")
+		if err != nil {
+			it.Notes = append(it.Notes, fmt.Sprintf("%s 认不出正文，打开时列出全部 %d 个文件", ref, len(files)))
 		}
+		entryBinary := false
+		for _, f := range files {
+			if f.Path == entry {
+				entryBinary = f.Binary
+			}
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO materials (id, rev, department, kind, title, note, file, size, units, binary, created_by, created_at)
+			VALUES (?, ?, ?, 'detail', ?, ?, ?, ?, ?, ?, ?, ?)`, ref, m.version, dept, m.name, note, entry, size, n, entryBinary, m.by, m.at); err != nil {
+			return err
+		}
+		for _, f := range files {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO material_files (id, rev, path, size, units, binary) VALUES (?, ?, ?, ?, ?, ?)`,
+				ref, m.version, f.Path, f.Size, f.Units, f.Binary); err != nil {
+				return err
+			}
+		}
+		if _, ok := units[dept]; !ok {
+			order = append(order, dept)
+		}
+		units[dept] += n
+		bins[dept] += bin
+		it.Imported++
 	}
 	for _, d := range order {
 		if units[d] > org.MaxMaterial {

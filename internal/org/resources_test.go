@@ -3,6 +3,7 @@ package org
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -64,35 +65,84 @@ func TestUnitsAndPlan(t *testing.T) {
 	}
 	existing := []materialSlot{{id: "m1", kind: "overview", title: "总览.md", units: 1000, rev: 2},
 		{id: "m2", kind: "detail", title: "a.md", units: 40000, rev: 1},
-		{id: "m3", kind: "detail", title: "图.png", size: 190 << 20, binary: true, rev: 1}}
+		{id: "m3", kind: "detail", title: "图.png", bin: 190 << 20, rev: 1}}
 	bin := func(mb int) []byte { b := make([]byte, mb<<20); return b }
 	text := func(n int) []byte { return []byte(strings.Repeat("字", n)) }
+	one := func(name string, content []byte) []MaterialFile { return []MaterialFile{{name, content}} }
+	info := func(p string, size, units int, binary bool) MaterialFileInfo {
+		return MaterialFileInfo{Path: p, Size: size, Units: units, Binary: binary}
+	}
 	cases := []struct {
 		name string
 		in   MaterialInput
-		want []materialSlot
+		want materialSlot
 		code string
 	}{
-		{"新细节", MaterialInput{Files: []MaterialFile{{"b.md", text(100)}}}, []materialSlot{{kind: "detail", title: "b.md", units: 100, size: 300}}, ""},
-		{"同名细节追加一版", MaterialInput{Files: []MaterialFile{{"a.md", text(48000)}}},
-			[]materialSlot{{id: "m2", rev: 1, kind: "detail", title: "a.md", units: 48000, size: 144000}}, ""},
-		{"总览换一份也是同一条的新版", MaterialInput{Overview: true, Files: []MaterialFile{{"新总览.md", text(3000)}}},
-			[]materialSlot{{id: "m1", rev: 2, kind: "overview", title: "新总览.md", units: 3000, size: 9000}}, ""},
-		{"二进制不占字数", MaterialInput{Files: []MaterialFile{{"b.png", bin(10)}}},
-			[]materialSlot{{kind: "detail", title: "b.png", size: 10 << 20, binary: true}}, ""},
-		{"单个文件超 20MB", MaterialInput{Files: []MaterialFile{{"c.png", bin(21)}}}, nil, "limit"},
-		{"部门二进制合计超 200MB", MaterialInput{Files: []MaterialFile{{"c.png", bin(11)}}}, nil, "limit"},
-		{"同名二进制换一版只算新的", MaterialInput{Files: []MaterialFile{{"图.png", bin(20)}}},
-			[]materialSlot{{id: "m3", rev: 1, kind: "detail", title: "图.png", size: 20 << 20, binary: true}}, ""},
-		{"总览超 3000 字", MaterialInput{Overview: true, Files: []MaterialFile{{"o.md", text(3001)}}}, nil, "limit"},
-		{"总览不能是二进制", MaterialInput{Overview: true, Files: []MaterialFile{{"o.png", []byte{0, 0}}}}, nil, "usage"},
-		{"部门合计超 5 万字", MaterialInput{Files: []MaterialFile{{"c.md", text(9001)}}}, nil, "limit"},
-		{"重复文件", MaterialInput{Files: []MaterialFile{{"c.md", text(1)}, {"c.md", text(1)}}}, nil, "usage"},
+		{"新细节：标题取文件名", MaterialInput{Files: one("b.md", text(100))},
+			materialSlot{kind: "detail", title: "b.md", entry: "b.md", files: []MaterialFileInfo{info("b.md", 300, 100, false)}, units: 100}, ""},
+		{"同名细节追加一版", MaterialInput{Files: one("a.md", text(48000))},
+			materialSlot{id: "m2", rev: 1, kind: "detail", title: "a.md", entry: "a.md", files: []MaterialFileInfo{info("a.md", 144000, 48000, false)}, units: 48000}, ""},
+		{"总览换一份也是同一条的新版", MaterialInput{Overview: true, Files: one("新总览.md", text(3000))},
+			materialSlot{id: "m1", rev: 2, kind: "overview", title: "新总览.md", entry: "新总览.md", files: []MaterialFileInfo{info("新总览.md", 9000, 3000, false)}, units: 3000}, ""},
+		{"目录是一条：报告和图片合计，附属文件计入大小", MaterialInput{Title: "t446-show", Files: []MaterialFile{
+			{"report.md", text(10)}, {"images/a.png", bin(2)}, {"images/a.mmd", text(5)}}},
+			materialSlot{kind: "detail", title: "t446-show", entry: "report.md", units: 15, bin: 2 << 20, files: []MaterialFileInfo{
+				info("images/a.mmd", 15, 5, false), info("images/a.png", 2<<20, 0, true), info("report.md", 30, 10, false)}}, ""},
+		{"目录的附属文件超部门二进制合计", MaterialInput{Title: "d", Files: []MaterialFile{{"report.md", text(1)}, {"a.png", bin(11)}}}, materialSlot{}, "limit"},
+		{"目录要有标题", MaterialInput{Files: []MaterialFile{{"report.md", text(1)}, {"a.png", bin(1)}}}, materialSlot{}, "usage"},
+		{"目录总览不行", MaterialInput{Title: "d", Overview: true, Files: []MaterialFile{{"report.md", text(1)}, {"b.md", text(1)}}}, materialSlot{}, "usage"},
+		{"二进制不占字数", MaterialInput{Files: one("b.png", bin(10))},
+			materialSlot{kind: "detail", title: "b.png", entry: "b.png", files: []MaterialFileInfo{info("b.png", 10<<20, 0, true)}, bin: 10 << 20}, ""},
+		{"单个文件超 20MB", MaterialInput{Files: one("c.png", bin(21))}, materialSlot{}, "limit"},
+		{"部门二进制合计超 200MB", MaterialInput{Files: one("c.png", bin(11))}, materialSlot{}, "limit"},
+		{"同名二进制换一版只算新的", MaterialInput{Files: one("图.png", bin(20))},
+			materialSlot{id: "m3", rev: 1, kind: "detail", title: "图.png", entry: "图.png", files: []MaterialFileInfo{info("图.png", 20<<20, 0, true)}, bin: 20 << 20}, ""},
+		{"总览超 3000 字", MaterialInput{Overview: true, Files: one("o.md", text(3001))}, materialSlot{}, "limit"},
+		{"总览不能是二进制", MaterialInput{Overview: true, Files: one("o.png", []byte{0, 0})}, materialSlot{}, "usage"},
+		{"部门合计超 5 万字", MaterialInput{Files: one("c.md", text(9001))}, materialSlot{}, "limit"},
+		{"重复文件", MaterialInput{Title: "d", Files: []MaterialFile{{"c.md", text(1)}, {"c.md", text(1)}}}, materialSlot{}, "usage"},
+		{"越出目录的路径", MaterialInput{Title: "d", Files: []MaterialFile{{"../c.md", text(1)}, {"b.md", text(1)}}}, materialSlot{}, "usage"},
+		{"没有文件", MaterialInput{Title: "d"}, materialSlot{}, "usage"},
 	}
 	for _, c := range cases {
-		got, err := PlanMaterials("o1", existing, c.in)
+		got, err := PlanMaterial("o1", existing, c.in)
 		if code(err) != c.code || (c.code == "" && !reflect.DeepEqual(got, c.want)) {
 			t.Errorf("%s：%+v %v", c.name, got, err)
+		}
+	}
+}
+
+// 正文：指定的、唯一的文件、约定的名字、唯一的文档；全是图片是图片集；认不出报错。
+func TestPickEntry(t *testing.T) {
+	files := func(names ...string) []MaterialFileInfo {
+		var out []MaterialFileInfo
+		for _, n := range names {
+			out = append(out, MaterialFileInfo{Path: n})
+		}
+		return out
+	}
+	for _, c := range []struct {
+		files []MaterialFileInfo
+		want  string
+		entry string
+		code  string
+	}{
+		{files("notes.txt"), "", "notes.txt", ""},
+		{files("images/a.png", "report.md", "README.md"), "", "report.md", ""},
+		{files("README.md", "index.html", "proto.js"), "", "README.md", ""},
+		{files("Readme.md", "a.png"), "", "Readme.md", ""},
+		{files("index.html", "style.css"), "", "index.html", ""},
+		{files("design.md", "a.png", "today.patch"), "", "design.md", ""},
+		{files("sub/page.html", "sub/a.png"), "", "sub/page.html", ""},
+		{files("shots/a.png", "shots/b.jpg"), "", "", ""},
+		{files("a.md", "b.md"), "", "", "usage"},
+		{files("a.md", "b.md"), "b.md", "b.md", ""},
+		{files("a.md", "b.md"), "c.md", "", "usage"},
+		{files("data.csv", "a.png"), "", "", "usage"},
+	} {
+		got, err := PickEntry(c.files, c.want)
+		if got != c.entry || code(err) != c.code {
+			t.Errorf("%v %q：%q %v", c.files, c.want, got, err)
 		}
 	}
 }
@@ -223,8 +273,8 @@ func TestSkillLinksResolve(t *testing.T) {
 }
 
 // 报告连图片传目录：标题是相对目录的路径，隐藏项跳过（网页预览按这个路径找图）。
-func TestReadLocalMaterialsDir(t *testing.T) {
-	dir := t.TempDir()
+func TestReadLocalMaterialDir(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "t446-show")
 	for name, body := range map[string]string{"report.md": "![](images/arch.png)", "images/arch.png": "PNG", ".git/HEAD": "x", "images/.tmp": "x"} {
 		p := filepath.Join(dir, filepath.FromSlash(name))
 		if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
@@ -234,13 +284,16 @@ func TestReadLocalMaterialsDir(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	files, err := readLocalMaterials(dir)
+	title, files, err := readLocalMaterial(dir)
 	var names []string
 	for _, f := range files {
 		names = append(names, f.Name)
 	}
-	if err != nil || !reflect.DeepEqual(names, []string{"images/arch.png", "report.md"}) {
-		t.Fatalf("%v %v", names, err)
+	if err != nil || title != "t446-show" || !reflect.DeepEqual(names, []string{"images/arch.png", "report.md"}) {
+		t.Fatalf("%q %v %v", title, names, err)
+	}
+	if title, files, err := readLocalMaterial(filepath.Join(dir, "report.md")); err != nil || title != "report.md" || len(files) != 1 || files[0].Name != "report.md" {
+		t.Fatalf("单个文件：%q %+v %v", title, files, err)
 	}
 }
 
@@ -280,41 +333,41 @@ func TestResourcesStore(t *testing.T) {
 	}
 
 	// 资料：总览、细节、同名追加一版、归档不算用量、撤销归档查上限。
-	ms, err := AddMaterials(ctx, db, data, MaterialInput{Org: sub.ID, Overview: true, Note: "总览", Files: []MaterialFile{{"总览.md", []byte("是什么")}}}, "u1")
-	if err != nil || ms[0].Kind != "overview" || ms[0].Units != 3 {
+	ms, err := AddMaterial(ctx, db, data, MaterialInput{Org: sub.ID, Overview: true, Note: "总览", Files: []MaterialFile{{"总览.md", []byte("是什么")}}}, "u1")
+	if err != nil || ms.Kind != "overview" || ms.Units != 3 {
 		t.Fatalf("%+v %v", ms, err)
 	}
 	if ov, err := Overview(ctx, db, data, sub.ID); err != nil || ov != "是什么" {
 		t.Fatalf("总览：%q %v", ov, err)
 	}
-	d1, _ := AddMaterials(ctx, db, data, MaterialInput{Org: sub.ID, Note: "细节", Files: []MaterialFile{{"a.md", []byte("1")}}}, "u1")
-	d2, err := AddMaterials(ctx, db, data, MaterialInput{Org: sub.ID, Note: "改", Files: []MaterialFile{{"a.md", []byte(strings.Repeat("字", 46000))}}}, "u1")
-	if err != nil || d2[0].ID != d1[0].ID || d2[0].Rev != 2 {
+	d1, _ := AddMaterial(ctx, db, data, MaterialInput{Org: sub.ID, Note: "细节", Files: []MaterialFile{{"a.md", []byte("1")}}}, "u1")
+	d2, err := AddMaterial(ctx, db, data, MaterialInput{Org: sub.ID, Note: "改", Files: []MaterialFile{{"a.md", []byte(strings.Repeat("字", 46000))}}}, "u1")
+	if err != nil || d2.ID != d1.ID || d2.Rev != 2 {
 		t.Fatalf("同名追加一版：%+v %v", d2, err)
 	}
 	// 追加一版不给 --note 沿用上一版说明；新建不给要拒绝。读出来带部门名称。
-	d3, err := AddMaterials(ctx, db, data, MaterialInput{Org: sub.ID, Files: []MaterialFile{{"a.md", []byte(strings.Repeat("字", 46000))}}}, "u1")
-	if err != nil || d3[0].Rev != 3 || d3[0].Note != "改" || d3[0].OrgName != sub.Name {
+	d3, err := AddMaterial(ctx, db, data, MaterialInput{Org: sub.ID, Files: []MaterialFile{{"a.md", []byte(strings.Repeat("字", 46000))}}}, "u1")
+	if err != nil || d3.Rev != 3 || d3.Note != "改" || d3.OrgName != sub.Name {
 		t.Fatalf("追加一版沿用说明：%+v %v", d3, err)
 	}
-	if _, err := AddMaterials(ctx, db, data, MaterialInput{Org: sub.ID, Files: []MaterialFile{{"c.md", []byte("1")}}}, "u1"); code(err) != "usage" {
+	if _, err := AddMaterial(ctx, db, data, MaterialInput{Org: sub.ID, Files: []MaterialFile{{"c.md", []byte("1")}}}, "u1"); code(err) != "usage" {
 		t.Fatalf("新建不给说明应拒绝：%v", err)
 	}
-	if old, err := GetMaterial(ctx, db, data, d1[0].ID, 1); err != nil || old.Units != 1 {
+	if old, err := GetMaterial(ctx, db, data, d1.ID, 1); err != nil || old.Units != 1 {
 		t.Fatalf("旧版还在：%+v %v", old, err)
 	}
-	if _, err := AddMaterials(ctx, db, data, MaterialInput{Org: sub.ID, Note: "x", Files: []MaterialFile{{"b.md", []byte(strings.Repeat("字", 4000))}}}, "u1"); code(err) != "limit" {
+	if _, err := AddMaterial(ctx, db, data, MaterialInput{Org: sub.ID, Note: "x", Files: []MaterialFile{{"b.md", []byte(strings.Repeat("字", 4000))}}}, "u1"); code(err) != "limit" {
 		t.Fatalf("超总量应拒绝：%v", err)
 	}
-	if _, err := ArchiveMaterial(ctx, db, data, d1[0].ID, false); err != nil {
+	if _, err := ArchiveMaterial(ctx, db, data, d1.ID, false); err != nil {
 		t.Fatal(err)
 	}
-	b, err := AddMaterials(ctx, db, data, MaterialInput{Org: sub.ID, Note: "x", Files: []MaterialFile{{"b.md", []byte(strings.Repeat("字", 4000))}}}, "u1")
+	b, err := AddMaterial(ctx, db, data, MaterialInput{Org: sub.ID, Note: "x", Files: []MaterialFile{{"b.md", []byte(strings.Repeat("字", 4000))}}}, "u1")
 	if err != nil {
 		t.Fatalf("归档后腾出地方：%v", err)
 	}
 	_ = b
-	if _, err := ArchiveMaterial(ctx, db, data, d1[0].ID, true); code(err) != "limit" {
+	if _, err := ArchiveMaterial(ctx, db, data, d1.ID, true); code(err) != "limit" {
 		t.Fatalf("撤销归档超总量应拒绝：%v", err)
 	}
 
@@ -383,5 +436,126 @@ func TestPrinciples(t *testing.T) {
 	got, err := Principles()
 	if err != nil || got != "## 用户的全局原则（~/AGENTS.md，优先于部门要点）\n\n## 表达\n\n- 先给结论\n" {
 		t.Fatalf("原文应带标题放进来：%q %v", got, err)
+	}
+}
+
+// 目录资料：一条、正文与附属文件按相对路径取，附属的图片计入部门二进制总量。
+func TestMaterialDir(t *testing.T) {
+	db, data := openDB(t)
+	ctx := context.Background()
+	dept, _ := Add(ctx, db, NewDept{Name: "调研"})
+	png := append([]byte{0x89, 0}, make([]byte, 3<<20)...)
+	m, err := AddMaterial(ctx, db, data, MaterialInput{Org: dept.ID, Title: "t446-show", Note: "报告", Files: []MaterialFile{
+		{"report.md", []byte("![](images/a.png)")}, {"images/a.png", png}, {"images/a.mmd", []byte("graph")}}}, "u1")
+	if err != nil || m.Entry != "report.md" || len(m.Files) != 3 || m.Size != 17+len(png)+5 || m.Units != 22 {
+		t.Fatalf("%+v %v", m, err)
+	}
+	if got := materialAmount(m); got != "3 个文件 · 22 字 · 3.0 MB" {
+		t.Fatalf("量：%q", got)
+	}
+	if f, p, err := m.File("images/a.png"); err != nil || !f.Binary {
+		t.Fatalf("附属文件：%+v %v", f, err)
+	} else if raw, _ := os.ReadFile(p); len(raw) != len(png) {
+		t.Fatal("附属文件按相对路径存")
+	}
+	if _, _, err := m.File("../x"); code(err) != "not_found" {
+		t.Fatal("不在资料里的路径应找不到")
+	}
+	if list, err := Materials(ctx, db, data, MaterialFilter{Org: dept.ID}); err != nil || len(list) != 1 || len(list[0].Files) != 3 {
+		t.Fatalf("列表里只占一行、带文件清单：%+v %v", list, err)
+	}
+	counts, _ := Counts(ctx, db, dept.ID)
+	for _, c := range counts {
+		if (c.Key == "material_bin" && c.Used != MB(len(png))) || (c.Key == "materials" && c.Used != 22) {
+			t.Fatalf("用量：%+v", c)
+		}
+	}
+	// 同一标题再加是新一版；图片集没有正文。
+	m2, err := AddMaterial(ctx, db, data, MaterialInput{Org: dept.ID, Title: "t446-show", Files: []MaterialFile{{"report.md", []byte("新")}}}, "u1")
+	if err != nil || m2.ID != m.ID || m2.Rev != 2 || len(m2.Files) != 1 {
+		t.Fatalf("追加一版：%+v %v", m2, err)
+	}
+	set, err := AddMaterial(ctx, db, data, MaterialInput{Org: dept.ID, Title: "shots", Note: "截图", Files: []MaterialFile{{"a.png", png}, {"b.png", png}}}, "u1")
+	if err != nil || set.Entry != "" {
+		t.Fatalf("图片集：%+v %v", set, err)
+	}
+	if _, _, err := set.File(""); code(err) != "not_found" {
+		t.Fatal("图片集没有正文")
+	}
+	if _, err := AddMaterial(ctx, db, data, MaterialInput{Org: dept.ID, Title: "x", Note: "x", Files: []MaterialFile{{"a.md", nil}, {"b.md", nil}}}, "u1"); code(err) != "usage" {
+		t.Fatalf("认不出正文应报错：%v", err)
+	}
+}
+
+// 旧资料（没有 material_files）：一个目录拆出来的几条合并成一条，保留正文那条的短号；单个的只补文件清单。
+func TestMergeFlatMaterials(t *testing.T) {
+	db, data := openDB(t)
+	ctx := context.Background()
+	dept, _ := Add(ctx, db, NewDept{Name: "调研"})
+	old := func(id string, rev int, title, note, by string, at int64, body string, archived bool) {
+		t.Helper()
+		units, binary := Units([]byte(body))
+		base := filepath.Base(title)
+		var arch any
+		if archived {
+			arch = at
+		}
+		if _, err := db.Exec(`INSERT INTO materials (`+materialCols+`) VALUES (?, ?, ?, 'detail', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			id, rev, dept.ID, title, note, base, len(body), units, binary, arch, by, at); err != nil {
+			t.Fatal(err)
+		}
+		if err := writeFile(materialFile(data, id, rev, base), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	const note = "t446 研究报告（正文与图）；要了解时看"
+	old("m1", 1, "report.md", note, "a1", 100, "旧正文", false)
+	old("m1", 2, "report.md", note, "a1", 5000, "![](images/a.png)", false)
+	old("m2", 1, "images/a.png", note, "a1", 4999, "\x89PNG\x00", false)
+	old("m3", 1, "images/a.mmd", note, "a1", 5001, "graph", false)
+	old("m4", 1, "other.md", "别的", "a1", 5000, "别的", false)              // 说明不同
+	old("m5", 1, "late.md", note, "a1", 9000, "晚", false)                // 隔得久
+	old("m6", 1, "gone.md", note, "a1", 5000, "归档", true)                // 归档的不动
+	old("m7", 1, "shots/a.png", "截图", "a1", 7000, "\x89PNG\x00a", false) // 没有正文：图片集，标题取共同目录
+	old("m8", 1, "shots/b.png", "截图", "a1", 7000, "\x89PNG\x00b", false)
+
+	n, err := mergeFlatMaterials(ctx, db, data)
+	if err != nil || n != 2 {
+		t.Fatalf("合并组数：%d %v", n, err)
+	}
+	list, err := Materials(ctx, db, data, MaterialFilter{Org: dept.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, m := range list {
+		got = append(got, fmt.Sprintf("%s r%d %s %s %d", m.ID, m.Rev, m.Title, m.Entry, len(m.Files)))
+	}
+	want := []string{"m5 r1 late.md late.md 1", "m4 r1 other.md other.md 1", "m7 r2 shots  2", "m1 r3 t446 研究报告 report.md 3"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("合并后：%q", got)
+	}
+	m1 := list[3]
+	if f, p, err := m1.File("images/a.png"); err != nil || !f.Binary || m1.Units != len([]rune("![](images/a.png)"))+5 {
+		t.Fatalf("%+v %v", m1, err)
+	} else if raw, _ := os.ReadFile(p); string(raw) != "\x89PNG\x00" {
+		t.Fatalf("附属文件搬到新版：%q", raw)
+	}
+	if old, err := GetMaterial(ctx, db, data, "m1", 1); err != nil || len(old.Files) != 1 || old.Entry != "report.md" {
+		t.Fatalf("旧版补了文件清单：%+v %v", old, err)
+	}
+	for _, id := range []string{"m2", "m3", "m8"} {
+		if _, err := GetMaterial(ctx, db, data, id, 0); code(err) != "not_found" {
+			t.Fatalf("%s 应并掉", id)
+		}
+		if _, err := os.Stat(filepath.Join(data, "materials", id)); !os.IsNotExist(err) {
+			t.Fatalf("%s 的文件应删掉", id)
+		}
+	}
+	if m6, err := GetMaterial(ctx, db, data, "m6", 0); err != nil || len(m6.Files) != 1 {
+		t.Fatalf("归档的只补清单：%+v %v", m6, err)
+	}
+	if n, err := mergeFlatMaterials(ctx, db, data); err != nil || n != 0 {
+		t.Fatalf("再跑什么都不做：%d %v", n, err)
 	}
 }

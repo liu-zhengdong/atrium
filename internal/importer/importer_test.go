@@ -171,7 +171,7 @@ func TestRun(t *testing.T) {
 		got[it.Kind] = [2]int{it.Imported, it.Skipped}
 	}
 	want := map[string][2]int{"部门": {2, 1}, "部门仓库": {1, 0}, "要点": {2, 0}, "负责人": {1, 0}, "备忘": {2, 1},
-		"技能": {1, 0}, "资料": {2, 0}, "执行者档案": {1, 0}, "机器": {2, 1}}
+		"技能": {1, 0}, "资料": {1, 0}, "执行者档案": {1, 0}, "机器": {2, 1}}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("回执：\n得到 %v\n想要 %v", got, want)
 	}
@@ -196,14 +196,17 @@ func TestRun(t *testing.T) {
 	if n := count(t, db, `SELECT count(*) FROM worker_profiles WHERE name = 'harness/claude'`); n != 1 {
 		t.Error("档案名应带层名")
 	}
-	// 目录资料拆成每个文件一份：第一个保留 m1，其余接着旧库的号发（旧库最大 m1）。
-	if b, err := os.ReadFile(filepath.Join(data, "materials", "m2", "r1", "a.png")); err != nil || string(b) != "png" {
+	// 目录资料还是一条 m1：标题是原名称，README.md 是正文，图片按相对路径跟着。
+	if b, err := os.ReadFile(filepath.Join(data, "materials", "m1", "r1", "shots", "a.png")); err != nil || string(b) != "png" {
 		t.Errorf("资料文件：%q %v", b, err)
 	}
-	var title, note string
-	db.QueryRow(`SELECT title, note FROM materials WHERE id = 'm2'`).Scan(&title, &note)
-	if title != "shots/a.png" || note != "原型与截图" {
-		t.Errorf("资料 m2：%q %q", title, note)
+	var title, note, entry string
+	db.QueryRow(`SELECT title, note, file FROM materials WHERE id = 'm1'`).Scan(&title, &note, &entry)
+	if title != "设计稿" || note != "原型与截图" || entry != "README.md" {
+		t.Errorf("资料 m1：%q %q %q", title, note, entry)
+	}
+	if n := count(t, db, `SELECT count(*) FROM material_files WHERE id = 'm1' AND rev = 1`); n != 2 {
+		t.Errorf("资料 m1 的文件清单：%d", n)
 	}
 	if b, err := os.ReadFile(filepath.Join(data, "skills", "visual-design", "r2", "references", "a.md")); err != nil || string(b) != "细节" {
 		t.Errorf("技能附属文件：%q %v", b, err)

@@ -171,8 +171,8 @@ func Counts(ctx context.Context, q store.Querier, dept string) ([]Count, error) 
 			AND archived_at IS NULL AND rev = (SELECT max(rev) FROM materials WHERE id = m.id)`, dept)
 		add("materials", `SELECT COALESCE(sum(units), 0) FROM materials m WHERE department = ? AND archived_at IS NULL
 			AND rev = (SELECT max(rev) FROM materials WHERE id = m.id)`, dept)
-		add("material_bin", `SELECT COALESCE(sum(size), 0) FROM materials m WHERE department = ? AND archived_at IS NULL AND binary
-			AND rev = (SELECT max(rev) FROM materials WHERE id = m.id)`, dept)
+		add("material_bin", `SELECT COALESCE(sum(f.size), 0) FROM materials m JOIN material_files f ON f.id = m.id AND f.rev = m.rev
+			WHERE m.department = ? AND m.archived_at IS NULL AND f.binary AND m.rev = (SELECT max(rev) FROM materials WHERE id = m.id)`, dept)
 		add("choices", `SELECT count(*) FROM choices WHERE department = ? AND status = 'open'`, dept)
 		add("schedules", `SELECT count(*) FROM schedules WHERE department = ?`, dept)
 		add("secrets", `SELECT count(*) FROM secrets WHERE department = ?`, dept)

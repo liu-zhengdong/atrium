@@ -215,13 +215,18 @@ out=$(json skill add fix-bug "$work/skill" --checks video); has '.result.rev == 
 out=$(json skill add fix-bug --workers claude); has '.result.rev == 2 and .result.workers == ["claude"] and .result.checks == ["video"]'
 out=$(json skill ls fix-bug); has '.result.others == ["refs/a.md"] and (.result.body|test("先复现"))'
 printf '部门是什么' >"$work/overview.md"; printf 'abc' >"$work/detail.md"
-out=$(json material add o2 "$work/overview.md" --overview --note 总览); has '.result[0].id == "m1" and .result[0].kind == "overview"'
-out=$(json material add o2 "$work/detail.md" --note 细节); has '.result[0].id == "m2"'
-out=$(json material add o2 "$work/detail.md"); has '.result[0].id == "m2" and .result[0].rev == 2 and .result[0].note == "细节"'
+out=$(json material add o2 "$work/overview.md" --overview --note 总览); has '.result.id == "m1" and .result.kind == "overview"'
+out=$(json material add o2 "$work/detail.md" --note 细节); has '.result.id == "m2"'
+out=$(json material add o2 "$work/detail.md"); has '.result.id == "m2" and .result.rev == 2 and .result.note == "细节"'
 out=$(json material ls m1); has '(.result.content|@base64d) == "部门是什么"'
 [ "$("$bin" material ls m2)" = abc ] || fail "material ls mN 应输出原文"
+# 一个目录是一条资料：report.md 是正文，图片按相对路径跟着
+mkdir -p "$work/t9-show/images"; printf '![](images/a.png)' >"$work/t9-show/report.md"; printf '\x89PNG\x00' >"$work/t9-show/images/a.png"
+out=$(json material add o2 "$work/t9-show" --note 报告); has '.result.id == "m3" and .result.title == "t9-show" and .result.entry == "report.md" and (.result.files|length) == 2'
+[ "$("$bin" material ls m3)" != "" ] || fail "material ls mN 应输出正文"
+"$bin" material ls m3/images/a.png --out "$work/a.png" >/dev/null && cmp -s "$work/a.png" "$work/t9-show/images/a.png" || fail "material ls mN/<相对路径> 应取出附属文件"
 out=$(json material archive m2); has '.result.archived_at != null'
-out=$(json material ls --node o2); has '(.result|length) == 1'
+out=$(json material ls --node o2); has '(.result|length) == 2'
 out=$(json org show o2); has '(.result.limits|map(select(.key == "overview"))[0].used) == 5'
 printf 'sekrit\n' | "$bin" secret set o1 BOT_TOKEN --json >/dev/null || fail "secret set 失败"
 out=$(json secret ls --node o2); has '.result[0].name == "BOT_TOKEN" and (tostring|test("sekrit")|not)'

@@ -153,6 +153,20 @@ func TestStats(t *testing.T) {
 	if d.Stat == nil || d.Stat.Launches != 3 || len(d.Attempts) != 3 {
 		t.Errorf("workers <执行者> 应给这个「工具+模型」的明细：%+v", d)
 	}
+	rows, err := List(ctx, db)
+	must(err)
+	for _, row := range rows {
+		want := stats[Combo(row.ID)]
+		if len(row.Recent) != len(want) {
+			t.Fatalf("%s 结果数量：%v", row.ID, row.Recent)
+		}
+		for i, a := range want {
+			if row.Recent[i] != a.Outcome {
+				t.Fatalf("%s 结果顺序：%v", row.ID, row.Recent)
+			}
+		}
+	}
+
 }
 
 func TestRecentWindow(t *testing.T) {

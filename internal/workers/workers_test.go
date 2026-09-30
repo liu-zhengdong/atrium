@@ -284,6 +284,16 @@ func TestResolveAndRefusal(t *testing.T) {
 		!reflect.DeepEqual(r.Layers, []string{"harness/claude", "models/opus", "combos/claude+opus"}) {
 		t.Fatalf("叠加：%+v", r)
 	}
+	detail, err := Show(ctx, db, "claude+opus:high")
+	if err != nil || len(detail.Layers) != 3 {
+		t.Fatalf("Show 各层原文：%+v %v", detail, err)
+	}
+	for i, name := range r.Layers {
+		p, err := GetProfile(ctx, db, name)
+		if err != nil || !reflect.DeepEqual(detail.Layers[i], *p) {
+			t.Fatalf("第 %d 层原文不一致：%v", i, err)
+		}
+	}
 	// 档案写的模型与标识里的只差 provider 前缀：两种写法是同一个执行者，ID 按档案写的，目录里只一行。
 	must("combos/opencode+deepseek-v4.1-flash", "---\nmodel: opencode-go/deepseek-v4.1-flash\n---\n")
 	for _, id := range []string{"opencode+deepseek-v4.1-flash", "opencode+opencode-go/deepseek-v4.1-flash:high"} {

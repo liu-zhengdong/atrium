@@ -233,11 +233,32 @@ b.logo{display:grid;place-items:center;border-radius:4px;background:var(--raise)
 .slots{display:flex;gap:3px;margin-top:10px}
 .slots i{width:10px;height:10px;border-radius:3px;background:var(--hover)}
 .slots i.on{background:var(--ink)}
-table.perf{width:100%;border-collapse:collapse;font-size:13px}
-.perf th{text-align:left;font-weight:500;color:var(--ink3);font-size:12px;padding:0 0 8px}
-.perf td{padding:8px 0}
-.perf th:not(:last-child),.perf td:not(:last-child){padding-right:12px}
-.perf .mark{display:block;font-size:12px;color:var(--bad)}
+/* 组合目录：所有行共享固定的信任、结果和交付列。 */
+.combos{font-size:13px}
+.combo-row{display:grid;grid-template-columns:minmax(0,1fr) 44px 180px 42px;gap:12px;align-items:center;padding:10px 0;border-radius:6px;color:var(--ink);text-decoration:none}
+.combo-row:hover{background:var(--hover)}
+.combo-name{overflow-wrap:anywhere}
+.trust,.quiet{color:var(--ink3)}
+.combo-row .num{text-align:right}
+.mark{color:var(--bad);font-size:12px}
+.combo-extra{margin-top:20px}
+.combo-extra summary,.layer summary{display:flex;gap:8px;align-items:center;cursor:pointer;color:var(--ink2);list-style:none}
+.combo-extra summary::-webkit-details-marker,.layer summary::-webkit-details-marker{display:none}
+.combo-extra summary svg,.layer summary svg{width:14px;height:14px;flex-shrink:0}
+.combo-extra[open]>summary svg,.layer[open]>summary svg{transform:rotate(90deg)}
+.worker-section{margin:28px 0;font-size:13px}
+.worker-section h4{font-size:13px;font-weight:500;color:var(--ink3);margin:0 0 12px}
+.worker-runs>div{padding:10px 0;line-height:1.7;overflow-wrap:anywhere}
+.worker-runs>div{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:6px 12px}
+.worker-runs .run-outcome{max-width:160px;text-align:right}
+@media(max-width:600px){.worker-runs>div{display:block}.worker-runs .run-outcome{display:block;max-width:none;text-align:left}}
+.worker-runs a{margin-left:8px}
+.worker-body,.layer pre{white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.8}
+.layer{background:var(--raise);border-radius:10px;padding:12px;margin:10px 0}
+.layer summary .quiet{margin-left:auto;font-size:12px}
+.layer code{display:block;overflow-wrap:anywhere;font-size:12px}
+@media(max-width:600px){.combo-row{grid-template-columns:minmax(0,1fr) 32px 96px 32px;gap:6px}.combo-row .runs{flex-wrap:wrap}.combo-row .runs i{width:6px}.layer summary{flex-wrap:wrap}}
+
 .pips.runs i{width:8px;height:8px}
 .pips i.bounce{background:var(--ink2)}
 .pips i.quota,.pips i.setup,.pips i.fail{background:var(--bad)}
@@ -245,7 +266,6 @@ table.perf{width:100%;border-collapse:collapse;font-size:13px}
 .legend i{width:8px;height:8px;border-radius:2px;margin-left:8px;background:color-mix(in srgb,var(--ink3) 55%,transparent)}
 .legend i:first-child{margin-left:0}
 .legend i.bounce{background:var(--ink2)}.legend i.fail{background:var(--bad)}
-.tablewrap{overflow-x:auto}
 
 .mobile-top{display:none}
 @media (max-width:760px){

@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -154,45 +153,6 @@ func TestAccountAndSlots(t *testing.T) {
 	}
 }
 
-func TestPerfRows(t *testing.T) {
-	at := func(worker, out string) workers.Attempt { return workers.Attempt{Worker: worker, Outcome: out} }
-	stats := map[string][]workers.Attempt{
-		"claude+opus":    {at("claude+opus:high", workers.OutOK), at("claude+opus", workers.OutBounce)},
-		"grok+grok-4.6":  {at("grok+grok-4.6", workers.OutSetup), at("grok+grok-4.6", workers.OutOK)},
-		"cursor+auto":    {at("cursor+auto", workers.OutQuota)},
-		"agy+gemini-3.8": {at("agy+gemini-3.8", workers.OutOK)},
-	}
-	marks := []workers.Mark{
-		{Tool: "grok", Host: "h3", Reason: "没登录"},                            // 没写模型：挡住 grok 的全部模型
-		{Tool: "agy", Model: "gemini-3.8-flash", Host: "h1", Reason: "额度用尽"}, // 别的模型：不挂到 agy+gemini-3.8
-		{Tool: "agy", Model: "gemini-3.8-flash", Host: "h3", Reason: "额度用尽"}, // 同一组合两台：单列成一行
-		{Tool: "codex", Host: "h1", Reason: "没登录"},
-	}
-	got := perfRows(stats, marks)
-	var shape []string
-	for _, p := range got {
-		var hs []string
-		for _, m := range p.Marks {
-			hs = append(hs, m.Host)
-		}
-		shape = append(shape, fmt.Sprintf("%s %d/%d %v %v", p.Combo, p.OK, p.Launches, p.Recent, hs))
-	}
-	want := []string{
-		"claude+opus 1/2 [ok bounce] []",
-		"grok+grok-4.6 1/2 [setup ok] [h3]",
-		"agy+gemini-3.8 1/1 [ok] []",
-		"cursor+auto 0/1 [quota] []",
-		"agy+gemini-3.8-flash 0/0 [] [h1 h3]",
-		"codex 0/0 [] [h1]",
-	}
-	if !reflect.DeepEqual(shape, want) {
-		t.Errorf("得到\n%s\n应为\n%s", strings.Join(shape, "\n"), strings.Join(want, "\n"))
-	}
-	if got := perfRows(nil, nil); got == nil || len(got) != 0 {
-		t.Errorf("没有记录应是空数组：%v", got)
-	}
-}
-
 func TestTopGroup(t *testing.T) {
 	parents := map[string]string{"o1": "", "o2": "o1", "o5": "o2", "o8": "o5", "o9": ""}
 	for id, want := range map[string]string{"o1": "o1", "o2": "o2", "o5": "o2", "o8": "o2", "o9": "o9"} {
@@ -252,7 +212,7 @@ func TestRoutes(t *testing.T) {
 		}
 		return res
 	}
-	for _, path := range []string{"/", "/ui/api/today", "/ui/stream", "/ui/assets/app.js"} {
+	for _, path := range []string{"/", "/ui/api/today", "/ui/api/worker?name=claude", "/ui/stream", "/ui/assets/app.js"} {
 		res := get(path, "evil.example:"+strconv.Itoa(port))
 		res.Body.Close()
 		if res.StatusCode != 403 {
@@ -311,7 +271,7 @@ func TestRoutes(t *testing.T) {
 	}
 	var legion Legion
 	read("legion", &legion)
-	if legion.Accounts == nil || legion.Hosts == nil || len(legion.Perf) != 0 {
+	if legion.Accounts == nil || legion.Hosts == nil || len(legion.Workers) != len(workers.Tools) {
 		t.Errorf("空的额度与机器应是空数组，不是 null；还没结果的拉起不计：%+v", legion)
 	}
 	// 表现与 atrium workers 同一份统计（workers.Stats）：拉起有了结果才计；不可用标记挂在它挡住的组合下。
@@ -319,12 +279,39 @@ func TestRoutes(t *testing.T) {
 	ledger.Record(ctx, db, task.ID, workers.ExitKind, "dispatch", string(exit))
 	workers.SetMark(ctx, db, workers.Mark{Tool: "claude", Host: "h1", Kind: workers.SignalSetup, Reason: "没登录", Since: store.Now()})
 	read("legion", &legion)
-	if len(legion.Perf) != 1 || legion.Window != workers.StatWindow {
+	if len(legion.Workers) != len(workers.Tools)+1 || legion.Window != workers.StatWindow {
 		t.Fatalf("表现：%+v", legion)
 	}
-	if p := legion.Perf[0]; p.Combo != "claude" || !reflect.DeepEqual(p.Recent, []string{workers.OutOK}) || p.OK != 1 || p.Launches != 1 ||
+	if p := legion.Workers[len(legion.Workers)-1]; p.ID != "claude" || !reflect.DeepEqual(p.Recent, []string{workers.OutOK}) || p.Stat.OK != 1 || p.Stat.Launches != 1 ||
 		len(p.Marks) != 1 || p.Marks[0].Host != "h1" {
 		t.Errorf("表现一行：%+v", p)
+	}
+	wantRows, err := workers.List(ctx, db)
+	if err != nil || !reflect.DeepEqual(legion.Workers, wantRows) {
+		t.Fatalf("目录必须共用 workers.List: %v", err)
+	}
+	source := "---\ntrust: high\n---\n档案正文"
+	if _, err := workers.SaveProfile(ctx, db, "harness/claude", workers.Edit{Source: &source}, "u1"); err != nil {
+		t.Fatal(err)
+	}
+	var worker workers.Detail
+	read("worker?name=claude", &worker)
+	wantDetail, err := workers.Show(ctx, db, "claude")
+	gotJSON, _ := json.Marshal(worker)
+	wantJSON, _ := json.Marshal(wantDetail)
+	if err != nil || string(gotJSON) != string(wantJSON) || len(worker.Layers) != 1 || worker.Trust != "high" {
+		t.Fatalf("档案必须共用 workers.Show: %v", err)
+	}
+	read("worker?name=opencode%2Bopencode-go%2Fmimo-v2.6-flash", &worker)
+	if worker.Resolved.ID != "opencode+opencode-go/mimo-v2.6-flash" {
+		t.Fatalf("模型中的 / 必须保留：%+v", worker)
+	}
+	for _, name := range []string{"", "../bad", "no-such-tool"} {
+		res := get("/ui/api/worker?name="+name, "")
+		res.Body.Close()
+		if res.StatusCode == http.StatusOK {
+			t.Errorf("非法组合 %q 不该成功", name)
+		}
 	}
 	// 等人处理的不可用标记进「等你」，解除就消失；额度用尽会自己恢复，不进。
 	workers.SetMark(ctx, db, workers.Mark{Tool: "kimi", Host: "h3", Kind: workers.SignalQuota, Reason: "额度用尽", Since: store.Now(), Until: store.Now() + 3600_000})
@@ -633,15 +620,5 @@ func TestDeptHeadAndTaskLinks(t *testing.T) {
 		if err != nil || d.Schedule != w.schedule || d.Choice != w.choice {
 			t.Errorf("%s 抽屉：来自 %q 选项单 %q %v", w.id, d.Schedule, d.Choice, err)
 		}
-	}
-}
-
-func TestPerfDuration(t *testing.T) {
-	a, b := int64(540000), int64(660000)
-	rows := perfRows(map[string][]workers.Attempt{"codex": {
-		{Outcome: workers.OutOK, DurationMS: &a}, {Outcome: workers.OutBounce, DurationMS: &b},
-	}}, []workers.Mark{{Tool: "kimi", Host: "h1"}})
-	if len(rows) != 2 || rows[0].Timing != "用时中位 10 分 · 最长 11 分" || rows[1].Timing != "用时中位 — · 最长 —" {
-		t.Fatalf("%+v", rows)
 	}
 }

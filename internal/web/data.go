@@ -682,12 +682,12 @@ func deptTasks(ctx context.Context, q store.Querier, ix *orgIndex, id string) ([
 	return nest(tasks, out), nil
 }
 
-// Legion 是执行者页：额度（后台存下的读数）、机器、组合表现。
+// Legion 是执行者页：额度（后台存下的读数）、机器、执行者目录。
 type Legion struct {
 	Quota
-	Hosts  []Host `json:"hosts"`
-	Perf   []Perf `json:"perf"`
-	Window int    `json:"window"` // 表现统计近几次拉起
+	Hosts   []Host        `json:"hosts"`
+	Workers []workers.Row `json:"workers"`
+	Window  int           `json:"window"` // 结果统计近几次拉起
 }
 
 // Quota 是执行者页的额度一块。
@@ -716,19 +716,9 @@ type Host struct {
 	Status string `json:"status"`
 }
 
-// Perf 是一个「工具+模型」近 workers.StatWindow 次有结果的拉起（与 atrium workers 同一份统计）和此刻挡住它的不可用标记。
-type Perf struct {
-	Timing   string         `json:"timing"`
-	Combo    string         `json:"combo"`
-	Recent   []string       `json:"recent"` // 每次拉起的结果（workers.Out*），新的在前
-	OK       int            `json:"ok"`
-	Launches int            `json:"launches"`
-	Marks    []workers.Mark `json:"marks"`
-}
-
 func loadLegion(ctx context.Context, env *app.Env, now int64) (Legion, error) {
 	db := env.DB
-	out := Legion{Quota: quotaOf(quota.Overview{}), Hosts: []Host{}, Perf: []Perf{}, Window: workers.StatWindow}
+	out := Legion{Quota: quotaOf(quota.Overview{}), Hosts: []Host{}, Workers: []workers.Row{}, Window: workers.StatWindow}
 	ov, err := quota.Last(ctx, env)
 	if err != nil {
 		return out, err
@@ -751,15 +741,10 @@ func loadLegion(ctx context.Context, env *app.Env, now int64) (Legion, error) {
 		}
 		out.Hosts = append(out.Hosts, row)
 	}
-	stats, err := workers.Stats(ctx, db)
+	out.Workers, err = workers.List(ctx, db)
 	if err != nil {
 		return out, err
 	}
-	marks, err := workers.Marks(ctx, db, now)
-	if err != nil {
-		return out, err
-	}
-	out.Perf = perfRows(stats, marks)
 	return out, nil
 }
 

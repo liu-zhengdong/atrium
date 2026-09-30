@@ -142,15 +142,16 @@ type Agent struct {
 	Log   *slog.Logger
 	Quota *quota.Local // 读这台的额度并上报；nil 不报
 	// 自升级：Version 是本代理的版本，Exe 是要替换的可执行文件，GH 下载新版本（nil 用这台执行者环境里的 gh）。
-	Version string
-	Exe     string
-	GH      selfupdate.Runner
-	failed  string            // 本进程升失败过的版本：不再重试
-	failure map[string]string // 还没报给服务的升级失败
-	client  *api.Client
-	ctx     context.Context // Run 的 ctx：停下时续传也停（执行者照跑，下次启动接着看）
-	mu      sync.Mutex
-	runs    map[string]*runState
+	Version     string
+	Exe         string
+	GH          selfupdate.Runner
+	failed      string            // 本进程升失败过的版本：不再重试
+	failure     map[string]string // 还没报给服务的升级失败
+	client      *api.Client
+	ctx         context.Context // Run 的 ctx：停下时续传也停（执行者照跑，下次启动接着看）
+	mu          sync.Mutex
+	workspaceMu sync.Mutex // 创建与回收串行，不能在拉起过程中删掉工作树
+	runs        map[string]*runState
 }
 
 func NewAgent(dir string, cfg AgentConfig, log *slog.Logger) *Agent {
@@ -283,6 +284,8 @@ func (a *Agent) session(ctx context.Context) (bool, error) {
 				go a.launchAndAck(ctx, c)
 			case "query":
 				go a.answer(ctx, c)
+			case "reclaim":
+				go a.reclaimAndAck(ctx, c)
 			case "stop":
 				if c.Stop != nil {
 					a.stop(*c.Stop)
@@ -356,6 +359,8 @@ func knownTool(t string) bool {
 
 // launch 在这台准备工作目录并拉起执行者，返回 pid 与工作目录。
 func (a *Agent) launch(ctx context.Context, as Assignment) (int, string, error) {
+	a.workspaceMu.Lock()
+	defer a.workspaceMu.Unlock()
 	if AdapterFor == nil {
 		return 0, "", errors.New("代理没接上执行者适配器")
 	}
@@ -452,26 +457,6 @@ func (a *Agent) markExit(st *runState, code *int) {
 		a.Log.Error("存运行记录失败", "task", rec.Task, "err", err)
 	}
 	close(st.done)
-}
-
-// worktree 在代理数据目录里克隆仓库（已有就 fetch）并为这个任务建工作树。
-func (a *Agent) worktree(ctx context.Context, as Assignment) (string, error) {
-	clone := filepath.Join(a.Dir, "repos", CloneName(as.Repo))
-	wt := clone + "-" + as.Task
-	if _, err := os.Stat(wt); err == nil {
-		return wt, nil // 同一任务再来一轮：接着用原工作树
-	}
-	if _, err := os.Stat(filepath.Join(clone, ".git")); err != nil {
-		if err := a.git(ctx, "", "clone", "--quiet", "--", as.Repo, clone); err != nil {
-			return "", err
-		}
-	} else if err := a.git(ctx, clone, "fetch", "--quiet", "origin"); err != nil {
-		return "", err
-	}
-	if err := a.git(ctx, clone, "worktree", "add", "--quiet", "-B", as.Branch, wt, "origin/"+as.Base); err != nil {
-		return "", err
-	}
-	return wt, nil
 }
 
 // queryMax 是查询回执里输出的上限（回执请求体上限 1MB）。

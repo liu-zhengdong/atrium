@@ -79,7 +79,8 @@ var exitCodeRE = regexp.MustCompile(`^Exit code (\d+)`)
 func readGrok(p *Parser, e event, line string) bool {
 	switch e.str("type") {
 	case "system":
-		if e.str("subtype") != "init" {
+		// 压缩边界与 Claude 共用解析：内部上下文维护，认出但不显示。
+		if sub := e.str("subtype"); sub != "init" && sub != "compact_boundary" {
 			return false
 		}
 	case "assistant":

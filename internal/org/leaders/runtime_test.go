@@ -290,12 +290,13 @@ func TestEscalate(t *testing.T) {
 		in   EscalateIn
 		want string
 	}{
-		"别处任务":    {a2, EscalateIn{Kind: "stuck", Note: "x", Task: "t2"}, "forbidden"},
-		"转交别人的事件": {a2, EscalateIn{Kind: "stuck", Note: "x", Event: 2}, "forbidden"},
-		"用户不上交":   {user, EscalateIn{Kind: "stuck", Note: "x"}, "forbidden"},
-		"类型不对":    {a2, EscalateIn{Kind: "help", Note: "x"}, "usage"},
-		"已上线不给任务": {a2, EscalateIn{Kind: "shipped", Note: "x"}, "usage"},
-		"不存在的事件":  {a2, EscalateIn{Kind: "stuck", Note: "x", Event: 99}, "not_found"},
+		"别处任务":     {a2, EscalateIn{Kind: "stuck", Note: "x", Task: "t2"}, "forbidden"},
+		"转交别人的事件":  {a2, EscalateIn{Kind: "stuck", Note: "x", Event: 2}, "forbidden"},
+		"用户不上交":    {user, EscalateIn{Kind: "stuck", Note: "x"}, "forbidden"},
+		"类型不对":     {a2, EscalateIn{Kind: "help", Note: "x"}, "usage"},
+		"已删除的类型":   {a2, EscalateIn{Kind: "shipped", Note: "x", Task: "t1"}, "usage"},
+		"已删除的类型转交": {a1, EscalateIn{Kind: "shipped", Note: "x", Event: 1}, "usage"},
+		"不存在的事件":   {a2, EscalateIn{Kind: "stuck", Note: "x", Event: 99}, "not_found"},
 	} {
 		if got := code(c.cl.Do(ctx, "POST", "/api/escalations", c.in, nil)); got != c.want {
 			t.Errorf("%s：%s，应为 %s", name, got, c.want)

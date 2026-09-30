@@ -26,9 +26,8 @@ const (
 	maxNote     = 2000
 )
 
-// Kinds 是上交的四类。
+// Kinds 是上交的三类。
 var Kinds = []struct{ Key, Label string }{
-	{"shipped", "已上线（里程碑）"},
 	{"cross", "需要别的部门配合"},
 	{"beyond", "越过权限或底线"},
 	{"stuck", "搞不定"},
@@ -68,9 +67,6 @@ func CheckEscalate(in EscalateIn) error {
 	}
 	if in.Task != "" && !api.IsRef(in.Task, "t") {
 		return api.Usage("--task: 应为 tN，收到 %q", in.Task)
-	}
-	if in.Kind == "shipped" && in.Task == "" && in.Event == 0 {
-		return api.Usage("--task: 上交「已上线」要给上线的任务")
 	}
 	return nil
 }
@@ -265,7 +261,8 @@ func Prompt(in PromptInput) string {
 	w("- 可以：动你负责的部门及其下属的任务、要点、资料、周期任务，改介绍；在下属负责人管的区域里建、改、裁撤部门，登记新负责人时用 leader add <名字> --org oN 一步绑定部门，或用 org edit oN --leader <aN|-> 撤换、清除。直接下属负责人最多 %d 位，同一位可管多个部门。管辖派活部门（%s）的负责人还能改执行者档案、解除不可用标记（atrium workers edit，--clear 解除）。", org.MaxDirectLeaders, ProfileDept)
 	w("- 不可以：在自己直接管的地方改结构，或动管辖之外的部门。需要建分工时用 atrium leader escalate <要建什么、为什么> --kind beyond 上交；上一层收到后自己动手建（即审批），或回复不同意。不能停机或操作服务。")
 	w("")
-	w("## 上交（投给 %s；只有这四类才上交，其余自己处理）", in.Upstream)
+	w("## 上交（投给 %s；只有这三类才上交，其余自己处理）", in.Upstream)
+	w("完成结果自动投回派活人；自己建、自己收的任务在网页今天页的完成列表查看。")
 	for _, k := range Kinds {
 		w("- %s %s → atrium leader escalate 说明 --kind %s [--task tN]", k.Key, k.Label, k.Key)
 	}

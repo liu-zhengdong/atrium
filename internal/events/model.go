@@ -8,18 +8,13 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/api"
 )
 
-// LevelOf 是事件的缺省级别：任务失败、受阻、等验收、非用户本人做的完成，交给负责人去拆的任务，到期、上限满了、自升级失败与负责人上交（已上线除外）要处理；
+// LevelOf 是事件的缺省级别：任务失败、受阻、等验收、非用户本人做的完成，交给负责人去拆的任务，到期、上限满了、自升级失败与负责人上交要处理；
 // 其余只知会，包括落地的中间步骤（如已合入等发版）与用户本人（u1）做的完成、验收通过——用户亲手做的不再推回给秘书。
 // 正文的 by 是引起它的身份（ledger 填操作人）。
 // 上交必须是「要处理」：上一层负责人按要处理的事件被唤醒，秘书的 events wait 也只取要处理的。
 func LevelOf(kind string, body any) string {
 	switch kind {
-	case Overdue, OnlineFailed, LimitFull, TaskAssigned:
-		return Act
-	case LeaderEscalate:
-		if field(body, "kind") == "shipped" {
-			return Info
-		}
+	case Overdue, OnlineFailed, LimitFull, TaskAssigned, LeaderEscalate:
 		return Act
 	case TaskStatus:
 		switch to := field(body, "to"); {

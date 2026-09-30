@@ -71,7 +71,7 @@ func TestLevelAndKey(t *testing.T) {
 		{"上限满了", LimitFull, map[string]any{"key": "points"}, Act},
 		{"负责人上交·卡住", LeaderEscalate, map[string]any{"kind": "stuck"}, Act},
 		{"负责人上交·跨部门", LeaderEscalate, map[string]any{"kind": "cross"}, Act},
-		{"负责人上交·已上线", LeaderEscalate, map[string]any{"kind": "shipped"}, Info},
+		{"负责人上交·越权", LeaderEscalate, map[string]any{"kind": "beyond"}, Act},
 		{"交给负责人去拆", TaskAssigned, map[string]any{"title": "任务"}, Act},
 		{"未知种类", "other", map[string]any{"to": "failed"}, Info},
 	}
@@ -201,6 +201,23 @@ func TestEmitTask(t *testing.T) {
 	emitTask("a1", Secretary, "done", "a1")
 	if n, _ := Pending(ctx, db, Secretary, true, 10); len(n) != 1 || n[0].Level != Act {
 		t.Fatalf("秘书应收到负责人自己完成的结果：%+v", n)
+	}
+}
+
+func TestLegacyShippedEvent(t *testing.T) {
+	db, ctx := openDB(t), context.Background()
+	// 模拟已有事件：级别和标签已经存下，读取不重新按 kind 分类。
+	emit(t, db, Event{Kind: LeaderEscalate, Target: Secretary, Level: Info,
+		Body: map[string]any{"from": "a1", "kind": "shipped", "label": "已上线（里程碑）", "note": "请转告用户"}})
+	rows, err := Pending(ctx, db, Secretary, true, 10)
+	if err != nil || len(rows) != 1 || rows[0].Level != Info {
+		t.Fatalf("旧上交应保留已存的级别：%+v %v", rows, err)
+	}
+	if got := Summary(rows[0]); got != "a1 上交（已上线（里程碑））：请转告用户" {
+		t.Errorf("旧上交应使用已存的标签和说明：%q", got)
+	}
+	if rows, err := Pending(ctx, db, Secretary, false, 10); err != nil || len(rows) != 0 {
+		t.Fatalf("旧知会事件不应变成要处理：%+v %v", rows, err)
 	}
 }
 

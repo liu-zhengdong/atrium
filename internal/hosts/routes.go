@@ -14,6 +14,7 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/pause"
 	"github.com/liu-zhengdong/atrium/internal/quota"
 	"github.com/liu-zhengdong/atrium/internal/store"
+	"github.com/liu-zhengdong/atrium/internal/workers"
 )
 
 // View 是 host ls / show 的一台。
@@ -317,6 +318,15 @@ func agentRoutes(r *api.Router, env *app.Env) {
 		}
 		theHub.notify()
 		return map[string]any{"done": true}, nil
+	})
+	handle("POST /api/agent/probe", func(q *api.Req, host string) (any, error) {
+		var b struct {
+			Failed []ProbeFailure `json:"failed"`
+		}
+		if err := q.Decode(&b); err != nil {
+			return nil, err
+		}
+		return map[string]int{"failed": len(b.Failed)}, workers.SyncProbes(q.Context(), env.DB, host, probeMarks(b.Failed), store.Now())
 	})
 	handle("POST /api/agent/quota", func(q *api.Req, host string) (any, error) {
 		var b struct {

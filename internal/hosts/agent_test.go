@@ -51,6 +51,17 @@ func TestMain(m *testing.M) {
 	case "forever":
 		fmt.Println("不停")
 		time.Sleep(time.Minute)
+	case "probe": // 自检的假工具：按自己的文件名表现
+		switch strings.TrimSuffix(filepath.Base(os.Args[0]), ".exe") {
+		case "codex":
+			fmt.Println("codex-cli 9.9.9")
+		case "opencode":
+			fmt.Fprintln(os.Stderr, "\n  No active Node.js version.\nRun nvm use\nline3\nline4")
+			os.Exit(1)
+		case "claude":
+			time.Sleep(time.Minute)
+		}
+		os.Exit(0)
 	}
 }
 
@@ -75,6 +86,7 @@ func init() {
 		return nil, false
 	}
 	pollWait = 300 * time.Millisecond
+	probeTools = nil // 代理与本机循环不跑本机真装的工具；TestProbe 自己换上假工具
 }
 
 type rig struct {

@@ -447,3 +447,53 @@ func TestMarksStore(t *testing.T) {
 		t.Errorf("应全部解除：%+v", got)
 	}
 }
+
+// 自检标记：不过的记上、跑通的解除；同一「工具@机器」已有别的标记（没登录）不覆盖也不解除；别台的不动。
+func TestSyncProbes(t *testing.T) {
+	ctx := context.Background()
+	db, err := store.Open(filepath.Join(t.TempDir(), "a.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	now := time.Now().UnixMilli()
+	if err := SetMark(ctx, db, Mark{Tool: "grok", Host: "h3", Kind: SignalSetup, Reason: "没登录", Since: now}); err != nil {
+		t.Fatal(err)
+	}
+	probe := func(tool, reason string) Mark { return Mark{Tool: tool, Kind: MarkProbe, Reason: reason} }
+	list := func() string {
+		ms, err := Marks(ctx, db, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out []string
+		for _, m := range ms {
+			out = append(out, m.Target()+" "+m.Kind+" "+m.Reason)
+		}
+		return strings.Join(out, " | ")
+	}
+	steps := []struct {
+		host   string
+		failed []Mark
+		want   string
+	}{
+		{"h3", []Mark{probe("codex", "退出码 1"), probe("grok", "退出码 2")},
+			"codex@h3 probe 退出码 1 | grok@h3 setup 没登录"},
+		{"h1", []Mark{probe("codex", "超时")},
+			"codex@h1 probe 超时 | codex@h3 probe 退出码 1 | grok@h3 setup 没登录"},
+		{"h3", []Mark{probe("codex", "退出码 9")},
+			"codex@h1 probe 超时 | codex@h3 probe 退出码 9 | grok@h3 setup 没登录"},
+		{"h3", nil, "codex@h1 probe 超时 | grok@h3 setup 没登录"},
+	}
+	for i, s := range steps {
+		if err := SyncProbes(ctx, db, s.host, s.failed, now); err != nil {
+			t.Fatal(err)
+		}
+		if got := list(); got != s.want {
+			t.Errorf("第 %d 步：%s", i+1, got)
+		}
+	}
+	if got := (Mark{Kind: MarkProbe, Reason: "自检 codex --version 退出码 1"}).Text(); got != "自检 codex --version 退出码 1，自检跑通后自动解除" {
+		t.Error(got)
+	}
+}

@@ -47,8 +47,9 @@ func tunnelLocal(h Host, servicePort int) int {
 	return servicePort
 }
 
-// Run 是 hosts 的后台循环：按登记维持 ssh 隧道；机器移除后结束它的隧道，登记改了（host edit）按新的重连。
+// Run 是 hosts 的后台循环：本机自检（probeLocal）；按登记维持 ssh 隧道，机器移除后结束它的隧道，登记改了（host edit）按新的重连。
 func Run(ctx context.Context, env *app.Env) error {
+	go probeLocal(ctx, env)
 	type tunnel struct {
 		h      Host
 		cancel context.CancelFunc

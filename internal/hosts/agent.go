@@ -174,6 +174,7 @@ func (a *Agent) Run(ctx context.Context) error {
 	if a.Quota != nil {
 		go a.reportQuota(ctx)
 	}
+	go a.reportProbes(ctx)
 	for attempt := 0; ; attempt++ {
 		connected, err := a.session(ctx)
 		if ctx.Err() != nil {
@@ -649,6 +650,33 @@ func (a *Agent) reportQuota(ctx context.Context) {
 		if rs := a.Quota.Due(ctx); len(rs) > 0 {
 			if err := a.call(ctx, "/api/agent/quota", map[string]any{"readings": rs}, nil); err != nil {
 				a.Log.Debug("额度没报上", "err", err)
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(time.Minute):
+		}
+	}
+}
+
+// reportProbes 上线时自检一轮、之后每 ProbeEvery 一轮（用执行者同一份环境），报给服务；没报上每分钟重试。
+func (a *Agent) reportProbes(ctx context.Context) {
+	env := platform.WorkerEnv(runtime.GOOS, a.Env)
+	var failed []ProbeFailure
+	var due time.Time
+	sent := false
+	for {
+		if now := time.Now(); !now.Before(due) {
+			failed, due, sent = Probe(ctx, env), now.Add(ProbeEvery), false
+			if ctx.Err() != nil {
+				return
+			}
+		}
+		if !sent {
+			err := a.call(ctx, "/api/agent/probe", map[string]any{"failed": failed}, nil)
+			if sent = err == nil; !sent {
+				a.Log.Debug("自检结果没报上", "err", err)
 			}
 		}
 		select {

@@ -67,11 +67,13 @@ func TestAgentUpgradesToServer(t *testing.T) {
 	host := a.Cfg.Host
 	g.task("t1")
 	log := filepath.Join(g.env.Paths.Data, "t1.log")
-	_, pid, _, err := Launch(context.Background(), g.env, host, Assignment{Task: "t1", Tool: "sleep", Request: workers.Request{Prompt: "x"}, Log: log})
+	release := filepath.Join(t.TempDir(), "release")
+	_, pid, _, err := Launch(context.Background(), g.env, host, Assignment{Task: "t1", Tool: "gate", Request: workers.Request{Prompt: release}, Log: log})
 	if err != nil {
 		t.Fatal(err)
 	}
 	stop()
+	defer platform.KillTree(pid)
 	// 换成旧版本的代理（h3 那样）：连上就升级、退出。
 	gh := &fakeGH{}
 	_, stop2, done := g.run(dir, func(a *Agent) { a.Version, a.Exe, a.GH = "v2.0.5", exe, gh })
@@ -100,6 +102,9 @@ func TestAgentUpgradesToServer(t *testing.T) {
 	_, stop3, _ := g.run(dir, func(a *Agent) { a.Exe, a.GH = exe, gh })
 	defer stop3()
 	g.waitOnline(host)
+	if err := os.WriteFile(release, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
 	if e := waitExit(t, g.env, "t1", 1); e.Lost {
 		t.Fatalf("升级后应重新跟进执行者，不该按丢失收尾：%+v", e)
 	}

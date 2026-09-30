@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
-	"time"
 
 	"github.com/liu-zhengdong/atrium/internal/app"
 	"github.com/liu-zhengdong/atrium/internal/config"
@@ -66,7 +65,7 @@ func TestLaunchFailureKeepsDispatchRunning(t *testing.T) {
 			launchRemote = func(context.Context, *app.Env, string, Remote) (int, int, string, error) {
 				return 0, 0, "", errors.New("非法远程启动参数")
 			}
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			ids := []string{}
 			for i, name := range []string{"bad", "good"} {

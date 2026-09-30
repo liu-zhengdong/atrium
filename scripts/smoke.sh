@@ -327,6 +327,17 @@ out=$(json host edit h2 --rm); has '.ok'
 wait "$agentpid" || fail "移除后代理应以 0 退出：$(cat "$work/agent.out")"
 grep -q "令牌已失效" "$work/agent.out" || fail "代理没报令牌失效：$(cat "$work/agent.out")"
 
+# 新档案由主机异步自检；先等报告可用，再分派，不重试任务。
+wait_tool() {
+  local tool=$1
+  for _ in $(seq 150); do
+    out=$(json host ls h1)
+    jq -e --arg tool "$tool" '.result.info.clis[$tool].installed == true' >/dev/null <<<"$out" && return 0
+    sleep 0.2
+  done
+  fail "h1 未识别 $tool；输出：$out"
+}
+
 step "workers / task run / log（通用命令行执行者：sh 当假执行者）"
 cat >"$work/fakesh.md" <<'MD'
 ---
@@ -338,6 +349,7 @@ done_match: "^DONE$"
 只回 DONE。
 MD
 out=$(json workers edit harness/fakesh --file "$work/fakesh.md"); has '.ok and .next == "atrium workers harness/fakesh"'
+wait_tool fakesh
 out=$(json workers edit harness/fakesh --set trust=super || true); has '.ok == false and .error.code == "usage"'
 out=$(json workers edit harness/fakesh || true); has '.ok == false and .error.code == "usage"'
 out=$(json workers fakesh); has '.result.resolved.id == "fakesh" and .result.resolved.layers == ["harness/fakesh"]'
@@ -380,6 +392,7 @@ done_match: "^DONE$"
 只回 DONE。
 MD
 out=$(json workers edit harness/fakecommit --file "$work/fakecommit.md"); has '.ok'
+wait_tool fakecommit
 out=$(json org edit "$acc_org" --accept user); has '.ok'
 out=$(json task add 写文章 --org "$acc_org" --repo "$site"); loc=$(jq -r .result.id <<<"$out")
 until_accept() {
@@ -407,6 +420,13 @@ until_accept
 [ ! -f "$site/post.md" ] || fail "验收前不该合进 main"
 out=$(json task accept "$loc"); has '.result.status == "done"'
 grep -q 正文 "$site/post.md" || fail "验收后 main 上应有执行者的提交"
+# done 表示应用完成；工作树由 dispatch 异步回收，等它记录回收完成再查磁盘。
+for _ in $(seq 150); do
+  out=$(json task show "$loc")
+  jq -e '(.result.history|map(.kind)|index("worktree_reclaimed")) != null' >/dev/null <<<"$out" && break
+  sleep 0.2
+done
+has '(.result.history|map(.kind)|index("worktree_reclaimed")) != null'
 [ ! -d "$ATRIUM_DATA/tasks/$loc/repo" ] || fail "任务工作树应已删除"
 [ -z "$(git -C "$site" branch --list "task-$loc")" ] || fail "任务分支应已删除"
 out=$(json org edit "$acc_org" --accept -); has '.ok'
@@ -429,6 +449,7 @@ done_match: "^DONE$"
 只回没做成。
 MD
 out=$(json workers edit harness/fakestop --file "$work/fakestop.md"); has '.ok'
+wait_tool fakestop
 out=$(json task add 改页面 --repo "$site"); stop=$(jq -r .result.id <<<"$out")
 json task run "$stop" --worker fakestop >/dev/null
 out=$(json task wait "$stop" --timeout 30); has '.result.task.status == "blocked"'
@@ -446,6 +467,7 @@ done_match: "^DONE$"
 只回 DONE。
 MD
 out=$(json workers edit harness/fakewrite --file "$work/fakewrite.md"); has '.ok'
+wait_tool fakewrite
 out=$(json task add 原地写 --repo o/r --dir "$place" || true); has '.ok == false and .error.code == "usage"'   # 仓库与工作地点只给一个
 out=$(json task add 原地写 --dir "$place"); dirt=$(jq -r .result.id <<<"$out"); has '.result.dir == $p' --arg p "$(native "$place")"
 json task run "$dirt" --worker fakewrite >/dev/null
@@ -520,6 +542,7 @@ args: ["-c", "sleep 2; echo 'invalid model selection (--model \"x\" --effort \"\
 ---
 MD
 out=$(json workers edit harness/fakemodel --file "$work/fakemodel.md"); has '.ok'
+wait_tool fakemodel
 out=$(json org add 可用性演练 --parent o1); av_org=$(jq -r .result.id <<<"$out")
 out=$(json task add 模型名无效 --org "$av_org"); av=$(jq -r .result.id <<<"$out")
 json task run "$av" --worker fakemodel >/dev/null

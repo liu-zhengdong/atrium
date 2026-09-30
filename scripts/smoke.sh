@@ -1,24 +1,27 @@
 #!/usr/bin/env bash
 # 端到端冒烟：临时数据目录 + 空闲端口起服务 → 建部门、要点、任务 → 等待 → 平滑重启 → 暂停 → 停。每步断言。
 # 只动自己起的服务（记 pid），不碰用户在跑的服务与 ~/.atrium-v2。
+# Mac、Linux 与 Windows（Git Bash）上都能跑；平台差异都在用到 $win 的地方。
 set -euo pipefail
 
 root=$(cd "$(dirname "$0")/.." && pwd)
 work=$(mktemp -d "${TMPDIR:-/tmp}/atrium-smoke.XXXXXX")
-bin="$work/atrium"
+bin="$work/atrium$(go env GOEXE)"   # Windows 上要带 .exe 才能被再次拉起
 export ATRIUM_DATA="$work/data"
 export ATRIUM_PORT=$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1])')
 unset ATRIUM_AS
+win=""; [ "${OS:-}" = Windows_NT ] && win=1   # Windows（Git Bash）：进程号、文件权限、会话收件地址、假 gh 各有不同
 
-pid=""
+pid=""; jobs=""   # pid：atrium 报的进程号（Windows 上是 Windows 进程号）；jobs：本脚本 & 起的
 cur="开始前"; where=""
 # 失败（断言不成立，或哪条命令非零退出被 set -e 带走）时说清哪一步、哪一行，附服务日志末尾，现场目录留着。
 trap 'where="第 $LINENO 行：$BASH_COMMAND"' ERR
 cleanup() {
   local rc=$?
-  # 只结束自己起的服务进程（新旧 pid 都记着）。
-  for p in $pid; do kill "$p" 2>/dev/null || true; done
-  if [ "$rc" = 0 ]; then rm -rf "$work"; return; fi
+  if [ "$rc" = 0 ]; then rm -rf "$work"; return; fi   # 通过时起过的进程各步已自己停掉
+  # 只结束自己起的进程（服务新旧 pid 都记着）。
+  for p in $pid; do killpid "$p"; done
+  for p in $jobs; do kill "$p" 2>/dev/null || true; done
   {
     echo; echo "冒烟失败：步骤「${cur}」${where:+，$where}"
     echo "最近一条输出：${out:-（无）}"
@@ -32,7 +35,20 @@ step() { cur="$*"; printf '\n== %s\n' "$*"; }
 fail() { where="第 ${BASH_LINENO[${#BASH_LINENO[@]}-2]} 行"; echo "失败：$*" >&2; exit 1; }
 # json <命令…>：跑命令取 --json 输出；jq 断言用 has <jq 表达式>。
 json() { "$bin" "$@" --json; }
-has() { jq -e "$1" >/dev/null <<<"$out" || fail "断言不成立：$1；输出：$out"; }
+has() { jq -e "$@" >/dev/null <<<"$out" || fail "断言不成立：$1；输出：$out"; }   # 其余参数给 jq，如 --arg p 值
+# native <路径>：服务记下的样子，Windows 上是 C:\ 形式。
+native() { if [ -n "$win" ]; then cygpath -w "$1"; else echo "$1"; fi; }
+# killpid <atrium 报的 pid>：Git Bash 的 kill 只认它自己的进程号；Windows 上只结束还叫 atrium.exe 的（进程号可能已被复用）。
+killpid() {
+  if [ -n "$win" ]; then taskkill //F //T //FI "PID eq $1" //FI "IMAGENAME eq ${bin##*/}" >/dev/null 2>&1 || true
+  else kill "$1" 2>/dev/null || true; fi
+}
+# private <文件>：只有本人能读。Unix 看权限位 600；Windows 看 ACL 里没有 Everyone、Users、Authenticated Users（SDDL 里的 WD、BU、AU）。
+private() {
+  if [ -z "$win" ]; then [ "$(stat -f %Lp "$1" 2>/dev/null || stat -c %a "$1")" = 600 ]; return; fi
+  local sddl="$work/acl.$RANDOM" acl
+  icacls "$(cygpath -w "$1")" //save "$(cygpath -w "$sddl")" >/dev/null && acl=$(iconv -f UTF-16LE -t UTF-8 "$sddl") && ! grep -qE ';;;(WD|BU|AU)\)' <<<"$acl"
+}
 # 技能检查那一段要用 pnpm、ffmpeg（造小样、跑检查）与无头浏览器（运行时自己找，找不到时任务转受阻并写明）。
 for c in jq pnpm ffmpeg ffprobe; do command -v "$c" >/dev/null || fail "缺 $c：冒烟要用它"; done
 
@@ -42,7 +58,7 @@ step "构建"
 step "启动（端口 ${ATRIUM_PORT}）"
 out=$(json start); has '.ok and .result.pid > 0 and .next == "atrium status"'
 pid=$(jq -r .result.pid <<<"$out")
-[ "$(stat -f %Lp "$ATRIUM_DATA/token" 2>/dev/null || stat -c %a "$ATRIUM_DATA/token")" = 600 ] || fail "令牌文件权限不是 600"
+private "$ATRIUM_DATA/token" || fail "令牌文件别人能读"
 out=$(json start); has '.ok and (.result.pid|tostring) == "'"$pid"'"'   # 单实例：再 start 不起第二个
 
 step "认证默认拒绝"
@@ -133,25 +149,43 @@ line=$("$bin" statusline); grep -q "$t_blk 秘书 卡住" <<<"$line" || fail "st
 line=$(ATRIUM_DATA="$work/none" "$bin" statusline); [ "$line" = "Atrium 未运行" ] || fail "服务不在时应显示未运行：$line"
 [ ! -d "$work/none" ] || fail "statusline 不该建数据目录"
 
-step "secretary bridge（假会话收件 socket）"
-sock="$work/cc.sock"
-python3 - "$sock" "$work/inbox.txt" <<'PY' &
+step "secretary bridge（假会话收件地址：Unix 上 socket，Windows 上命名管道）"
+sock="$work/cc.sock"; [ -z "$win" ] || sock='\\.\pipe\atrium-smoke-'"$$-$RANDOM"
+python3 - "$sock" "$work/inbox.txt" "$work/inbox.ready" <<'PY' &
 import os, socket, sys
-path, out = sys.argv[1], sys.argv[2]
-s = socket.socket(socket.AF_UNIX); s.bind(path); s.listen(8)
-while True:
-    c, _ = s.accept()
-    data = b""
-    while True:
-        chunk = c.recv(65536)
-        if not chunk: break
-        data += chunk
-    c.close()
+path, out, ready = sys.argv[1:4]
+def save(data):
     if data:
         with open(out, "ab") as f: f.write(data)
+if os.name != "nt":
+    s = socket.socket(socket.AF_UNIX); s.bind(path); s.listen(8)
+    open(ready, "w").close()
+    while True:
+        c, _ = s.accept()
+        data = b""
+        while True:
+            chunk = c.recv(65536)
+            if not chunk: break
+            data += chunk
+        c.close(); save(data)
+import _winapi as w
+def pipe():  # 随时留一个空闲实例：一个都没有时，连接方当作会话已关闭
+    return w.CreateNamedPipe(path, w.PIPE_ACCESS_DUPLEX, 0,  # 字节流、阻塞
+                             w.PIPE_UNLIMITED_INSTANCES, 65536, 65536, 0, w.NULL)
+h = pipe(); open(ready, "w").close()
+while True:
+    try: w.ConnectNamedPipe(h, False)
+    except OSError: pass  # 连接方已先连上（或连上又断了）
+    nxt, data = pipe(), b""
+    while True:
+        try: chunk, _ = w.ReadFile(h, 65536)
+        except OSError: break
+        if not chunk: break
+        data += chunk
+    w.CloseHandle(h); h = nxt; save(data)
 PY
-inbox=$!; pid="$pid $inbox"
-for _ in $(seq 50); do [ -S "$sock" ] && break; sleep 0.1; done
+inbox=$!; jobs="$jobs $inbox"
+for _ in $(seq 50); do [ -f "$work/inbox.ready" ] && break; sleep 0.1; done
 out=$(CLAUDE_CODE_MESSAGING_SOCKET="$sock" CLAUDE_CODE_MESSAGING_TOKEN=tok json secretary bridge --detach --batch 1); has '.ok and .result.pid > 0'
 bridge=$(jq -r .result.pid <<<"$out"); pid="$pid $bridge"
 out=$(CLAUDE_CODE_MESSAGING_SOCKET="$sock" CLAUDE_CODE_MESSAGING_TOKEN=tok json secretary bridge --detach); has '.result.pid == '"$bridge"   # 同一会话不起第二个
@@ -163,9 +197,11 @@ grep -q "【Atrium 事件】" "$work/inbox.txt" && grep -q "$t_blk2" "$work/inbo
 grep -q "atrium events ack" "$work/inbox.txt" || fail "注入消息末尾没有 ack 命令"
 out=$(json secretary bridge --status); has '.result.listener != null and .result.bridge.pid == '"$bridge"
 out=$(json top); has '.result.secretary.listening != null'
-kill "$bridge"; kill "$inbox"; wait "$inbox" 2>/dev/null || true
-for _ in $(seq 50); do kill -0 "$bridge" 2>/dev/null || break; sleep 0.1; done
-[ ! -f "$ATRIUM_DATA/secretary/bridge.json" ] || fail "bridge 退出后登记还在"
+killpid "$bridge"; kill "$inbox"; wait "$inbox" 2>/dev/null || true
+for _ in $(seq 50); do out=$(json secretary bridge --status); jq -e '.result.bridge == null' >/dev/null <<<"$out" && break; sleep 0.1; done
+has '.result.bridge == null'
+# Unix 上 bridge 收到 SIGTERM 自己删登记；Windows 没有这个信号，强杀后登记留着，--status 按进程已不在认作没有。
+[ -n "$win" ] || [ ! -f "$ATRIUM_DATA/secretary/bridge.json" ] || fail "bridge 退出后登记还在"
 dir="$work/sec"; mkdir -p "$dir/.claude"; echo '{"model":"x"}' >"$dir/.claude/settings.local.json"
 out=$(json secretary bridge --install-hook --dir "$dir"); has '.result.added'
 out=$(json secretary bridge --install-hook --dir "$dir"); has '.result.added == false'
@@ -189,7 +225,7 @@ out=$(json material ls --node o2); has '(.result|length) == 1'
 out=$(json org show o2); has '(.result.limits|map(select(.key == "overview"))[0].used) == 5'
 printf 'sekrit\n' | "$bin" secret set o1 BOT_TOKEN --json >/dev/null || fail "secret set 失败"
 out=$(json secret ls --node o2); has '.result[0].name == "BOT_TOKEN" and (tostring|test("sekrit")|not)'
-[ "$(stat -f %Lp "$ATRIUM_DATA/secrets/o1/BOT_TOKEN" 2>/dev/null || stat -c %a "$ATRIUM_DATA/secrets/o1/BOT_TOKEN")" = 600 ] || fail "凭据文件权限不是 600"
+private "$ATRIUM_DATA/secrets/o1/BOT_TOKEN" || fail "凭据文件别人能读"
 grep -q sekrit "$ATRIUM_DATA/service.log" && fail "凭据值进了日志"
 out=$(json secret set o1 BOT_TOKEN --rm); has '.ok'
 opt='{"title":"T","gain":"g","why_now":"w","cost":"c","if_not":"i","evidence":"e"}'
@@ -249,6 +285,8 @@ case "$1 $2" in
 esac
 EOF
 chmod +x "$m/bin/gh"
+# Windows 按 PATHEXT 找可执行文件，没后缀的脚本找不到、会落到真 gh：加一个 gh.cmd 转给同一个脚本。
+[ -z "$win" ] || printf '@"%s" "%%~dp0gh" %%*\r\n' "$(cygpath -w "$BASH")" >"$m/bin/gh.cmd"
 saved=("$ATRIUM_DATA" "$ATRIUM_PORT" "$PATH")
 export ATRIUM_DATA="$m/data" PATH="$m/bin:$PATH"
 export ATRIUM_PORT=$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1])')
@@ -271,10 +309,10 @@ code=$(jq -r .result.code <<<"$out")
 out=$(json host ls); has '.result[0].id == "h1" and .result[0].kind == "local" and .result[1].conn == "pending"'
 out=$(json host add 坏 --repo bad || true); has '.ok == false and .error.code == "usage"'
 HOME="$work/agenthome" "$bin" agent --data "$work/agent" --server "http://127.0.0.1:$ATRIUM_PORT" --token "$code" >"$work/agent.out" 2>&1 &
-agentpid=$!; pid="$pid $agentpid"
+agentpid=$!; jobs="$jobs $agentpid"
 for _ in $(seq 50); do out=$(json host ls h2); jq -e '.result.conn == "online"' >/dev/null <<<"$out" && break; sleep 0.2; done
 has '.result.conn == "online" and .result.info.cpus > 0 and .result.max == 2'
-[ "$(stat -f %Lp "$work/agent/agent.json" 2>/dev/null || stat -c %a "$work/agent/agent.json")" = 600 ] || fail "agent.json 权限不是 600"
+private "$work/agent/agent.json" || fail "agent.json 别人能读"
 code2=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $(jq -r .token "$work/agent/agent.json")" "http://127.0.0.1:$ATRIUM_PORT/api/tasks")
 [ "$code2" = 401 ] || fail "机器令牌调用户接口应 401，得到 $code2"
 out=$(json host edit h2 --max 3); has '.result.host.max == 3 and (.result.code // "") == ""'
@@ -404,7 +442,7 @@ done_match: "^DONE$"
 MD
 out=$(json workers edit harness/fakewrite --file "$work/fakewrite.md"); has '.ok'
 out=$(json task add 原地写 --repo o/r --dir "$place" || true); has '.ok == false and .error.code == "usage"'   # 仓库与工作地点只给一个
-out=$(json task add 原地写 --dir "$place"); dirt=$(jq -r .result.id <<<"$out"); has '.result.dir == "'"$place"'"'
+out=$(json task add 原地写 --dir "$place"); dirt=$(jq -r .result.id <<<"$out"); has '.result.dir == $p' --arg p "$(native "$place")"
 json task run "$dirt" --worker fakewrite >/dev/null
 out=$(json task wait "$dirt" --timeout 30); has '.result.task.status == "done"'
 [ "$(cat "$place/post.md")" = 正文 ] || fail "文件应落在原文件夹"
@@ -413,24 +451,27 @@ grep -q "原地干" "$ATRIUM_DATA/tasks/$dirt/prompt-1.md" || fail "提示词应
 [ ! -e "$place/.git" ] || fail "不该在工作地点建 git 仓库"
 
 step "技能声明的交付检查：文章与视频由运行时自己跑（构建、截图、ffprobe、第一帧、联系表），没过交回，产物路径记进经历"
-data=$(cd "$ATRIUM_DATA" && pwd)   # 规范路径：TMPDIR 可能带尾部斜杠，服务记的是规范路径
+data=$(cd "$ATRIUM_DATA" && pwd)   # 规范路径：TMPDIR 可能带尾部斜杠
 out=$(json skill add article "$work/skill" --checks article); has '.result.checks == ["article"]'
 out=$(json skill add video "$work/skill" --checks video); has '.result.checks == ["video"]'
 # 文章小样：假执行者写 post.md，pnpm run build 把它变成 dist/post.html；运行时截明暗两张
 mkdir -p "$work/art"; art=$(cd "$work/art" && pwd)
-echo '{"scripts":{"build":"mkdir -p dist && (echo \"<meta charset=utf-8><h1>\"; cat post.md) >dist/post.html"}}' >"$art/package.json"
+# 构建脚本用 node 写：pnpm 在 Windows 上经 cmd.exe 跑 scripts，sh 语法在那里不成立
+echo '{"scripts":{"build":"node build.js"}}' >"$art/package.json"
+echo 'const fs = require("fs"); fs.mkdirSync("dist", {recursive: true}); fs.writeFileSync("dist/post.html", "<meta charset=utf-8><h1>" + fs.readFileSync("post.md"))' >"$art/build.js"
 out=$(json task add 文章 --dir "$art" --skill article); a=$(jq -r .result.id <<<"$out")
 json task run "$a" --worker fakewrite >/dev/null
 out=$(json task wait "$a" --timeout 120); has '.result.task.status == "done"'
-out=$(json task show "$a"); has '(.result.history|map(select(.kind == "skill_check"))[0].body|test("article 通过：.*post.html")) and (.result.history|map(select(.kind == "artifact").body)) == ["'"$data/tasks/$a/article-light.png"'","'"$data/tasks/$a/article-dark.png"'"]'
+out=$(json task show "$a"); has '(.result.history|map(select(.kind == "skill_check"))[0].body|test("article 通过：.*post.html")) and (.result.history|map(select(.kind == "artifact").body)) == [$l, $d]' --arg l "$(native "$data/tasks/$a/article-light.png")" --arg d "$(native "$data/tasks/$a/article-dark.png")"
 [ -s "$ATRIUM_DATA/tasks/$a/article-light.png" ] && [ -s "$ATRIUM_DATA/tasks/$a/article-dark.png" ] || fail "明暗截图应在任务目录"
 # 故意破坏：构建失败 → 交回执行者，第 3 次转受阻
 mkdir -p "$work/art-bad"; artb=$(cd "$work/art-bad" && pwd)
-echo '{"scripts":{"build":"echo 构建编译出错 >&2; exit 1"}}' >"$artb/package.json"
+echo '{"scripts":{"build":"node build.js"}}' >"$artb/package.json"
+echo 'console.error("构建编译出错"); process.exit(1)' >"$artb/build.js"
 out=$(json task add 文章构建坏了 --dir "$artb" --skill article); ab=$(jq -r .result.id <<<"$out")
 json task run "$ab" --worker fakewrite >/dev/null
 out=$(json task wait "$ab" --timeout 120); has '.result.task.status == "blocked"'
-out=$(json task show "$ab"); has '.result.history as $h | ($h|map(select(.kind == "launch"))|last|.body|fromjson|.n) == 3 and ($h|map(select(.kind == "bounce"))|last|.body|fromjson|.to.status == "blocked" and (.note|test("关卡没过：article：构建失败：pnpm run build：exit status 1：构建编译出错")))'   # 经历只取最近 20 条：看第 3 次拉起后的那次打回
+out=$(json task show "$ab"); has '.result.history as $h | ($h|map(select(.kind == "launch"))|last|.body|fromjson|.n) == 3 and ($h|map(select(.kind == "bounce"))|last|.body|fromjson|.to.status == "blocked" and (.note|startswith("关卡没过：article：构建失败：pnpm run build：exit status 1：")) and (.note|contains("构建编译出错")))'   # 经历只取最近 20 条：看第 3 次拉起后的那次打回；Windows 上 pnpm 还会先回显一行命令
 # 视频小样：out/ 里一段 2 秒带音轨的成片；故意破坏：第一帧纯黑
 mkdir -p "$work/vid/out" "$work/vid-bad/out"; vid=$(cd "$work/vid" && pwd); vidb=$(cd "$work/vid-bad" && pwd)
 ffmpeg -v error -y -f lavfi -i testsrc=duration=2:size=320x240:rate=10 -f lavfi -i sine=duration=2 -c:v libx264 -pix_fmt yuv420p -c:a aac "$vid/out/demo.mp4"
@@ -438,7 +479,7 @@ ffmpeg -v error -y -f lavfi -i color=c=black:duration=2:size=320x240:rate=10 -c:
 out=$(json task add 视频 --dir "$vid" --skill video); v=$(jq -r .result.id <<<"$out")
 json task run "$v" --worker fakewrite >/dev/null
 out=$(json task wait "$v" --timeout 120); has '.result.task.status == "done"'
-out=$(json task show "$v"); has '(.result.history|map(select(.kind == "skill_check"))[0].body|test("video 通过：out/demo.mp4：时长 2.0 秒，320x240，响度 -[0-9.]+ LUFS")) and (.result.history|map(select(.kind == "artifact").body)) == ["'"$data/tasks/$v/video-first-frame.png"'","'"$data/tasks/$v/video-contact-sheet.png"'"]'
+out=$(json task show "$v"); has '(.result.history|map(select(.kind == "skill_check"))[0].body|test("video 通过：out/demo.mp4：时长 2.0 秒，320x240，响度 -[0-9.]+ LUFS")) and (.result.history|map(select(.kind == "artifact").body)) == [$f, $c]' --arg f "$(native "$data/tasks/$v/video-first-frame.png")" --arg c "$(native "$data/tasks/$v/video-contact-sheet.png")"
 [ -s "$ATRIUM_DATA/tasks/$v/video-first-frame.png" ] && [ -s "$ATRIUM_DATA/tasks/$v/video-contact-sheet.png" ] || fail "第一帧与联系表应在任务目录"
 out=$(json task add 视频第一帧黑 --dir "$vidb" --skill video); vb=$(jq -r .result.id <<<"$out")
 json task run "$vb" --worker fakewrite >/dev/null

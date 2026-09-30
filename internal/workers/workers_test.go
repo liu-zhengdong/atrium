@@ -162,6 +162,9 @@ func TestCLISpec(t *testing.T) {
 	if e := a.Ended("working\nDONE\n"); !e.Known || !e.OK {
 		t.Fatalf("done_match 命中：%+v", e)
 	}
+	if e := a.Ended("working\r\nDONE\r\n"); !e.Known || !e.OK {
+		t.Fatalf("Windows 原生工具的 CRLF 行尾不算进行里：%+v", e)
+	}
 	if e := a.Ended("working\n"); !e.Known || e.OK {
 		t.Fatalf("done_match 没命中：%+v", e)
 	}

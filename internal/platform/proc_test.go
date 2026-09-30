@@ -48,6 +48,38 @@ func TestStartDetachedAndKillTree(t *testing.T) {
 	}
 }
 
+// sh 的输出经 OpenLog 接在已有内容后面。Windows 上以 O_APPEND 打开的句柄 sh 写不进去（t499）。
+func TestOpenLogTakesShOutput(t *testing.T) {
+	dir := t.TempDir()
+	script, log := filepath.Join(dir, "hi"), filepath.Join(dir, "run.log")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\necho hi\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(log, []byte("head\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	spec, err := Script(script, WorkerEnv(runtime.GOOS, EnvMap(os.Environ())))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := OpenLog(log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec.Stdout, spec.Stderr = f, f
+	cmd, err := Start(spec)
+	if err == nil {
+		err = cmd.Wait()
+	}
+	f.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(log); string(got) != "head\nhi\n" {
+		t.Fatalf("日志 %q", got)
+	}
+}
+
 func TestLookPath(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip()

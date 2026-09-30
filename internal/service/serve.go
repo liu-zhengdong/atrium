@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -16,6 +17,7 @@ import (
 	"os/signal"
 	"runtime"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -210,10 +212,10 @@ func (s *server) rotate() error {
 
 // spawnServe 拉起一个新的服务进程（start 与 restart 共用）。环境走服务白名单；
 // replacing 非 0 时新进程会等这个旧进程放开端口。
-func spawnServe(p config.Paths, base map[string]string, replacing int) (pid int, dropped []string, err error) {
+func spawnServe(p config.Paths, base map[string]string, replacing int) (pid int, dropped []string, exited <-chan error, err error) {
 	exe, err := os.Executable()
 	if err != nil {
-		return 0, nil, err
+		return 0, nil, nil, err
 	}
 	env, dropped := platform.ServiceEnv(runtime.GOOS, base)
 	delete(env, replaceEnv)
@@ -222,18 +224,37 @@ func spawnServe(p config.Paths, base map[string]string, replacing int) (pid int,
 	}
 	env["ATRIUM_DATA"] = p.Data
 	if err := os.MkdirAll(p.Data, 0o700); err != nil {
-		return 0, nil, err
+		return 0, nil, nil, err
 	}
 	logf, err := os.OpenFile(p.Log(), os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
 	if err != nil {
-		return 0, nil, err
+		return 0, nil, nil, err
 	}
 	defer logf.Close()
+	offset, err := logf.Seek(0, io.SeekEnd)
+	if err != nil {
+		return 0, nil, nil, err
+	}
 	cmd, err := platform.Start(platform.Spec{Path: exe, Args: []string{"serve"}, Env: env,
 		Stdout: logf, Stderr: logf, Detached: true})
 	if err != nil {
-		return 0, nil, err
+		return 0, nil, nil, err
 	}
 	pid = cmd.Process.Pid
-	return pid, dropped, cmd.Process.Release()
+	done := make(chan error, 1)
+	go func() {
+		err := cmd.Wait()
+		detail := ""
+		f, readErr := os.Open(p.Log())
+		if readErr == nil {
+			defer f.Close()
+			// 只读本次启动的输出，最多 64 KiB；完整内容仍在日志中。
+			raw, e := io.ReadAll(io.NewSectionReader(f, offset, 64*1024))
+			if e == nil {
+				detail = strings.TrimSpace(string(raw))
+			}
+		}
+		done <- fmt.Errorf("服务进程 %d 已退出（%v）；看日志 %s\n%s", pid, err, p.Log(), detail)
+	}()
+	return pid, dropped, done, nil
 }

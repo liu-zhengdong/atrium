@@ -43,7 +43,7 @@ func (s *server) routes(r *api.Router) {
 	r.Handle("POST /api/service/restart", func(q *api.Req) (any, error) {
 		base := platform.EnvMap(os.Environ())
 		base["ATRIUM_PORT"] = strconv.Itoa(s.env.Port) // 新进程接手同一个端口（系统挑的也一样）
-		pid, _, err := spawnServe(s.env.Paths, base, os.Getpid())
+		pid, _, _, err := spawnServe(s.env.Paths, base, os.Getpid())
 		if err != nil {
 			return nil, err
 		}

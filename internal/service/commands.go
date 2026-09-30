@@ -74,16 +74,20 @@ func probe(port int) int {
 }
 
 // waitUp 等 pid 这个服务登记好并响应 /health。
-func waitUp(p config.Paths, pid int, limit time.Duration) (config.ServiceInfo, error) {
+func waitUp(p config.Paths, pid int, limit time.Duration, exited <-chan error) (config.ServiceInfo, error) {
 	deadline := time.Now().Add(limit)
 	for time.Now().Before(deadline) {
 		if info, err := config.ReadService(p); err == nil && info.PID == pid && probe(info.Port) == pid {
 			return info, nil
 		}
-		if !platform.Alive(pid) {
+		if exited == nil && !platform.Alive(pid) {
 			return config.ServiceInfo{}, fmt.Errorf("服务进程 %d 已退出；看日志 %s", pid, p.Log())
 		}
-		time.Sleep(50 * time.Millisecond)
+		select {
+		case err := <-exited:
+			return config.ServiceInfo{}, err
+		case <-time.After(50 * time.Millisecond):
+		}
 	}
 	return config.ServiceInfo{}, fmt.Errorf("服务 %d 在 %s 内没起来；看日志 %s", pid, limit, p.Log())
 }
@@ -96,14 +100,14 @@ func start(c *cli.Ctx) error {
 	if info, ok := running(p); ok {
 		return c.Done(info, fmt.Sprintf("服务已在运行（pid %d，端口 %d）", info.PID, info.Port), "atrium status")
 	}
-	pid, dropped, err := spawnServe(p, platform.EnvMap(os.Environ()), 0)
+	pid, dropped, exited, err := spawnServe(p, platform.EnvMap(os.Environ()), 0)
 	if err != nil {
 		return err
 	}
 	if len(dropped) > 0 && !c.JSON {
 		fmt.Fprintf(c.Env.Stderr, "已忽略身份/凭据环境变量：%s；服务与执行者不继承这些变量。\n", strings.Join(dropped, ", "))
 	}
-	info, err := waitUp(p, pid, 10*time.Second)
+	info, err := waitUp(p, pid, 10*time.Second, exited)
 	if err != nil {
 		return err
 	}
@@ -191,7 +195,7 @@ func restart(c *cli.Ctx) error {
 	if err := c.Call("POST", "/api/service/restart", nil, &r); err != nil {
 		return err
 	}
-	info, err := waitUp(p, r.New, 20*time.Second)
+	info, err := waitUp(p, r.New, 20*time.Second, nil)
 	if err != nil {
 		return err
 	}

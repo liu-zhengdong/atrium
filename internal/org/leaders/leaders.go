@@ -36,10 +36,10 @@ func moduleFor(h *hub) app.Module {
 }
 
 func commands(t *cli.Table) {
-	t.Add(cli.Command{Path: "leader escalate", Args: "<说明>", Summary: "负责人上交：已上线、要别的部门配合、越权、搞不定",
+	t.Add(cli.Command{Path: "leader escalate", Args: "<说明>", Summary: "负责人上交：要别的部门配合、越权、搞不定",
 		Flags: []cli.Flag{
-			{Name: "kind", Value: "shipped|cross|beyond|stuck", Help: "上交哪一类（必填）"},
-			{Name: "task", Value: "tN", Help: "关于哪件任务（shipped 必填）"},
+			{Name: "kind", Value: "cross|beyond|stuck", Help: "上交哪一类（必填）"},
+			{Name: "task", Value: "tN", Help: "关于哪件任务"},
 			{Name: "event", Value: "编号", Help: "转交下层上交给你的那条事件"},
 		},
 		Run: func(c *cli.Ctx) error {

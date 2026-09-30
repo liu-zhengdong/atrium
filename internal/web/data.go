@@ -249,7 +249,7 @@ func loadAsks(ctx context.Context, q store.Querier, ix *orgIndex) ([]Ask, error)
 	return append(out, ups...), nil
 }
 
-// escalations 是负责人上交到秘书这层（往上没有负责人）、要处理（已上线只知会，不算）、还没确认的事件。
+// escalations 是负责人上交到秘书这层（往上没有负责人）、要处理、还没确认的事件。
 func escalations(ctx context.Context, q store.Querier, ix *orgIndex) ([]Ask, error) {
 	rows, err := q.QueryContext(ctx, `SELECT COALESCE(task, ''), COALESCE(department, ''), body, updated_at FROM events
 		WHERE kind = ? AND target = ? AND level = ? AND acked_at IS NULL ORDER BY id LIMIT 200`, events.LeaderEscalate, org.Secretary, events.Act)

@@ -82,6 +82,8 @@ func (w *web) routes(r *api.Router, env *app.Env) {
 		}
 		return loadSchedule(req.Context(), env.DB, id)
 	})
+	r.Raw("GET /ui/material/{id}", w.local(w.material))
+	r.Raw("GET /ui/material/{id}/{rel...}", w.local(w.material))
 	r.Raw("GET /ui/stream", w.local(w.hub.serve))
 }
 
@@ -102,8 +104,9 @@ func (w *web) local(h http.HandlerFunc) http.HandlerFunc {
 			http.Error(rw, "只接受本机地址", http.StatusForbidden)
 			return
 		}
-		// 脚本只许本站文件；样式许行内 style（额度条宽度、树缩进是算出来的），页面里的文字一律转义后才拼进 HTML。
-		rw.Header().Set("Content-Security-Policy", "default-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; frame-ancestors 'none'")
+		// 脚本只许本站文件；样式许行内 style（额度条宽度、树缩进是算出来的，docx 预览自带样式），页面里的文字一律转义后才拼进 HTML；
+		// 图片许 data:（docx 预览把内嵌图片转成 data: 地址）。资料原文另设自己的 CSP（见 material.go）。
+		rw.Header().Set("Content-Security-Policy", "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; frame-ancestors 'none'")
 		rw.Header().Set("X-Content-Type-Options", "nosniff")
 		rw.Header().Set("Referrer-Policy", "no-referrer")
 		h(rw, req)

@@ -99,7 +99,6 @@ a.quiet{color:inherit}a.quiet:hover{color:var(--ink)}
 .dept-h a:hover{color:var(--ink)}
 .row{display:grid;grid-template-columns:16px minmax(0,1fr) auto auto;align-items:center;gap:12px;padding:9px 10px;margin:0 -10px;border-radius:8px;cursor:pointer}
 .row:hover{background:var(--raise)}
-.row.still{cursor:default}.row.still:hover{background:none} /* 资料行点不开，不装成能点 */
 .row .title{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .row .title .id{margin-right:8px}
 .row .who{color:var(--ink2);font-size:13px;white-space:nowrap}
@@ -151,8 +150,9 @@ button.lead:hover{background:var(--hover)}
 .open .scrim{opacity:1;pointer-events:auto}.open .drawer{transform:none}
 @media (prefers-reduced-motion:reduce){.drawer,.scrim{transition:none}}
 .dhead{display:flex;align-items:center;gap:10px;padding:18px 20px 0}
-.dhead .x{margin-left:auto;color:var(--ink3);width:28px;height:28px;border-radius:8px;display:grid;place-items:center}
-.dhead .x:hover{background:var(--raise);color:var(--ink)}
+.dhead .id{flex:1}
+.dhead .x,.dhead .tool{color:var(--ink3);width:28px;height:28px;border-radius:8px;display:grid;place-items:center}
+.dhead .x:hover,.dhead .tool:hover{background:var(--raise);color:var(--ink)}
 .dbody{padding:10px 20px 20px;overflow-y:auto;flex:1}
 .crumb.up{flex-wrap:nowrap;margin-top:4px}
 .crumb.up a{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -314,3 +314,46 @@ details.full .result{margin-top:8px;font-size:13px;color:var(--ink2)}
 .skel i.h{width:64px;height:10px;margin-bottom:20px}
 .skel i.t{width:40%;height:30px;margin:0}
 @keyframes fadein{to{opacity:1}}
+
+/* 资料：行首文件图标；抽屉比任务抽屉宽，能放宽到整个主岛，正文按格式渲染（app.js 的 viewers） */
+.row .file{width:14px;height:14px;color:var(--ink3);justify-self:center}
+.drawer.mat{width:min(780px,100%)}
+.drawer.mat.wide{width:100%}
+.drawer.mat.wide .dbody:has(.md,.text,.docx,.file){padding-inline:max(20px,calc(50% - 380px))} /* 放宽后读的东西居中成一栏，表格、网页、pdf 铺满 */
+.drawer.mat .dbody{display:flex;flex-direction:column}
+.viewer{margin-top:18px}
+.viewer.html,.viewer.pdf{flex:1;display:flex;flex-direction:column;min-height:0} /* 网页、pdf 铺满抽屉剩下的高度，自己滚 */
+.frame{flex:1;min-height:480px;width:100%;border:1px solid var(--line);border-radius:10px;background:#fff}
+.pic{max-width:100%;border-radius:8px}
+.plain{margin:0;padding:14px 16px;border-radius:10px;background:var(--raise);font:12.5px/1.7 var(--mono);white-space:pre-wrap;word-break:break-word;font-variant-ligatures:none}
+.gone{color:var(--ink3);text-decoration:underline dotted}
+.viewer.md{padding-top:20px;border-top:1px solid var(--line)}
+.doc{font-size:15px;line-height:1.8;word-break:break-word}
+.doc>:first-child{margin-top:0}
+.doc h1,.doc h2,.doc h3,.doc h4{line-height:1.35;font-weight:600;margin:1.8em 0 .6em;text-wrap:balance}
+.doc h1{font-size:24px}.doc h2{font-size:19px}.doc h3{font-size:16px}.doc h4{font-size:15px}
+.doc p,.doc ul,.doc ol,.doc table,.doc pre,.doc blockquote{margin:0 0 1em}
+.doc ul,.doc ol{padding-left:1.5em}
+.doc li+li{margin-top:.25em}
+.doc a{color:var(--accent);text-decoration:underline;text-decoration-color:color-mix(in srgb,var(--accent) 35%,transparent);text-underline-offset:3px}
+.doc a:hover{text-decoration-color:var(--accent)}
+.doc img{max-width:100%;border-radius:8px}
+.doc code{font:.86em var(--mono);background:var(--raise);padding:1px 5px;border-radius:5px}
+.doc pre{padding:12px 14px;border-radius:10px;background:var(--raise);overflow-x:auto;line-height:1.6}
+.doc pre code{padding:0;background:none}
+.doc blockquote{padding-left:14px;border-left:3px solid var(--line);color:var(--ink2)}
+.doc table{display:block;overflow-x:auto;border-collapse:collapse;font-size:13.5px;line-height:1.6}
+.doc th,.doc td{padding:6px 12px;border:1px solid var(--line);text-align:left;vertical-align:top}
+.doc th{background:var(--raise);font-weight:500}
+.doc hr{border:0;border-top:1px solid var(--line);margin:2em 0}
+.sheet{width:fit-content;max-width:100%;overflow:auto;border:1px solid var(--line);border-radius:10px}
+.sheet table{border-collapse:collapse;font-size:13px}
+.sheet td{padding:5px 10px;border:1px solid var(--line);white-space:nowrap}
+.sheet td[data-t="n"]{text-align:right;font-variant-numeric:tabular-nums}
+.sheet tr:first-child td{position:sticky;top:0;background:var(--raise);font-weight:500}
+/* docx 带着自己的字色，总放在白纸上；页边距按抽屉收窄 */
+.viewer section.docx{padding:32px 36px!important;min-height:0!important;margin-bottom:12px;border-radius:10px;border:1px solid var(--line);background:#fff;color:#000}
+.viewer.file{text-align:center}
+.dl{display:inline-flex;align-items:center;gap:8px;margin-top:4px;padding:8px 14px;border-radius:8px;background:var(--raise);color:var(--ink)}
+.dl:hover{background:var(--hover)}
+@media (max-width:760px){.dhead [data-wide]{display:none}} /* 窄屏抽屉本来就占满 */

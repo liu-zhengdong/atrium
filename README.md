@@ -108,8 +108,8 @@ scripts/smoke.sh                  # 主路径端到端（隔离服务、假执�
 开发中用隔离的服务，别碰 4320 上的安装版：
 
 ```bash
-ATRIUM_PORT=4391 ATRIUM_DATA=$PWD/.atrium go run ./cmd/atrium start   # 启动
-ATRIUM_PORT=4391 ATRIUM_DATA=$PWD/.atrium go run ./cmd/atrium stop    # 用完停掉
+ATRIUM_DATA=$PWD/.atrium go run ./cmd/atrium start   # 启动（端口由系统挑；要固定就加 ATRIUM_PORT）
+ATRIUM_DATA=$PWD/.atrium go run ./cmd/atrium stop    # 用完停掉
 ```
 
 包怎么分、谁调谁、共享文件怎么改见 [internal/README.md](internal/README.md)；实现约束和协作流程见 [AGENTS.md](AGENTS.md)。方向讨论见 [#260](https://github.com/liu-zhengdong/atrium/discussions/260)，v2 规格见 [#496](https://github.com/liu-zhengdong/atrium/discussions/496)。

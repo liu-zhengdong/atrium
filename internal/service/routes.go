@@ -2,6 +2,7 @@ package service
 
 import (
 	"os"
+	"strconv"
 
 	"github.com/liu-zhengdong/atrium/internal/api"
 	"github.com/liu-zhengdong/atrium/internal/pause"
@@ -40,7 +41,9 @@ func (s *server) routes(r *api.Router) {
 	})
 	// 平滑重启：先拉起新进程（它等端口），再停下自己；在跑的执行者是独立进程组，不受影响。
 	r.Handle("POST /api/service/restart", func(q *api.Req) (any, error) {
-		pid, _, err := spawnServe(s.env.Paths, platform.EnvMap(os.Environ()), os.Getpid())
+		base := platform.EnvMap(os.Environ())
+		base["ATRIUM_PORT"] = strconv.Itoa(s.env.Port) // 新进程接手同一个端口（系统挑的也一样）
+		pid, _, err := spawnServe(s.env.Paths, base, os.Getpid())
 		if err != nil {
 			return nil, err
 		}

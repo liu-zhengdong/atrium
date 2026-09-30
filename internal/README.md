@@ -14,7 +14,7 @@ Go 代码怎么分包、包之间怎么调用、并行开发时各自改哪里�
 5. **快检查**：`.agents/check`（gofmt、vet 与 Windows/Linux 交叉编译、build、全部测试、`--help` 冒烟）。端到端：`scripts/smoke.sh`。单包测试超过 30 秒在 PR 里说明。
 6. **开发期不写兜底**：不做自愈、旧写法兼容、自动回滚；出错就返回错误停下。
 
-隔离运行：`ATRIUM_DATA=<临时目录> ATRIUM_PORT=<空闲端口> go run ./cmd/atrium start`，用完同样变量 `stop`。缺省数据目录 `~/.atrium-v2`、端口 4320；不要碰用户在跑的服务与数据目录。
+隔离运行：`ATRIUM_DATA=<临时目录> go run ./cmd/atrium start`（端口由系统挑，`status` 里看），用完同样变量 `stop`。缺省数据目录 `~/.atrium-v2`（没设 `ATRIUM_PORT` 时听 4320）；不要碰用户在跑的服务与数据目录。
 
 ## 包一览
 

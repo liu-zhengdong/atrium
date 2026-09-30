@@ -48,7 +48,7 @@ func Serve(mods []app.Module, getenv func(string) string) error {
 	if err != nil {
 		return err
 	}
-	port, err := config.Port(getenv)
+	port, err := config.Port(paths, getenv)
 	if err != nil {
 		return err
 	}
@@ -100,6 +100,8 @@ func Serve(mods []app.Module, getenv func(string) string) error {
 	if err != nil {
 		return err
 	}
+	port = ln.Addr().(*net.TCPAddr).Port // 端口 0 时是系统挑的那个
+	s.env.Port = port
 	baseCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	srv := &http.Server{Handler: router, ReadHeaderTimeout: 10 * time.Second,

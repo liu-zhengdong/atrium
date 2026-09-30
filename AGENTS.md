@@ -42,7 +42,7 @@ Atrium 是 AI 组织的运行底座（方向见讨论 [#260](https://github.com/
 - 主路径端到端：`scripts/smoke.sh`（隔离服务、假执行者、假 gh）。
 - 执行者交付停在 PR；关卡、审阅、合入由运行时做。PR 正文写「端到端验证」（隔离实例里跑的命令与输出）和「碰到哪些已有能力」（没有写「无」）。
 - 发版：在 main 上推 `vX.Y.Z` 标签，`release.yml` 交叉编译六个平台发到 Release；运行时对自身 `update` + `restart` 后跑只读冒烟，过了记「已上线」。
-- 隔离实例：`ATRIUM_DATA=<临时目录> ATRIUM_PORT=<空闲端口> go run ./cmd/atrium start`，用完同样变量 `stop`。不要启停用户在跑的服务（缺省 4320），不读写 `~/.atrium-v2`。
+- 隔离实例：`ATRIUM_DATA=<临时目录> go run ./cmd/atrium start`（端口由系统挑，`status` 里看），用完同样变量 `stop`。不要启停用户在跑的服务（缺省 4320），不读写 `~/.atrium-v2`。
 - 不要 `git stash`（所有工作树共用），未完成的改动提交到自己的分支。
 - 测试用临时目录、假执行者、假 gh 与本地 bare 仓库；不调真实模型，不读用户主目录，不启真实额度读取。
 - issue 只放可以直接动手的事；远期规划放 Discussions（Ideas）。文档、issue、PR、提交用中文。

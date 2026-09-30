@@ -145,6 +145,8 @@ func Summary(r Row) string {
 		return line + title
 	case LeaderEscalate:
 		return fmt.Sprintf("%s 上交（%s）：%s", s("from"), s("label"), clip(s("note"), 80))
+	case WorkerDown:
+		return s("target") + " 不可用：" + clip(s("reason"), 80) + " · " + s("next")
 	case LimitFull:
 		line := clip(s("text"), 80)
 		if n := s("next"); n != "" {

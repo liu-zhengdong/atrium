@@ -162,9 +162,10 @@ func loadNav(ctx context.Context, q store.Querier) (Nav, error) {
 }
 
 // Ask 是「等你」的一件：选项单等你挑，交付等你验收（部门的验收人是你），卡住的任务递到了你这层（往上没有负责人），
-// 或负责人上交到秘书这层还没处理的事。
+// 负责人上交到秘书这层还没处理的事，或等人处理的执行者不可用标记（没登录、缺环境、模型名无效、自检不过；
+// 从 worker_marks 现读，解除就消失；额度用尽这类会自己恢复的不算）。
 type Ask struct {
-	Kind     string `json:"kind"` // choose | accept | stuck | escalate
+	Kind     string `json:"kind"` // choose | accept | stuck | escalate | worker
 	ID       string `json:"id"`
 	Title    string `json:"title"`
 	Sub      string `json:"sub"`
@@ -229,6 +230,15 @@ func loadAsks(ctx context.Context, q store.Querier, ix *orgIndex) ([]Ask, error)
 	ups, err := escalations(ctx, q, ix)
 	if err != nil {
 		return nil, err
+	}
+	marks, err := workers.Marks(ctx, q, store.Now())
+	if err != nil {
+		return nil, err
+	}
+	for _, m := range marks {
+		if m.Until == 0 {
+			ups = append(ups, Ask{Kind: "worker", ID: m.Target(), Title: m.Target() + " " + m.Reason, Sub: m.Fix(), At: m.Since})
+		}
 	}
 	return append(out, ups...), nil
 }

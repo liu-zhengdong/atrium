@@ -326,6 +326,17 @@ func TestRoutes(t *testing.T) {
 		len(p.Marks) != 1 || p.Marks[0].Host != "h1" {
 		t.Errorf("表现一行：%+v", p)
 	}
+	// 等人处理的不可用标记进「等你」，解除就消失；额度用尽会自己恢复，不进。
+	workers.SetMark(ctx, db, workers.Mark{Tool: "kimi", Host: "h3", Kind: workers.SignalQuota, Reason: "额度用尽", Since: store.Now(), Until: store.Now() + 3600_000})
+	read("today", &today)
+	if n := len(today.Asks); n != 2 || today.Asks[1].Kind != "worker" || today.Asks[1].Title != "claude@h1 没登录" ||
+		today.Asks[1].Sub != "登录或装好运行环境后 atrium workers edit --clear claude@h1" {
+		t.Errorf("不可用标记应进等你（跟在卡住的活后面）：%+v", today.Asks)
+	}
+	if nav, err := loadNav(ctx, db); err != nil || nav.Asks != 2 {
+		t.Errorf("侧栏件数：%+v %v", nav, err)
+	}
+	workers.ClearMarks(ctx, db, "claude@h1")
 	// 部门有了负责人，卡住的活先归负责人，不再递到「等你」；详情里持球人是负责人。
 	a, err := org.AddLeader(ctx, db, org.NewLeader{Name: "运行时负责人", Workers: []string{"claude"}})
 	if err != nil {

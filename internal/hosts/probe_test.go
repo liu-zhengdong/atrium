@@ -103,7 +103,7 @@ func TestAgentProbeRoute(t *testing.T) {
 		t.Fatalf("%+v %v", marks, err)
 	}
 	if c, err := Pick(ctx, g.env, Need{Tool: "codex"}, host); err != nil || c.Kind != "refuse" ||
-		!strings.Contains(c.Reason, "自检 codex --version 退出码 1，自检跑通后自动解除") {
+		!strings.Contains(c.Reason, "自检 codex --version 退出码 1，修好后自检跑通自动解除") {
 		t.Fatalf("%+v %v", c, err)
 	}
 	report(nil)

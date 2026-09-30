@@ -217,6 +217,10 @@ func TestSummary(t *testing.T) {
 	if s := Summary(Row{Kind: TaskAssigned, Body: []byte(`{"title":"拆活派活","tell":"也要改网页"}`)}); s != "交给你拆的「拆活派活」有补充：也要改网页" {
 		t.Errorf("带补充的 TaskAssigned Summary = %q", s)
 	}
+	body, _ = json.Marshal(map[string]any{"target": "kimi@h3", "reason": "没登录", "next": "登录或装好运行环境后 atrium workers edit --clear kimi@h3"})
+	if s := Summary(Row{Kind: WorkerDown, Body: body}); s != "kimi@h3 不可用：没登录 · 登录或装好运行环境后 atrium workers edit --clear kimi@h3" {
+		t.Errorf("WorkerDown Summary = %q", s)
+	}
 	if l := Line(Row{ID: 7, Task: "t2", Kind: "x", Count: 3}); l != "#7 t2 x （合并 3 次）" {
 		t.Errorf("Line = %q", l)
 	}

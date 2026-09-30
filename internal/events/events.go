@@ -32,6 +32,7 @@ const (
 	ChoiceOpen   = "choice.open"   // 有选项单等用户拍板（org/agenda 发，投秘书）；Body: {"choice","title"}
 	OnlineFailed = "online.failed" // 自升级失败（release 发，投秘书；同一版本本进程只发一次）；Body: {"from","to","error"}
 	LimitFull    = "limit.full"    // 刚到或超了上限（watch 巡检发）；Body: {"key","what","used","max","unit","fix","next","text"}
+	WorkerDown   = "worker.down"   // 新出现一条等人处理的执行者不可用标记（workers 发，投秘书，要处理，去重键按「工具[+模型]@机器」）；Body: {"target","reason","next"}
 )
 
 // 级别。

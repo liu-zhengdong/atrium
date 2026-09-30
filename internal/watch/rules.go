@@ -80,8 +80,10 @@ type Facts struct {
 	Owner        string            // 所属部门往上最近的负责人，没有是 secretary
 	Acceptor     string            // 等验收时部门的验收人（org.AcceptLeader、org.AcceptUser）；别的阶段不取
 	Deps         []ledger.DepState // 依赖（待派、排队的任务才取）
+	DepEnded     map[string]int64  // 已结束的依赖各自结束的时刻（待派的任务才取）
 	OpenChildren int               // 没结束的子任务（待派的任务才取）
 	Children     int               // 全部子任务（待派的任务才取）
+	ChildEnded   int64             // 子任务里最晚结束的时刻（待派且子任务都结束了才取）
 	Proc         *Proc             // 与当前阶段对应的在跑进程；没有为 nil
 	ProgressAt   int64             // 进程最近一次有进展；0 表示拉起后还没有
 }
@@ -98,6 +100,7 @@ func HolderOf(f Facts) Holder {
 		// 草稿不在谁手里：不计时、不叫醒，想清楚了由人转待派。
 		return Holder{Kind: "draft", Text: "草稿：还没想清楚，不派活、不计时", Next: "atrium task set " + t.ID + " --status todo"}
 	case ledger.Todo:
+		owner.Since = leaderSince(f, broken)
 		if len(broken) > 0 {
 			// 依赖等不到了：不会自己好，归负责人计时，改依赖或取消（不自动改写依赖）。
 			var keep []string
@@ -177,6 +180,26 @@ func HolderOf(f Facts) Holder {
 			Next: "atrium update"}
 	}
 	return Holder{Kind: "runtime", Who: "运行时", Text: string(t.Status) + "/" + string(t.Stage)}
+}
+
+// leaderSince 是待派任务归负责人时的计时起点：它开始要负责人处理的那一刻。依赖断了从最早断的那个算，
+// 待派活、等收尾从最后一个结束的依赖或子任务算；都早于任务自己最近的改动时按改动时刻算。
+// 只按任务的 updated_at 算的话，久放的待派任务依赖一断就已过两倍时限，负责人还没被叫醒就上交了。
+func leaderSince(f Facts, broken []ledger.DepState) int64 {
+	var at int64
+	if len(broken) > 0 {
+		for _, d := range broken {
+			if e := f.DepEnded[d.ID]; e > 0 && (at == 0 || e < at) {
+				at = e
+			}
+		}
+	} else {
+		for _, e := range f.DepEnded {
+			at = max(at, e)
+		}
+		at = max(at, f.ChildEnded)
+	}
+	return max(f.Task.UpdatedAt, at)
 }
 
 // kindOf：aN 是负责人，其余（secretary）归秘书。

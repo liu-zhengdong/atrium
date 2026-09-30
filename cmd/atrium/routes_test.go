@@ -45,6 +45,7 @@ func TestLeaderRulesCoverRealRoutes(t *testing.T) {
 		"POST /api/org/{id}/points":           leaders.RuleDeptRef,
 		"PATCH /api/points/{id}":              leaders.RulePointRef,
 		"POST /api/materials":                 leaders.RuleBodyDept,
+		"POST /api/materials/{id}/revs":       leaders.RuleMaterialRef,
 		"POST /api/materials/{id}/archive":    leaders.RuleMaterialRef,
 		"POST /api/schedules":                 leaders.RuleBodyDept,
 		"POST /api/schedules/{id}/run":        leaders.RuleScheduleRef,
@@ -80,7 +81,7 @@ func TestLeaderRulesCoverRealRoutes(t *testing.T) {
 		}
 		seen[p] = true
 		// 执行者令牌的写接口只有加资料（dispatch.WorkerRule）：新加的写接口一律拒绝它。
-		if got := dispatch.WorkerRule(p); (got == dispatch.WorkerMaterial) != (p == "POST /api/materials") || (got == dispatch.WorkerRead) {
+		if got := dispatch.WorkerRule(p); (got == dispatch.WorkerMaterial) != (p == "POST /api/materials" || p == "POST /api/materials/{id}/revs") || (got == dispatch.WorkerRead) {
 			t.Errorf("%s：执行者令牌的规则 %d 不对", p, got)
 		}
 		w, ok := want[p]

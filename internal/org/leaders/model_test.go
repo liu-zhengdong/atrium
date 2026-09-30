@@ -89,6 +89,7 @@ func TestRuleFor(t *testing.T) {
 		"PATCH /api/points/{id}":            RulePointRef,
 		"POST /api/materials":               RuleBodyDept,
 		"POST /api/materials/{id}/archive":  RuleMaterialRef,
+		"POST /api/materials/{id}/revs":     RuleMaterialRef,
 		"POST /api/schedules":               RuleBodyDept,
 		"DELETE /api/schedules/{id}":        RuleScheduleRef,
 		"PUT /api/memo":                     RuleMemo,

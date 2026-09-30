@@ -217,7 +217,7 @@ out=$(json skill ls fix-bug); has '.result.others == ["refs/a.md"] and (.result.
 printf '部门是什么' >"$work/overview.md"; printf 'abc' >"$work/detail.md"
 out=$(json material add o2 "$work/overview.md" --overview --note 总览); has '.result.id == "m1" and .result.kind == "overview"'
 out=$(json material add o2 "$work/detail.md" --note 细节); has '.result.id == "m2"'
-out=$(json material add o2 "$work/detail.md"); has '.result.id == "m2" and .result.rev == 2 and .result.note == "细节"'
+out=$(json material add m2 "$work/detail.md"); has '.result.id == "m2" and .result.rev == 2 and .result.note == "细节"'
 out=$(json material ls m1); has '(.result.content|@base64d) == "部门是什么"'
 [ "$("$bin" material ls m2)" = abc ] || fail "material ls mN 应输出原文"
 # 一个目录是一条资料：report.md 是正文，图片按相对路径跟着

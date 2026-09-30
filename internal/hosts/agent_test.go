@@ -48,6 +48,17 @@ func TestMain(m *testing.M) {
 		time.Sleep(3 * time.Second)
 		fmt.Println("醒")
 		os.Exit(0)
+	case "gate":
+		fmt.Println("睡")
+		deadline := time.Now().Add(time.Minute)
+		for time.Now().Before(deadline) {
+			if _, err := os.Stat(os.Getenv("HOSTS_FAKE_RELEASE")); err == nil {
+				fmt.Println("醒")
+				os.Exit(0)
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		os.Exit(1)
 	case "forever":
 		fmt.Println("不停")
 		time.Sleep(time.Minute)
@@ -74,13 +85,16 @@ func (f fakeAdapter) Spec(req workers.Request, env map[string]string) (platform.
 		return platform.Spec{}, err
 	}
 	env["HOSTS_FAKE_WORKER"] = f.mode
+	if f.mode == "gate" {
+		env["HOSTS_FAKE_RELEASE"] = req.Prompt
+	}
 	return platform.Spec{Path: exe, Dir: req.Dir, Env: env}, nil
 }
 
 func init() {
 	AdapterFor = func(tool string) (workers.Adapter, bool) {
 		switch tool {
-		case "echo", "sleep", "forever":
+		case "echo", "sleep", "forever", "gate":
 			return fakeAdapter{tool}, true
 		}
 		return nil, false

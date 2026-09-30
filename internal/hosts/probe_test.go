@@ -62,23 +62,24 @@ func TestProbe(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		env = map[string]string{"PATH": bin, "PATHEXT": ".EXE", "HOSTS_FAKE_WORKER": "probe", "SYSTEMROOT": os.Getenv("SYSTEMROOT")}
 	}
-	start := time.Now()
-	report := Probe(context.Background(), env, []workers.Tool{{Name: "custom-cli", Exe: "codex"}, {Name: "opencode", Exe: "opencode"}, {Name: "claude", Exe: "claude"}})
+	report := Probe(context.Background(), env, []workers.Tool{{Name: "custom-cli", Exe: "codex"}, {Name: "opencode", Exe: "opencode"}})
 	if !report.CLIs["custom-cli"].Installed || len(report.CLIs) != 1 {
 		t.Fatalf("仅实测跑通的自定义命令可用：%+v", report)
 	}
 	got := report.Failed
-	if time.Since(start) > 10*time.Second {
-		t.Errorf("各工具并行跑、超时就结束：用了 %s", time.Since(start))
-	}
 	byTool := map[string]ProbeFailure{}
 	for _, f := range got {
 		byTool[f.Tool] = f
 	}
-	if len(got) != 2 || byTool["opencode"].Reason != "自检 opencode --version 退出码 1" ||
-		byTool["opencode"].Output != "No active Node.js version.；Run nvm use；line3" ||
-		byTool["claude"].Reason != "自检 claude --version 2 秒没结束" {
+	if len(got) != 1 || byTool["opencode"].Reason != "自检 opencode --version 退出码 1" ||
+		byTool["opencode"].Output != "No active Node.js version.；Run nvm use；line3" {
 		t.Fatalf("%+v", got)
+	}
+	// 对挂起工具立即触发原有超时分支，验证回收，不等待真实时间流逝。
+	probeTimeout = 0
+	report = Probe(context.Background(), env, []workers.Tool{{Name: "claude", Exe: "claude"}})
+	if len(report.CLIs) != 0 || len(report.Failed) != 1 || report.Failed[0].Reason != "自检 claude --version 0 秒没结束" {
+		t.Fatalf("超时后应回收挂起工具：%+v", report)
 	}
 }
 

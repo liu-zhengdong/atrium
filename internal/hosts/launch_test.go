@@ -14,22 +14,22 @@ func TestHelloDuringLaunch(t *testing.T) {
 	for _, cancelLaunch := range []bool{false, true} {
 		t.Run(map[bool]string{false: "回执", true: "取消"}[cancelLaunch], func(t *testing.T) {
 			g := newRig(t)
-			a, stop, done := g.agent(t.TempDir())
-			stop()
-			<-done
+			// 本用例只模拟 hello 与拉起回执，不启动代理轮询；停客户端并不
+			// 保证服务端的长轮询已退出，它可能抢走下面测试要领取的指令。
+			cfg := g.join(t.TempDir())
 			g.task("t1")
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			result := make(chan error, 1)
 			go func() {
-				_, _, _, err := Launch(ctx, g.env, a.Cfg.Host, Assignment{Task: "t1", Log: filepath.Join(t.TempDir(), "run.log")})
+				_, _, _, err := Launch(ctx, g.env, cfg.Host, Assignment{Task: "t1", Log: filepath.Join(t.TempDir(), "run.log")})
 				result <- err
 			}()
-			commands := theHub.take(ctx, a.Cfg.Host, 5*time.Second)
+			commands := theHub.take(ctx, cfg.Host, 5*time.Second)
 			if len(commands) != 1 {
 				t.Fatalf("指令：%+v", commands)
 			}
-			client := &api.Client{Base: g.server.URL, Token: a.Cfg.Token}
+			client := &api.Client{Base: g.server.URL, Token: cfg.Token}
 			if err := client.Do(ctx, "POST", "/api/agent/hello", map[string]any{"runs": []AgentRun{}}, nil); err != nil {
 				t.Fatal(err)
 			}

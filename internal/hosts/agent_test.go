@@ -124,19 +124,26 @@ func (g *rig) task(id string) {
 
 // agent 登记一台、接入、跑代理；返回代理与停下它的函数。
 func (g *rig) agent(dir string) (*Agent, context.CancelFunc, chan error) {
+	g.join(dir)
+	return g.start(dir)
+}
+
+// join 只登记与接入；模拟 hello/回执的测试不需要启动代理轮询。
+func (g *rig) join(dir string) AgentConfig {
 	var add AddResult
 	if err := g.user.Do(context.Background(), "POST", "/api/hosts", AddInput{Name: "远程", Repos: []string{"*"}}, &add); err != nil {
 		g.t.Fatal(err)
 	}
 	code := add.Code
-	if _, err := JoinServer(context.Background(), dir, g.server.URL, code, platform.EnvMap(os.Environ())); err != nil {
+	cfg, err := JoinServer(context.Background(), dir, g.server.URL, code, platform.EnvMap(os.Environ()))
+	if err != nil {
 		g.t.Fatal(err)
 	}
 	// 接入码只能用一次。
 	if _, err := JoinServer(context.Background(), t2(g.t), g.server.URL, code, nil); err == nil {
 		g.t.Fatal("接入码用第二次应被拒")
 	}
-	return g.start(dir)
+	return cfg
 }
 
 func t2(t *testing.T) string { return t.TempDir() }

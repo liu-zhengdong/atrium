@@ -389,6 +389,11 @@ func (a *Agent) launch(ctx context.Context, as Assignment) (int, string, error) 
 	platform.SelfOnPath(env)
 	req := as.Request
 	req.Task, req.Dir = as.Task, cwd
+	// 服务传来的 PromptFile 是另一台机器上的路径；代理写下本轮说明供 stdin 和文件参数读取。
+	req.PromptFile = filepath.Join(taskDir, fmt.Sprintf("prompt-%d.md", as.Run))
+	if err := os.WriteFile(req.PromptFile, []byte(req.Prompt), 0o600); err != nil {
+		return 0, "", err
+	}
 	spec, err := adapter.Spec(req, env)
 	if err != nil {
 		return 0, "", err

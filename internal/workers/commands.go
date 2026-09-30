@@ -398,9 +398,6 @@ func showCmd(c *cli.Ctx, name string) error {
 	if r.Rules.Checks != nil {
 		fmt.Fprintf(&b, "checks：%s\n", strings.Join(r.Rules.Checks, "、"))
 	}
-	if len(r.Rules.Limits) > 0 {
-		fmt.Fprintf(&b, "limits：%v\n", r.Rules.Limits)
-	}
 	if r.Rules.Endpoint != "" {
 		fmt.Fprintf(&b, "端点：%s（%s）\n", r.Rules.Endpoint, r.Rules.EndpointAPI)
 	}

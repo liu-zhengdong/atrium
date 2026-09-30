@@ -244,6 +244,7 @@ func TestProfileEdit(t *testing.T) {
 	}{
 		{"harness/claude", Edit{Set: map[string]string{"trust": "super"}}, "trust 只能是"},
 		{"harness/claude", Edit{Set: map[string]string{"colour": "red"}}, "规则写得不对"},
+		{"harness/claude", Edit{Set: map[string]string{"limits": "{max_tasks: 1}"}}, "field limits not found"},
 		{"models/opus", Edit{Set: map[string]string{"protocol": "cli", "command": "x"}}, "只能写在 harness 层"},
 		{"harness/nope", Edit{Set: map[string]string{"trust": "low"}}, "不是内置工具"},
 		{"harness/claude", Edit{Set: map[string]string{"endpoint": "ftp://x", "endpoint_api": "openai"}}, "http(s)"},

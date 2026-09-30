@@ -148,7 +148,7 @@ type Module struct {
 
 ### 分派任务与执行者（`internal/dispatch`、`internal/workers`）
 
-- 执行者标识 `工具[+模型][:强度]`；`workers.Resolve(ctx, q, id)` → 三层叠加后的规则（trust、max_risk、checks、limits、model、端点、计费、用量字段）与正文。交付检查、审阅判执行者用它，不直接读 `worker_profiles`。
+- 执行者标识 `工具[+模型][:强度]`；`workers.Resolve(ctx, q, id)` → 三层叠加后的规则（trust、max_risk、checks、model、端点、计费、用量字段）与正文。交付检查、审阅判执行者用它，不直接读 `worker_profiles`。
 - 计费规则只在档案：`billing: metered | subscription`；`prices` 含 `currency`（三位大写货币代码）、`input`、`output`、`cache_read`、`cache_write`（每百万 token 单价，可缺项；价格整项覆盖）。计费方式可以在 harness，模型单价在 models，组合差异在 combos。未设置方式的工具金额标「计费方式未设置」，不归到按量或订阅。
 - 用量：内置工具由各自 reader 解析到 `Trace.Usage`；通用命令行执行者在档案写 `usage`（事件 `type` 与点分字段路径），`ExtractUsage` 从日志取读数，不按工具写特判。普通输入不包含缓存读写，输出包含推理 token（工具已包含的不重复计）；工具的 input 含缓存读的（OpenAI 口径，如 trae）在 `usage` 写 `input_includes_cache_read: true`，取数时扣掉。dispatch 在退出经历 `workers.Exit.Usage` 保存当次读数与结算结果；工具非零金额优先，零金额视为没报。工具不报时按单价估算能算的类别：读不到 token、或有 token 没单价的类别记进 `Usage.Missing`，显示「估算，未含…」；token 与单价都没有的类别当作这个执行者没有；一类都算不进不估算；缺读数为 null，不按字数推 token。订阅显示「折合」、按量显示「花费」，按方式与货币分别统计近 `StatWindow` 次有结果拉起的合计、中位和有效读数次数；无金额只显示 token。不自动回填历史、不换汇。Claude 续接花费扣同会话前次日志累计值，基线缺失则工具花费读不到。展示只读保存的退出结果，不因改档案或日志自动重算；改了 `usage` 或单价要补算历史，用 `workers edit --recount tN`（`workers.Recount`：按当前档案从日志重算，覆盖这件任务各退出记录里的结算结果，每次记一条 `recount` 经历留下旧值；日志不在就报错不动）。
 - 拉起记录：任务经历 kind `launch`（`workers.Run`：第几次、缘由、执行者、机器、pid、工作目录、日志、风险）；`workers.LastRun` 读。另按 gates 的约定记 `risk`（入队）、`worktree`（拉起）、`result`（退出，最后回复），并 `watch.Track`。退出时（含 watch 转失败后的 `Requeue`）记 `exit`（`workers.Exit`：这次拉起的结果，`workers.OutcomeOf` 按退出信号判）；`workers.Stats` 从 launch、exit、exit_ok／exit_fail、bounce 数每次拉起的结果（之后被交回的记被交回）。

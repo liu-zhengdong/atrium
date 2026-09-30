@@ -144,20 +144,23 @@ func Lines(builtin map[string]Line, oq []Pace) []Line {
 // Spare 是给分派任务的一个账号的额度判定。
 type Spare struct {
 	Account string `json:"account"`
-	// Percent 是富余：周期已过 − 已用，就是 atrium quota 显示的那个数（PaceOf 算）；算不出为空。分派任务按它排先后。
+	// Percent 是富余：周期已过 − 已用；零用量且缺周期进度按 0，其他算不出为空。分派任务按它排先后。
 	Percent *float64 `json:"percent,omitempty"`
 	Stale   bool     `json:"stale"` // 读数超过 10 分钟
 	// Stop 是不该再派的原因：已用到给用户留的份额（周窗与短窗取紧的）；能派为空。
 	Stop string `json:"stop,omitempty"`
 }
 
-// SpareOf 判一个账号的富余与能不能派（纯函数）。富余不另算，直接取 quota 一览的同一行。
+// SpareOf 判一个账号的富余与能不能派（纯函数）。优先取来源富余；零用量且缺周期进度按刚开始的窗口处理。
 func SpareOf(l Line, reserve int) Spare {
 	s := Spare{Account: l.Account, Percent: l.SparePercent, Stale: l.Stale}
 	if l.UsedPercent == nil {
 		return s
 	}
 	used := *l.UsedPercent
+	if s.Percent == nil && l.ElapsedPct == nil && used == 0 {
+		s.Percent = ptr(0)
+	}
 	if l.ShortUsedPct != nil && *l.ShortUsedPct >= 100 {
 		used = 100
 	}

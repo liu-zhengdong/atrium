@@ -63,6 +63,37 @@ func readClaude(p *Parser, e event, _ string) bool {
 
 var exitCodeRE = regexp.MustCompile(`^Exit code (\d+)`)
 
+// grok --output-format streaming-messages-json：整条 assistant/user/result 与 Claude 同形。
+// 只接受下列事件；工具名称不同，终端调用转换为共用解析器的命令步骤。
+func readGrok(p *Parser, e event, line string) bool {
+	switch e.str("type") {
+	case "system":
+		if e.str("subtype") != "init" {
+			return false
+		}
+	case "assistant":
+		content, _ := e.obj("message")["content"].([]any)
+		for _, c := range content {
+			m := event(asMap(c))
+			switch m.str("type") {
+			case "text", "thinking":
+			case "tool_use":
+				if m.str("name") == "run_terminal_command" {
+					m["name"] = "Bash"
+				}
+			default:
+				return false
+			}
+		}
+	case "user", "result":
+	case "stream_event": // --include-partial-messages 的增量；整条消息负责显示。
+		return true
+	default:
+		return false
+	}
+	return readClaude(p, e, line)
+}
+
 // codex exec --json：item 是一项（agent_message 是它说的话，命令、改文件、MCP、搜索是调用），turn.completed 收尾（总结是最后一句话）。
 func readCodex(p *Parser, e event, line string) bool {
 	switch e.str("type") {

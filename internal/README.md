@@ -139,7 +139,7 @@ type Module struct {
 - 关卡（gates）：没有仓库也没有工作地点的任务读工作目录根的 `choice.json`（远程经代理），关卡用 `agenda.ParseChoice` 核对（不合法按关卡不过交回），落地时 `agenda.Settle(ctx, db, task, raw)` 登记成选项单。
 - 验收人：`org.Acceptor(ctx, q, dept)` → `auto`／`leader`／`user` 与设它的部门；`org.MayAccept(actor, who)`：用户与秘书都能判，负责人不能代用户验收。
 - 负责人的执行者组合与 `task run --worker` 同一种写法；登记时经 `org.CheckWorker`（workers 接上的 `Resolve`）核对。
-- dispatch 装配时设 `agenda.Enqueue = func(ctx, env, task, actor) error`（即 task run）；周期任务每轮建任务后调它。
+- dispatch 装配时设 `agenda.Enqueue = func(ctx, env, task, actor) error`（即 task run）；周期任务每轮建任务后调它。挑机器时经 `agenda.LocalOnly(ctx, q, task)` 判这一轮能不能派远程（体验巡检要开只读网页，只派本机）。
 
 ### 派活与执行者（`internal/dispatch`、`internal/workers`）
 

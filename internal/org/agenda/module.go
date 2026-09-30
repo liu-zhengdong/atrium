@@ -299,7 +299,7 @@ func Commands(t *cli.Table) {
 		Flags: []cli.Flag{
 			{Name: "every", Value: "周期", Help: "7d、1d、12h、2w（至少 1h）"},
 			{Name: "at", Value: "HH:MM", Help: "本机钟点（只给整天的周期）"},
-			{Name: "kind", Value: "种类", Help: "task 自定义（缺省）/ patrol 体验巡检 / research 调研（写 choice.json 出选项单）"},
+			{Name: "kind", Value: "种类", Help: "task 自定义（缺省）/ patrol 体验巡检（每轮只派本机）/ research 调研（写 choice.json 出选项单）"},
 			{Name: "detail", Value: "文字", Help: "每轮任务的详述"},
 			{Name: "skill", Value: "名字", Help: "每轮任务用的技能"},
 		},

@@ -213,7 +213,11 @@ func (d *dispatcher) try(ctx context.Context, it item) error {
 	if err != nil || wait {
 		return err
 	}
-	choice, err := pickHost(ctx, d.env, hostNeed(ctx, w.Spec, t), it.Opts.Host)
+	need, err := hostNeed(ctx, d.env.DB, w.Spec, t)
+	if err != nil {
+		return err
+	}
+	choice, err := pickHost(ctx, d.env, need, it.Opts.Host)
 	if err != nil {
 		return err
 	}
@@ -938,7 +942,10 @@ func markUnavailable(ctx context.Context, db *store.DB, run workers.Run, sig wor
 
 // switchHost 给换上的执行者挑机器：上一轮那台能接就留在那台（工作目录在那里），否则另挑；都接不了报冲突。
 func (d *dispatcher) switchHost(ctx context.Context, t ledger.Task, w workers.Spec, prev string) (string, error) {
-	need := hostNeed(ctx, w, t)
+	need, err := hostNeed(ctx, d.env.DB, w, t)
+	if err != nil {
+		return "", err
+	}
 	c, err := pickHost(ctx, d.env, need, prev)
 	if err != nil || c.Kind == "run" {
 		return c.Host, err

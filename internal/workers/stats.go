@@ -58,30 +58,43 @@ func Failed(out string) bool { return out == OutQuota || out == OutSetup || out 
 
 // Attempt 是一次拉起及其结果。
 type Attempt struct {
-	Task    string `json:"task"`
-	N       int    `json:"n"`
-	Worker  string `json:"worker"`          // 当时的执行者标识（含强度）
-	Model   string `json:"model,omitempty"` // 工具报的实际模型
-	Host    string `json:"host"`
-	Outcome string `json:"outcome"` // 空：还在跑，或被人停下、取消（不计）
-	Reason  string `json:"reason,omitempty"`
-	At      int64  `json:"at"`
+	Task       string `json:"task"`
+	N          int    `json:"n"`
+	Worker     string `json:"worker"`          // 当时的执行者标识（含强度）
+	Model      string `json:"model,omitempty"` // 工具报的实际模型
+	Host       string `json:"host"`
+	Outcome    string `json:"outcome"` // 空：还在跑，或被人停下、取消（不计）
+	Reason     string `json:"reason,omitempty"`
+	At         int64  `json:"at"`
+	DurationMS *int64 `json:"duration_ms"` // launch 到退出经历；缺失或时间倒置为空
 }
 
-// Stat 是一个组合近几次有结果的拉起按结果数。
+// Stat 是一个组合近几次有结果的拉起的结果数与用时。
 type Stat struct {
-	Launches int `json:"launches"`
-	OK       int `json:"ok"`
-	Bounce   int `json:"bounce"`
-	Quota    int `json:"quota"`
-	Setup    int `json:"setup"`
-	Fail     int `json:"fail"`
+	Launches int    `json:"launches"`
+	OK       int    `json:"ok"`
+	Bounce   int    `json:"bounce"`
+	Quota    int    `json:"quota"`
+	Setup    int    `json:"setup"`
+	Fail     int    `json:"fail"`
+	MedianMS *int64 `json:"median_ms"` // 排除启动失败的中位数
+	MaxMS    *int64 `json:"max_ms"`    // 所有有效用时中的最长
 }
 
-// Count 数 ls 里各结果几次（纯函数）。
+// Count 汇总结果数与用时（纯函数）；启动失败不进入中位数，最长保留所有有效用时。
 func Count(ls []Attempt) Stat {
 	s := Stat{Launches: len(ls)}
+	var durations []int64
 	for _, l := range ls {
+		if l.Outcome != "" && l.DurationMS != nil {
+			d := *l.DurationMS
+			if s.MaxMS == nil || d > *s.MaxMS {
+				s.MaxMS = &d
+			}
+			if !Failed(l.Outcome) {
+				durations = append(durations, d)
+			}
+		}
 		switch l.Outcome {
 		case OutOK:
 			s.OK++
@@ -95,14 +108,15 @@ func Count(ls []Attempt) Stat {
 			s.Fail++
 		}
 	}
+	s.MedianMS = median(durations)
 	return s
 }
 
 func (s Stat) String() string {
 	if s.Launches == 0 {
-		return "还没有拉起记录"
+		return "还没有拉起记录 · " + s.Timing()
 	}
-	return fmt.Sprintf("近 %d 次拉起：交付 %d · 被交回 %d · 额度 %d · 起不来 %d · 其他失败 %d", s.Launches, s.OK, s.Bounce, s.Quota, s.Setup, s.Fail)
+	return fmt.Sprintf("近 %d 次拉起：交付 %d · 被交回 %d · 额度 %d · 起不来 %d · 其他失败 %d", s.Launches, s.OK, s.Bounce, s.Quota, s.Setup, s.Fail) + " · " + s.Timing()
 }
 
 // Fails 数最近 n 次有结果的拉起里启动失败几次（纯函数，ls 新的在前）。
@@ -129,6 +143,7 @@ func Combo(worker string) string {
 type Event struct {
 	Kind string
 	Body string
+	At   int64
 }
 
 // Settle 把一件任务的经历（时间正序，只含 launch、exit、exit_ok、exit_fail、bounce）判成每次拉起的结果（纯函数）：
@@ -147,6 +162,13 @@ func Settle(task string, evs []Event) ([]Attempt, error) {
 				break
 			}
 		}
+		result := exit
+		if result == nil {
+			result = ended
+		}
+		if result != nil {
+			cur.DurationMS = elapsed(cur.At, result.At)
+		}
 		if exit != nil {
 			cur.Model = exit.Model
 		}
@@ -160,7 +182,7 @@ func Settle(task string, evs []Event) ([]Attempt, error) {
 			if err := json.Unmarshal([]byte(e.Body), &r); err != nil {
 				return nil, fmt.Errorf("任务 %s 的拉起记录坏了：%w", task, err)
 			}
-			cur = &Attempt{Task: task, N: r.N, Worker: r.Worker, Host: r.Host, At: r.At}
+			cur = &Attempt{Task: task, N: r.N, Worker: r.Worker, Host: r.Host, At: e.At}
 			bounce, exit, ended = nil, nil, nil
 		case ExitKind:
 			var x Exit
@@ -168,7 +190,7 @@ func Settle(task string, evs []Event) ([]Attempt, error) {
 				return nil, fmt.Errorf("任务 %s 的退出记录坏了：%w", task, err)
 			}
 			if exit == nil {
-				exit = &Attempt{Outcome: x.Outcome, Reason: x.Reason, Model: x.Model}
+				exit = &Attempt{Outcome: x.Outcome, Reason: x.Reason, Model: x.Model, At: e.At}
 			}
 		case "exit_ok", "exit_fail", "bounce":
 			var b struct {
@@ -183,9 +205,13 @@ func Settle(task string, evs []Event) ([]Attempt, error) {
 					bounce = &Attempt{Outcome: OutBounce, Reason: b.Note}
 				}
 			case "exit_ok":
-				ended = &Attempt{Outcome: OutOK, Reason: b.Note}
+				if ended == nil {
+					ended = &Attempt{Outcome: OutOK, Reason: b.Note, At: e.At}
+				}
 			default:
-				ended = &Attempt{Outcome: OutFail, Reason: b.Note}
+				if ended == nil {
+					ended = &Attempt{Outcome: OutFail, Reason: b.Note, At: e.At}
+				}
 			}
 		}
 	}
@@ -198,7 +224,7 @@ const statScan = 20000
 
 // Stats 是各「工具+模型」近 StatWindow 次有结果的拉起（新的在前）。
 func Stats(ctx context.Context, q store.Querier) (map[string][]Attempt, error) {
-	rows, err := q.QueryContext(ctx, `SELECT task, kind, body FROM task_events
+	rows, err := q.QueryContext(ctx, `SELECT task, kind, body, at FROM task_events
 		WHERE kind IN (?, ?, 'exit_ok', 'exit_fail', 'bounce') ORDER BY id DESC LIMIT ?`, RunKind, ExitKind, statScan)
 	if err != nil {
 		return nil, err
@@ -209,7 +235,7 @@ func Stats(ctx context.Context, q store.Querier) (map[string][]Attempt, error) {
 	for rows.Next() {
 		var task string
 		var e Event
-		if err := rows.Scan(&task, &e.Kind, &e.Body); err != nil {
+		if err := rows.Scan(&task, &e.Kind, &e.Body, &e.At); err != nil {
 			return nil, err
 		}
 		if _, ok := byTask[task]; !ok {

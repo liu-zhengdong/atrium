@@ -346,7 +346,7 @@ func showCmd(c *cli.Ctx, name string) error {
 		if a.Model != "" {
 			fmt.Fprintf(&b, "（%s）", a.Model)
 		}
-		fmt.Fprintf(&b, "  %s", OutText(a.Outcome))
+		fmt.Fprintf(&b, "  %s · 用时 %s", OutText(a.Outcome), DurationText(a.DurationMS))
 		if a.Reason != "" && a.Outcome != OutOK {
 			fmt.Fprintf(&b, "：%s", clipRunes(oneLine(a.Reason), 80))
 		}

@@ -58,6 +58,8 @@ func TestStats(t *testing.T) {
 		at++
 		raw, _ := json.Marshal(Run{N: n, Worker: worker, Host: "h0", At: at})
 		must(ledger.Record(ctx, db, id, RunKind, "runtime", string(raw)))
+		_, err := db.ExecContext(ctx, `UPDATE task_events SET at = ? WHERE id = (SELECT MAX(id) FROM task_events WHERE task = ? AND kind = ?)`, at, id, RunKind)
+		must(err)
 	}
 	exit := func(id string, n int, out string) {
 		t.Helper()
@@ -103,6 +105,9 @@ func TestStats(t *testing.T) {
 	raw, _ := json.Marshal(Exit{N: 1, Model: "gpt-6.1-sol", Outcome: OutOK})
 	must(ledger.Record(ctx, db, t5, ExitKind, "runtime", string(raw)))
 
+	// 这组验证结果归属与排序；缺失退出时间时，用时应保持空。
+	_, err = db.ExecContext(ctx, `UPDATE task_events SET at = 0 WHERE kind IN ('exit', 'exit_ok', 'exit_fail')`)
+	must(err)
 	stats, err := Stats(ctx, db)
 	must(err)
 	outs := func(k string) []string {

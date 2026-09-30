@@ -166,7 +166,7 @@ func EnvKey(goos, key string) string {
 }
 
 var (
-	systemEnv  = set("PATH", "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "LANG", "TZ", "TERM")
+	systemEnv  = set("PATH", "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "LANG", "TZ", "TERM", "GOFLAGS")
 	networkEnv = set("HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "ALL_PROXY",
 		"http_proxy", "https_proxy", "no_proxy", "all_proxy", "SSL_CERT_FILE")
 	windowsEnv = set("SYSTEMROOT", "SYSTEMDRIVE", "WINDIR", "COMSPEC", "PATHEXT", "TEMP", "TMP",
@@ -181,7 +181,7 @@ func baseAllowed(goos, name string) bool {
 		(goos == "windows" && windowsEnv[name])
 }
 
-// ServiceEnv 过滤出服务进程的环境：系统基本、代理出网、ATRIUM_*（端口、数据目录）。
+// ServiceEnv 过滤出服务进程的环境：系统基本、Go 编译选项、代理出网、ATRIUM_*（端口、数据目录）。
 // dropped 是被丢掉的凭据/身份类变量名（只报名字），供 start 回执提示。
 func ServiceEnv(goos string, base map[string]string) (env map[string]string, dropped []string) {
 	env = map[string]string{}
@@ -197,7 +197,7 @@ func ServiceEnv(goos string, base map[string]string) (env map[string]string, dro
 	return env, dropped
 }
 
-// WorkerEnv 是执行者进程的环境：只有系统基本与代理出网，不传 ATRIUM_*（执行者不该连到派它的服务）、
+// WorkerEnv 是执行者进程的环境：系统基本、Go 编译选项与代理出网，不传 ATRIUM_*（执行者不该连到派它的服务）、
 // 凭据与身份类变量；固定加非交互标记与 ATRIUM_WORKER=1（命令行据此拒绝操作用户的服务）。
 // 任务声明的凭据由调用方在此之后逐个注入。
 func WorkerEnv(goos string, base map[string]string) map[string]string {
@@ -207,6 +207,8 @@ func WorkerEnv(goos string, base map[string]string) map[string]string {
 			env[name] = v
 		}
 	}
+	// 各工作树共用编译缓存；保留用户选项，再追加路径无关的编译规则。
+	env["GOFLAGS"] = strings.TrimSpace(env["GOFLAGS"] + " -trimpath")
 	env["NO_COLOR"] = "1"
 	env["GIT_PAGER"] = "cat"
 	env["PAGER"] = "cat"

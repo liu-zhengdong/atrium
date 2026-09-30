@@ -76,10 +76,42 @@ func TestWorkerEnv(t *testing.T) {
 	})
 	want := map[string]string{
 		"PATH": "/bin", "TERM": "xterm", "NO_COLOR": "1", "GIT_PAGER": "cat", "PAGER": "cat",
-		"GH_PROMPT_DISABLED": "1", "ATRIUM_WORKER": "1",
+		"GH_PROMPT_DISABLED": "1", "ATRIUM_WORKER": "1", "GOFLAGS": "-trimpath",
 	}
 	if !reflect.DeepEqual(env, want) {
 		t.Errorf("got %v", env)
+	}
+}
+
+func TestGoFlagsThroughServiceAndWorker(t *testing.T) {
+	for _, goos := range []string{"darwin", "linux", "windows"} {
+		for _, flags := range []string{"", "-mod=readonly -p=2", `-ldflags='-X main.name=hello world'`, "-trimpath=false"} {
+			t.Run(goos+"/"+flags, func(t *testing.T) {
+				key := "GOFLAGS"
+				if goos == "windows" {
+					key = "GoFlags"
+				}
+				base := map[string]string{key: flags, "OPENAI_API_KEY": "secret"}
+				service, _ := ServiceEnv(goos, base)
+				if service["GOFLAGS"] != flags {
+					t.Fatalf("服务丢失 Go 选项：%q", service["GOFLAGS"])
+				}
+				// 本机经服务环境，远程代理也可直接用机器环境；两条路径同一规则。
+				for _, input := range []map[string]string{base, service} {
+					worker := WorkerEnv(goos, input)
+					want := flags + " -trimpath"
+					if flags == "" {
+						want = "-trimpath"
+					}
+					if worker["GOFLAGS"] != want || worker["OPENAI_API_KEY"] != "" {
+						t.Fatalf("执行者选项或凭据过滤错误：%v", worker)
+					}
+				}
+				if base[key] != flags {
+					t.Fatal("修改了原环境")
+				}
+			})
+		}
 	}
 }
 

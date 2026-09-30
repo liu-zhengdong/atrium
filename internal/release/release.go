@@ -131,23 +131,12 @@ func (r *Releaser) Sweep(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	for _, t := range tasks {
+	return ledger.EachTask(ctx, r.DB, "release", tasks, func(t ledger.Task) string { return t.ID }, func(t ledger.Task) error {
 		if paused, err := gates.Paused(ctx, r.DB, r.Pause, t, ""); err != nil || paused {
-			if err != nil {
-				return err
-			}
-			continue
+			return err
 		}
-		if err := r.step(ctx, t); err != nil {
-			if ctx.Err() != nil {
-				return nil
-			}
-			if berr := gates.BlockOnError(ctx, r.DB, r.Log, t.ID, "上线", err); berr != nil {
-				return berr
-			}
-		}
-	}
-	return nil
+		return r.step(ctx, t)
+	})
 }
 
 // step：当前版本含这件任务的合入提交就冒烟、记已上线；还没有就等（30 分钟没版本由 watch 告诉负责人）。

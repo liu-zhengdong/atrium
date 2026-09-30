@@ -82,18 +82,36 @@ func Get(ctx context.Context, q store.Querier, id string) (Host, error) {
 
 // List 列出全部机器（机器数很小，仍有上限）。
 func List(ctx context.Context, q store.Querier) ([]Host, error) {
+	rows, err := hostRows(ctx, q)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Host, 0, len(rows))
+	for _, row := range rows {
+		if row.err != nil {
+			return nil, row.err
+		}
+		out = append(out, row.host)
+	}
+	return out, nil
+}
+
+type hostRow struct {
+	host Host
+	err  error
+}
+
+// hostRows 保留单条解析错误，让后台遍历能在该机器的边界处理。
+func hostRows(ctx context.Context, q store.Querier) ([]hostRow, error) {
 	rows, err := q.QueryContext(ctx, `SELECT `+hostCols+` FROM hosts ORDER BY CAST(substr(id, 2) AS INTEGER) LIMIT 500`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var out []Host
+	var out []hostRow
 	for rows.Next() {
 		h, err := scanHost(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, h)
+		out = append(out, hostRow{h, err})
 	}
 	return out, rows.Err()
 }

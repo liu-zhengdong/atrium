@@ -724,6 +724,10 @@ func reachableEdges(ctx context.Context, q store.Querier, id string) (map[string
 // Apply 是改任务状态的唯一入口：按 Transition 判定、落库、记经历、发事件、唤醒等待者。
 // note 记进经历（可空）。
 func Apply(ctx context.Context, db *store.DB, id string, ev Event, actor, note string) (Task, error) {
+	return apply(ctx, db, id, ev, actor, note, PartiesOf)
+}
+
+func apply(ctx context.Context, db *store.DB, id string, ev Event, actor, note string, parties func(context.Context, store.Querier, string) (Parties, error)) (Task, error) {
 	err := db.Tx(ctx, func(tx *sql.Tx) error {
 		t, err := Get(ctx, tx, id)
 		if err != nil {
@@ -743,7 +747,7 @@ func Apply(ctx context.Context, db *store.DB, id string, ev Event, actor, note s
 				return err
 			}
 		}
-		p, err := PartiesOf(ctx, tx, id)
+		p, err := parties(ctx, tx, id)
 		if err != nil {
 			return err
 		}

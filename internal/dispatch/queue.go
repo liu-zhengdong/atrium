@@ -50,7 +50,8 @@ func (o *Options) check() error {
 type item struct {
 	Task ledger.Task
 	Opts Options
-	Row  bool // 有队列行
+	Row  bool  // 有队列行
+	Err  error // 单件登记解析错误，留给统一遍历入口处理
 }
 
 // priorityOrder 是队列排序：优先级（紧急、修复、普通、闲时）、入队先后。
@@ -91,10 +92,10 @@ func queued(ctx context.Context, q store.Querier) ([]item, error) {
 		it := item{Task: t, Row: r.opts.Valid}
 		if r.opts.Valid && r.opts.String != "" {
 			if err := json.Unmarshal([]byte(r.opts.String), &it.Opts); err != nil {
-				return nil, err
+				it.Err = err
 			}
 		} else if last, err := workers.LastRun(ctx, q, r.id); err != nil {
-			return nil, err
+			it.Err = err
 		} else if last != nil {
 			// 交回原执行者：同一执行者、同一台机器（工作目录在那里，接不了就等或转受阻，不换机）、同样的风险与凭据。
 			it.Opts = Options{Worker: last.Worker, Risk: last.Risk, Host: last.Host, Secrets: last.Secrets}

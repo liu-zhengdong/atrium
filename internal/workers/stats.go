@@ -224,10 +224,28 @@ const statScan = 20000
 
 // Stats 是各「工具+模型」近 StatWindow 次有结果的拉起（新的在前）。
 func Stats(ctx context.Context, q store.Querier) (map[string][]Attempt, error) {
+	stats, issues, err := StatsIssues(ctx, q)
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]string, 0, len(issues))
+	for id := range issues {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	if len(ids) > 0 {
+		return nil, issues[ids[0]]
+	}
+	return stats, nil
+}
+
+// StatsIssues 返回可用统计与各自损坏的任务；共享查询失败单独返回。
+// 后台调用方把 issues 交 ledger.EachTask，读命令仍由 Stats 严格报错。
+func StatsIssues(ctx context.Context, q store.Querier) (map[string][]Attempt, map[string]error, error) {
 	rows, err := q.QueryContext(ctx, `SELECT task, kind, body, at FROM task_events
 		WHERE kind IN (?, ?, 'exit_ok', 'exit_fail', 'bounce') ORDER BY id DESC LIMIT ?`, RunKind, ExitKind, statScan)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer rows.Close()
 	byTask := map[string][]Event{}
@@ -236,7 +254,7 @@ func Stats(ctx context.Context, q store.Querier) (map[string][]Attempt, error) {
 		var task string
 		var e Event
 		if err := rows.Scan(&task, &e.Kind, &e.Body, &e.At); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		if _, ok := byTask[task]; !ok {
 			order = append(order, task)
@@ -244,8 +262,9 @@ func Stats(ctx context.Context, q store.Querier) (map[string][]Attempt, error) {
 		byTask[task] = append(byTask[task], e)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
+	issues := map[string]error{}
 	var all []Attempt
 	for _, task := range order {
 		evs := byTask[task]
@@ -254,11 +273,12 @@ func Stats(ctx context.Context, q store.Querier) (map[string][]Attempt, error) {
 		}
 		ls, err := Settle(task, evs)
 		if err != nil {
-			return nil, err
+			issues[task] = err
+			continue
 		}
 		all = append(all, ls...)
 	}
-	return Recent(all, StatWindow), nil
+	return Recent(all, StatWindow), issues, nil
 }
 
 // Recent 按「工具+模型」分组，各取最近 n 次有结果的拉起，新的在前（纯函数）。

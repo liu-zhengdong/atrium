@@ -64,7 +64,7 @@ func Run(ctx context.Context, env *app.Env) error {
 		return a.SSH == b.SSH && a.Key == b.Key && a.TunnelLocal == b.TunnelLocal && a.TunnelRemote == b.TunnelRemote
 	}
 	for {
-		list, err := List(ctx, env.DB)
+		list, err := usableHosts(ctx, env)
 		if err != nil {
 			if ctx.Err() != nil {
 				return nil

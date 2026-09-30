@@ -30,7 +30,8 @@ type Module struct {
 	Commands func(t *cli.Table)
 	// Routes 注册 HTTP 路由（服务进程里调用）。
 	Routes func(r *api.Router, env *Env)
-	// Run 是后台循环（派活、巡检……）：ctx 取消时返回。返回非 nil 错误会让服务停下。
+	// Run 是后台循环：ctx 取消时返回。非 nil 错误只用于整轮/基础设施故障，会让服务停下。
+	// 按件处理必须走 app.Each；任务用 ledger.EachTask，解析记录也在单件回调内。
 	// 循环里每次动作前先问 env.Pause.Paused(...)，停机状态下不做自主动作。
 	Run func(ctx context.Context, env *Env) error
 }

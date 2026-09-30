@@ -502,9 +502,10 @@ out=$(json skill add article "$work/skill" --checks article); has '.result.check
 out=$(json skill add video "$work/skill" --checks video); has '.result.checks == ["video"]'
 # 文章小样：假执行者写 post.md，pnpm run build 把它变成 dist/post.html；运行时截明暗两张
 mkdir -p "$work/art"; art=$(cd "$work/art" && pwd)
-# 构建脚本用 node 写：pnpm 在 Windows 上经 cmd.exe 跑 scripts，sh 语法在那里不成立
+# 构建脚本用 node 写：pnpm 在 Windows 上经 cmd.exe 跑 scripts，sh 语法在那里不成立。
+# 页面带英文标题：没装中文字体的机器（GitHub 的 Ubuntu 镜像）上只有「正文」两个字会渲染成细线方框，整页被判空白。
 echo '{"scripts":{"build":"node build.js"}}' >"$art/package.json"
-echo 'const fs = require("fs"); fs.mkdirSync("dist", {recursive: true}); fs.writeFileSync("dist/post.html", "<meta charset=utf-8><h1>" + fs.readFileSync("post.md"))' >"$art/build.js"
+echo 'const fs = require("fs"); fs.mkdirSync("dist", {recursive: true}); fs.writeFileSync("dist/post.html", "<meta charset=utf-8><h1>Smoke article</h1><p>" + fs.readFileSync("post.md"))' >"$art/build.js"
 out=$(json task add 文章 --dir "$art" --skill article); a=$(jq -r .result.id <<<"$out")
 json task run "$a" --worker fakewrite >/dev/null
 out=$(json task wait "$a" --timeout 120); has '.result.task.status == "done"'

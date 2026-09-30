@@ -155,6 +155,18 @@ type Module struct {
 - 别的包要重新派：`dispatch.Enqueue(ctx, env, id, Options{…}, actor)`（即 task run，写队列行与 risk）；watch 经 `Hooks.Requeue`、周期任务经 `agenda.Enqueue`、审阅任务经 `gates.Enqueue`，都在 dispatch 的 Routes 里接上。交回（`gates.Bounce`）只转 queued、不写队列行：dispatch 对没有队列行的 queued 任务沿用上次拉起的执行者、机器（工作目录在那里；接不了就等或转受阻，不换机）、风险与凭据。
 - 远程：`workers.Request` 是纯数据，代理拿到后填 `Dir`，把提示词写到自己的任务目录并填本机的 `PromptFile`，用 `workers.Build(tool, req)` 算出同样的调用。
 
+#### 接入一个执行者
+
+接入时逐项核对，工具能拉起不等于已经接齐：
+
+- **拉起与模型**：在 `workers/adapter.go` 接适配器，或用 `workers/cli.go` 的 `protocol: cli` 档案，核对提示词、模型、强度、端点与凭据环境的传递（叠加与模型映射在 `workers/resolve.go`）。
+- **完成与日志**：核对 `workers/signals.go` 的 `Ended` 与 `workers/cli.go` 的完成匹配，并在 `workers/tracers.go`、`workers/trace.go` 验证 JSON 事件解析或纯文本原文，日志样本放 `workers/testdata/`。
+- **可用性**：用没登录、额度用尽、模型名无效的日志样本验证 `workers/signals.go` 的 `Classify` 与 `workers/marks.go` 的 `MarkOf`，确认失败能分类并挡住后续派活。
+- **额度**：以 `workers.Resolved.Account` 的工具名经 `quota.AccountOf` 得到额度账号，自带读取接在 `quota/readers.go` 并登记 `quota/merge.go` 的 `Accounts`，或核对 OpenQuota 的 `providerId` 与账号一致（`quota/openquota.go`、`quota/merge.go`），在执行者详情确认 `quota.Last` 已有读数。
+- **远程能力**：确认 `workers/tools.go` 的 `ToolCatalog` 包含命令，`hosts/agent.go` 能取得目录并经 `hosts/probe.go` 上报可用性，登录判定在 `hosts/info.go`。
+- **捎话与并发**：核对 `workers/adapter.go` 的 `Tell`、会话续接与 `Exclusive`（通用命令行档案在 `workers/cli.go`），确认 `dispatch/actions.go` 的捎话和 `dispatch/pick.go` 的并发约束适用。
+- **自动挑人**：在档案明确 `auto`、`trust`、`max_risk`，用 `workers/profile.go`、`workers/refusal.go` 与 `dispatch/select.go` 核对是否参与自动挑人及能接的风险。
+
 ### 子进程（`internal/platform`）
 
 - 子进程只经 `platform.Start(platform.Spec{Path, Args, Dir, Env, Stdout, Stderr, Detached})` 拉起；`Env` 必填。执行者用 `platform.WorkerEnv(runtime.GOOS, platform.EnvMap(os.Environ()))`（带 `ATRIUM_WORKER=1`，不带 `ATRIUM_*` 与凭据），任务声明的凭据在其后逐个注入，再加 `ATRIUM_SERVER`、`ATRIUM_WORKER_TOKEN`，并经 `platform.SelfOnPath` 把服务（远程是代理）这个二进制排进 PATH 最前。服务与执行者保留环境中的 `GOFLAGS`；`WorkerEnv` 统一追加 `-trimpath`，让本机、远程执行者与合入检查的 Go 编译跨工作树复用缓存。

@@ -14,6 +14,7 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/app"
 	"github.com/liu-zhengdong/atrium/internal/cli"
 	"github.com/liu-zhengdong/atrium/internal/platform"
+	"github.com/liu-zhengdong/atrium/internal/quota"
 	"github.com/liu-zhengdong/atrium/internal/store"
 )
 
@@ -33,7 +34,8 @@ type Row struct {
 
 // Detail 是 workers <名字> 的内容：给执行者标识看叠加结果，给档案名看原文。
 type Detail struct {
-	Timing string `json:"timing"` // 用时说明，与命令行共用 Stat.Timing
+	Quota  *quota.Line `json:"quota,omitempty"` // 存下的额度读数；没有时仅含账号
+	Timing string      `json:"timing"`          // 用时说明，与命令行共用 Stat.Timing
 
 	Trust    string    `json:"trust,omitempty"` // 生效值，与目录相同
 	MaxRisk  string    `json:"max_risk,omitempty"`
@@ -194,7 +196,7 @@ func Routes(r *api.Router, env *app.Env) {
 	hook(env)
 	r.Handle("GET /api/workers", func(q *api.Req) (any, error) {
 		if name := q.URL.Query().Get("name"); name != "" {
-			return Show(q.Context(), env.DB, name)
+			return showWithQuota(q.Context(), env, name)
 		}
 		return List(q.Context(), env.DB)
 	})
@@ -351,6 +353,7 @@ func showCmd(c *cli.Ctx, name string) error {
 	r := d.Resolved
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s  trust=%s  max_risk=%s\n", r.ID, r.Rules.EffectiveTrust(), r.Rules.EffectiveMaxRisk())
+	fmt.Fprintf(&b, "额度：%s\n", quotaText(*d.Quota))
 	writeMarks(&b, d.Marks)
 	if r.CLIModel != "" {
 		fmt.Fprintf(&b, "交给工具的模型：%s\n", r.CLIModel)

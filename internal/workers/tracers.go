@@ -74,7 +74,8 @@ func readClaude(p *Parser, e event, _ string) bool {
 var exitCodeRE = regexp.MustCompile(`^Exit code (\d+)`)
 
 // grok --output-format streaming-messages-json：整条 assistant/user/result 与 Claude 同形。
-// 只接受下列事件；工具名称不同，终端调用转换为共用解析器的命令步骤。
+// 只接受下列事件；工具名称不同，终端调用转换为共用解析器的命令步骤；
+// 服务端工具 server_tool_use（web_search）是真实一步，其结果 web_search_tool_result 认出但不展开。
 func readGrok(p *Parser, e event, line string) bool {
 	switch e.str("type") {
 	case "system":
@@ -91,6 +92,11 @@ func readGrok(p *Parser, e event, line string) bool {
 				if m.str("name") == "run_terminal_command" {
 					m["name"] = "Bash"
 				}
+			case "server_tool_use":
+				// 服务端工具（web_search）是真实一步：显示调用；结果是网址列表，认出但不展开。
+				p.call(m.str("id"), p.step(m.str("name"), m.obj("input")))
+			case "web_search_tool_result":
+				p.result(m.str("tool_use_id"), 0, "")
 			default:
 				return false
 			}

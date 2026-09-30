@@ -317,7 +317,7 @@ func perform(ctx context.Context, env *app.Env, hk Hooks, t ledger.Task, f Facts
 	}
 	if act == Escalate {
 		up, err := upOf(ctx, db, t.Org)
-		if err != nil || up == "" {
+		if err != nil {
 			return err
 		}
 		target = up

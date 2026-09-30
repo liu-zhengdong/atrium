@@ -26,3 +26,50 @@ jobs:
             GOOS=$goos go vet ./...
             GOOS=$goos GOARCH=amd64 go build ./...
           done
+  smoke:
+    name: 端到端冒烟 (${{ matrix.os }})
+    # 独立体检，不作为合入或发版的前置条件；一台失败仍跑完其他平台。
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      - name: 安装 pnpm
+        run: npm install --global pnpm@10
+      - name: Linux 冒烟依赖
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y jq ffmpeg
+      - name: macOS 冒烟依赖
+        if: runner.os == 'macOS'
+        run: brew install jq ffmpeg
+      - name: Windows 冒烟依赖
+        if: runner.os == 'Windows'
+        run: choco install jq ffmpeg --yes --no-progress
+      - name: 隔离实例端到端冒烟
+        env:
+          TMPDIR: ${{ runner.temp }}
+        run: |
+          set -o pipefail
+          bash scripts/smoke.sh 2>&1 | tee "$RUNNER_TEMP/smoke.log"
+      - name: 保存冒烟日志
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-${{ matrix.os }}
+          path: ${{ runner.temp }}/smoke.log
+          retention-days: 7

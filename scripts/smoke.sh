@@ -3,6 +3,7 @@
 # 只动自己起的服务（记 pid），不碰用户在跑的服务与 ~/.atrium-v2。
 # Mac、Linux 与 Windows（Git Bash）上都能跑；平台差异都在用到 $win 的地方。
 set -euo pipefail
+export PYTHONUTF8=1   # Windows 重定向输出时也按 UTF-8 生成中文测试数据。
 
 root=$(cd "$(dirname "$0")/.." && pwd)
 work=$(mktemp -d "${TMPDIR:-/tmp}/atrium-smoke.XXXXXX")
@@ -45,7 +46,14 @@ killpid() {
 }
 # private <文件>：Unix 看 600；Windows 逐条核对 ACL，只允许本人、SYSTEM、管理员。
 private() {
-  if [ -z "$win" ]; then [ "$(stat -f %Lp "$1" 2>/dev/null || stat -c %a "$1")" = 600 ]; return; fi
+  if [ -z "$win" ]; then
+    local mode
+    case "$OSTYPE" in
+      darwin*) mode=$(stat -f %Lp "$1") ;;
+      *) mode=$(stat -c %a "$1") ;;
+    esac
+    [ "$mode" = 600 ]; return
+  fi
   ATRIUM_ACL_TARGET="$(cygpath -w "$1")" powershell.exe -NoProfile -NonInteractive -Command '
     $acl = Get-Acl -LiteralPath $env:ATRIUM_ACL_TARGET
     $allowed = @([System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value, "S-1-5-18", "S-1-5-32-544")
@@ -344,11 +352,11 @@ wait_tool() {
   fail "h1 未识别 $tool；输出：$out"
 }
 
-step "workers / task run / log（通用命令行执行者：sh 当假执行者）"
+step "workers / task run / log（通用命令行执行者：bash 当假执行者）"
 cat >"$work/fakesh.md" <<'MD'
 ---
 protocol: cli
-command: sh
+command: bash
 args: ["-c", "echo worker=$ATRIUM_WORKER task=$ATRIUM_TASK; echo DONE; echo 交付结论：完成", "{prompt}"]
 done_match: "^DONE$"
 ---
@@ -391,7 +399,7 @@ git -C "$site" add -A; git -C "$site" -c user.name=t -c user.email=t@t commit -q
 cat >"$work/fakecommit.md" <<'MD'
 ---
 protocol: cli
-command: sh
+command: bash
 args: ["-c", "export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1; echo 正文 >>post.md && git add -A && git -c user.name=t -c user.email=t@t commit -qm 写完 && echo DONE", "{prompt}"]
 done_match: "^DONE$"
 ---
@@ -448,7 +456,7 @@ step "没改动且执行者自称没做成（停下等人定）：按交付结�
 cat >"$work/fakestop.md" <<'MD'
 ---
 protocol: cli
-command: sh
+command: bash
 args: ["-c", "echo 读不到设计稿，没改代码; echo DONE; echo 交付结论：没做成", "{prompt}"]
 done_match: "^DONE$"
 ---
@@ -466,7 +474,7 @@ mkdir -p "$work/notes"; place=$(cd "$work/notes" && pwd)   # 规范路径：TMPD
 cat >"$work/fakewrite.md" <<'MD'
 ---
 protocol: cli
-command: sh
+command: bash
 args: ["-c", "echo 正文 >post.md && echo DONE && echo 交付结论：完成", "{prompt}"]
 done_match: "^DONE$"
 ---
@@ -543,7 +551,7 @@ step "执行者可用性：假执行者报模型名无效 → 标记「工具@�
 cat >"$work/fakemodel.md" <<'MD'
 ---
 protocol: cli
-command: sh
+command: bash
 args: ["-c", "sleep 2; echo 'invalid model selection (--model \"x\" --effort \"\")'; exit 1", "{prompt}"]
 ---
 MD

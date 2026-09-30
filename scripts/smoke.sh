@@ -22,7 +22,7 @@ cleanup() {
   if [ "$rc" = 0 ]; then rm -rf "$work"; return; fi   # 通过时起过的进程各步已自己停掉
   # 最近一条输出是某个任务的：服务还在时先打出它的经历，失败原因多半在里面。
   local t; t=$(jq -r '.result.task.id // .result.id // empty' <<<"${out:-}" 2>/dev/null || true)
-  if [[ "$t" =~ ^t[0-9]+$ ]]; then echo "--- 任务 $t 的经历" >&2; "$bin" task show "$t" >&2 2>&1 || true; fi
+  if [[ "$t" =~ ^t[0-9]+$ ]]; then echo "--- 任务 $t 的经历" >&2; "$bin" task show "$t" --json 2>&1 | jq -r '.result.history[] | "\(.kind)  \(.body // "")"' >&2 || true; fi   # 经历正文不截断
   # 只结束自己起的进程（服务新旧 pid 都记着）。
   for p in $pid; do killpid "$p"; done
   for p in $jobs; do kill "$p" 2>/dev/null || true; done

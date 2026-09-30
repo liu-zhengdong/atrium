@@ -6,7 +6,7 @@ import (
 	"strings"
 )
 
-// Priority：紧急、修复、普通、闲时。派活队列按 Rank 从小到大取。
+// Priority：紧急、修复、普通、闲时。分派任务队列按 Rank 从小到大取。
 type Priority string
 
 const (
@@ -35,7 +35,7 @@ type DepState struct {
 }
 
 // DepGate 判定一件任务的依赖：失败或取消的是 broken（等不到了）；别的没完成的是 waiting（还在等）；两个都空才算依赖齐了。
-// 派活队列、task run、任务树、task show、持球判定、网页共用这一份。
+// 分派任务队列、task run、任务树、task show、等待对象判定、网页共用这一份。
 func DepGate(deps []DepState) (waiting []string, broken []DepState) {
 	for _, d := range deps {
 		switch d.Status {

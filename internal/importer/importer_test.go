@@ -17,7 +17,7 @@ func i64(n int64) *int64 { return &n }
 
 func TestPlanDepts(t *testing.T) {
 	nodes := []oldNode{
-		{ID: 4, Parent: i64(2), Name: "cli", Fields: `{"alias":"命令行","what":"入口","uses":["看全景","派活"]}`},
+		{ID: 4, Parent: i64(2), Name: "cli", Fields: `{"alias":"命令行","what":"入口","uses":["看全景","分派任务"]}`},
 		{ID: 1, Name: "组织", Fields: `{"what":"根"}`},
 		{ID: 2, Parent: i64(1), Name: "Atrium", Fields: `{"alias":"","now":" 在做 "}`},
 		{ID: 3, Parent: i64(1), Name: "旧", Archived: true},
@@ -30,7 +30,7 @@ func TestPlanDepts(t *testing.T) {
 	want := []Dept{
 		{ID: "o1", Name: "组织", What: "根"},
 		{ID: "o2", Parent: "o1", Name: "Atrium", Now: "在做"},
-		{ID: "o4", Parent: "o2", Name: "命令行", What: "入口", Uses: "看全景\n派活"},
+		{ID: "o4", Parent: "o2", Name: "命令行", What: "入口", Uses: "看全景\n分派任务"},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("部门：\n得到 %+v\n想要 %+v", got, want)

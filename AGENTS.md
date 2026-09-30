@@ -2,7 +2,7 @@
 
 ## 目标
 
-Atrium 是 AI 组织的运行底座（方向见讨论 [#260](https://github.com/liu-zhengdong/atrium/discussions/260)，规格见 [#496](https://github.com/liu-zhengdong/atrium/discussions/496)）。用户只提目标；固定身份的秘书补成简报，按组织树拆成任务，派给一次性的执行者（编码 CLI + 模型）完成；Atrium 负责任务账本与全局视图、执行者适配、验收关卡、合入与上线、额度调度、事件投递和服务自身的生命周期。
+Atrium 是 AI 组织的运行底座（方向见讨论 [#260](https://github.com/liu-zhengdong/atrium/discussions/260)，规格见 [#496](https://github.com/liu-zhengdong/atrium/discussions/496)）。用户只提目标；固定身份的秘书补成简报，按组织树拆成任务，派给一次性的执行者（编码 CLI + 模型）完成；Atrium 负责任务账本与全局视图、执行者适配、验收交付检查、合入与上线、额度调度、事件投递和服务自身的生命周期。
 
 要达成的三个目标（像你一样判断、自己找事、越做越好）和各自怎么检验，见 README「目标」一节；取舍时先问它对哪个目标有用。
 
@@ -19,8 +19,8 @@ Atrium 是 AI 组织的运行底座（方向见讨论 [#260](https://github.com/
 | 任务账本 | `ledger`                                            | 任务树、依赖、状态机（改状态只经 `ledger.Apply`）                    |
 | 组织     | `org`、`org/leaders`、`org/agenda`                  | 部门、要点、身份、备忘、技能、资料、凭据、上限；负责人唤醒与权限；选项单、周期任务 |
 | 事件     | `events`、`secretary`                               | 事件落库与投递、`events wait/ack`；注入 Claude Code 秘书会话、状态栏 |
-| 执行     | `dispatch`、`workers`、`hosts`、`quota`             | 派活队列、挑执行者与机器、适配器与档案、远程代理、额度               |
-| 交付     | `gates`、`merge`、`release`、`watch`                | 查事实判关卡与审阅、合入队列、自升级上线、持球与期限、卡死接管       |
+| 执行     | `dispatch`、`workers`、`hosts`、`quota`             | 分派任务队列、挑执行者与机器、适配器与档案、远程代理、额度               |
+| 交付     | `gates`、`merge`、`release`、`watch`                | 查事实判交付检查与审阅、合入队列、自升级上线、等待对象与处理时限、长时间没进展继续跟进       |
 | 视图     | `web`                                               | 只读网页与接口（`map`）                                              |
 | 导入     | `importer`                                          | 从旧版库一次性只读导入                                               |
 
@@ -30,17 +30,17 @@ Atrium 是 AI 组织的运行底座（方向见讨论 [#260](https://github.com/
 - 开发期不写兜底：不做自愈、旧写法兼容、自动回滚；出错就返回错误停下。
 - 进程、shell、路径的平台差异只经 `internal/platform`，不直接写 `/bin/sh`、`kill(-pid)`。
 - SQLite 一律参数化查询、事务、有界分页。事实（PR、CI、改动规模）由运行时查，不采信执行者自述。
-- 执行者与服务子进程用白名单环境启动，不继承凭据类、身份类变量；派活时声明的凭据（`task run --secret`）在那一刻按名称注入。执行者固定带 `ATRIUM_WORKER=1`，另带本次拉起签发的执行者令牌与服务地址（`ATRIUM_WORKER_TOKEN`、`ATRIUM_SERVER`，本机与远程都有，PATH 里有 atrium）：只能读和往本任务所在部门加资料，退出即失效；负责人进程只加本次唤醒签发的 `ATRIUM_LEADER_TOKEN`。权限只在服务端按令牌判，命令行不拦。
+- 执行者与服务子进程用白名单环境启动，不继承凭据类、身份类变量；分派任务时声明的凭据（`task run --secret`）在那一刻按名称注入。执行者固定带 `ATRIUM_WORKER=1`，另带本次拉起签发的执行者令牌与服务地址（`ATRIUM_WORKER_TOKEN`、`ATRIUM_SERVER`，本机与远程都有，PATH 里有 atrium）：只能读和往本任务所在部门加资料，退出即失效；负责人进程只加本次唤醒签发的 `ATRIUM_LEADER_TOKEN`。权限只在服务端按令牌判，命令行不拦。
 - 凭据不进日志、提交、PR、issue 或模型提示词。认证在路由匹配后统一做，默认拒绝；路径参数拒绝 `..`、绝对路径与隐藏段。
 - 命令行的主要调用者是 Agent：回执最后一行给下一步命令，字段校验以参数名开头，读命令支持 `--json`，异步状态提供等待（`task wait`、`task log --follow`、`events wait`）。`atrium --help` 由命令表生成，README 不抄命令用法。
 - 短号全局一致、持久、不复用（`t1`、`o1`、`k1`、`a1`……）。
-- 组织（部门、要点、技能）存在 Atrium；仓库只留跟着代码走的约定：本文件、`.agents/README.md`（派活时附给执行者）、`internal/README.md`。
+- 组织（部门、要点、技能）存在 Atrium；仓库只留跟着代码走的约定：本文件、`.agents/README.md`（分派任务时附给执行者）、`internal/README.md`。
 
 ## 验证与协作
 
 - 快检查只有 `.agents/check`（gofmt、vet 与交叉编译、构建、全部测试、`--help` 冒烟）；开发中只跑改动相关的包（`go test ./internal/<包>/`），交付前跑一次 `.agents/check`。合入队列 rebase 后跑同一份。GitHub CI（`ci.yml`）只报不挡；main 坏了先回滚那次合入。
 - 主路径端到端：`scripts/smoke.sh`（隔离服务、假执行者、假 gh）。
-- 执行者交付停在 PR；关卡、审阅、合入由运行时做。PR 正文写「端到端验证」（隔离实例里跑的命令与输出）和「碰到哪些已有能力」（没有写「无」）。
+- 执行者交付停在 PR；交付检查、审阅、合入由运行时做。PR 正文写「端到端验证」（隔离实例里跑的命令与输出）和「碰到哪些已有能力」（没有写「无」）。
 - 发版：在 main 上推 `vX.Y.Z` 标签，`release.yml` 交叉编译六个平台发到 Release；运行时对自身 `update` + `restart` 后跑只读冒烟，过了记「已上线」。
 - 隔离实例：`ATRIUM_DATA=<临时目录> go run ./cmd/atrium start`（端口由系统挑，`status` 里看），用完同样变量 `stop`。不要启停用户在跑的服务（缺省 4320），不读写 `~/.atrium-v2`。
 - 不要 `git stash`（所有工作树共用），未完成的改动提交到自己的分支。

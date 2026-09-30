@@ -16,43 +16,43 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/workers"
 )
 
-// Delivery 是一种交付方式：执行者交什么（Rules，附进提示词）、关卡查什么事实（check）、验收后怎么落地（land）。
+// Delivery 是一种交付方式：执行者交什么（Rules，附进提示词）、交付检查查什么事实（check）、验收后怎么应用（land）。
 // 不存库，按任务已有的事实选（pick）：有仓库但工作树没改动 → message（按执行者的交付结论判）；本机仓库没有 GitHub 远程 → local；其余有仓库 → pr；
 // 只有工作地点（本机文件夹）→ dir；都没有 → message，工作目录根有 choice.json → choice。
-// 核心（ledger）只认关卡、审阅、验收过没过与落地的步骤名；要新的交付方式在这里加一项。
+// 核心（ledger）只认交付检查、审阅、验收过没过与应用的步骤名；要新的交付方式在这里加一项。
 type Delivery struct {
 	Name string
 	// Rules 是提示词「通用约束」里怎么交；%s 换成执行者的分支。
 	Rules []string
-	// check 查事实判关卡。
+	// check 查事实判交付检查。
 	check func(g *Gate, ctx context.Context, t ledger.Task) (checked, error)
-	// land 是落地的第一步（关卡、审阅、验收都过了之后）；nil 是没有要落地的（东西已在原地，或只是结论），
-	// 验收拦不住什么，过了关卡、审阅就完成，不等验收人。
+	// land 是应用的第一步（交付检查、审阅、验收都过了之后）；nil 是没有要应用的（东西已在原地，或只是结论），
+	// 验收拦不住什么，过了交付检查、审阅就完成，不等验收人。
 	land func(g *Gate, ctx context.Context, t ledger.Task) (landed, error)
 }
 
-// checked 是关卡查完的结论。
+// checked 是交付检查查完的结论。
 type checked struct {
 	reasons []string // 不过的原因，交回执行者照着改；空为过
 	block   string   // 非空：交回执行者也没用（它自称没做成、停下等人定，或没写交付结论），转受阻交处理人
 	note    string   // 过了记进经历的话
-	review  string   // 非空：落地前要另一个模型审阅，写明为什么
+	review  string   // 非空：应用前要另一个模型审阅，写明为什么
 }
 
-// landed 是落地第一步的结果。
+// landed 是应用第一步的结果。
 type landed struct {
-	stage  ledger.Stage // 落地步骤，由别的循环接着推进（如 pr 的合入队列）；空表示当场落完，任务完成
+	stage  ledger.Stage // 应用步骤，由别的循环接着推进（如 pr 的合入队列）；空表示当场应用完成，任务完成
 	note   string       // 记进经历
-	bounce string       // 非空：落不了，交回原执行者照它改（如 local 合进主分支有冲突）
+	bounce string       // 非空：无法应用，交回原执行者照它改（如 local 合进主分支有冲突）
 }
 
 var noRepoRules = []string{"这件活没有仓库：在当前目录干，交付物是最后一条消息里的结论（写清调查结果与依据）。"}
 
-// endRule 每件活都附：没有改动可查时（message、dir），关卡只凭最后一行判（ParseEnding）。派活时分不出会不会有改动，所以一律附。
+// endRule 每件活都附：没有改动可查时（message、dir），交付检查只凭最后一行判（ParseEnding）。分派任务时分不出会不会有改动，所以一律附。
 const endRule = "最后一行单独写 `交付结论：完成`；没做成、或停在动手前等人定，写 `交付结论：没做成`，原因写在它上面（任务详述另定了最后一行的照详述）。"
 
 var (
-	// pr：在分支上开 PR；关卡查提交、推送、改动规模与 PR 正文；落地是合入队列（merge）加可选的发版（release）。
+	// pr：在分支上开 PR；交付检查查提交、推送、改动规模与 PR 正文；应用是合入队列（merge）加可选的发版（release）。
 	deliverPR = Delivery{Name: "pr",
 		Rules: []string{
 			"只交 PR：在分支 %s 上提交、推送并开 PR；不要合入、不要改默认分支、不要发版。不用改代码的活不开 PR，结论写在最后的回复里。",
@@ -62,21 +62,21 @@ var (
 		land: func(*Gate, context.Context, ledger.Task) (landed, error) {
 			return landed{stage: ledger.StageMerge, note: "进合入队列"}, nil
 		}}
-	// local：本机仓库、不经 GitHub；关卡在本机查提交与改动；落地是合进本机主分支（landLocal）。
+	// local：本机仓库、不经 GitHub；交付检查在本机查提交与改动；应用交付结果是合进本机主分支（landLocal）。
 	deliverLocal = Delivery{Name: "local",
 		Rules: []string{
 			"本机交付：在分支 %s 上提交；不要推送、不要合入主分支，验收过后由运行时合进本机主分支。不用改代码的活不提交，结论写在最后的回复里。",
 		},
 		check: (*Gate).checkLocal, land: (*Gate).landLocal}
-	// dir：在工作地点（本机文件夹）原地干，东西已经在原地；关卡看执行者的交付结论；没有落地。
-	// 同一文件夹的几件活会不会互相踩由负责人派活时安排，运行时不隔离、不留回退。
+	// dir：在工作地点（本机文件夹）原地干，东西已经在原地；交付检查看执行者的交付结论；没有应用。
+	// 同一文件夹的几件活会不会互相踩由负责人分派任务时安排，运行时不隔离、不留回退。
 	deliverDir = Delivery{Name: "dir",
 		Rules: []string{"这件活在工作地点原地干：当前目录就是用户的文件夹，直接在这里改，不复制、不另建目录或 git 仓库；" +
 			"交付说明写在最后的回复里（改了哪些文件、结果与依据）。"},
 		check: (*Gate).checkEnding}
-	// message：结论写在最后的回复里（没有仓库，或有仓库但没改动）；关卡看执行者的交付结论；没有落地。
+	// message：结论写在最后的回复里（没有仓库，或有仓库但没改动）；交付检查看执行者的交付结论；没有应用。
 	deliverMessage = Delivery{Name: "message", Rules: noRepoRules, check: (*Gate).checkEnding}
-	// choice：调研任务在工作目录根写 choice.json；关卡核对格式；落地是登记成选项单（agenda.Settle）。
+	// choice：调研任务在工作目录根写 choice.json；交付检查核对格式；应用是登记成选项单（agenda.Settle）。
 	deliverChoice = Delivery{Name: "choice", Rules: noRepoRules, check: (*Gate).checkChoice, land: (*Gate).landChoice}
 )
 
@@ -103,8 +103,8 @@ func localRepo(repo, origin string) bool {
 	return filepath.IsAbs(repo) && !github
 }
 
-// PromptRules 是派活时提示词里怎么交（dispatch 附进「通用约束」）；origin 见 Origin。派活时还没有改动，有仓库按要改代码写
-// （规则里说了不用改代码时怎么交）；choice 与 message 派活时分不出来，提示词相同，要不要写 choice.json 由任务详述（调研周期任务）说。
+// PromptRules 是分派任务时提示词里怎么交（dispatch 附进「通用约束」）；origin 见 Origin。分派任务时还没有改动，有仓库按要改代码写
+// （规则里说了不用改代码时怎么交）；choice 与 message 分派任务时分不出来，提示词相同，要不要写 choice.json 由任务详述（调研周期任务）说。
 func PromptRules(repo, dir, origin, branch string) []string {
 	d := pick(repo, dir, origin, true, false)
 	out := make([]string, len(d.Rules), len(d.Rules)+1)
@@ -127,8 +127,8 @@ func Origin(ctx context.Context, r Runner, repo string) (string, error) {
 	return strings.TrimSpace(url), err
 }
 
-// deliveryOf 查齐事实（本机仓库的 origin、工作目录根的 choice.json，关卡时再查工作树有没有改动）后按 pick 选交付方式。
-// 过了关卡还在走的（审阅、验收）都有改动：没改动的按 message 交，没有这两步。
+// deliveryOf 查齐事实（本机仓库的 origin、工作目录根的 choice.json，交付检查时再查工作树有没有改动）后按 pick 选交付方式。
+// 过了交付检查还在走的（审阅、验收）都有改动：没改动的按 message 交，没有这两步。
 func (g *Gate) deliveryOf(ctx context.Context, t ledger.Task, atGate bool) (Delivery, error) {
 	// 审阅只交服务已记下的回复，不查执行者机器上的工作树或 choice.json。
 	if _, review, err := Last(ctx, g.DB, t.ID, KindReviewOf); err != nil || review {
@@ -176,7 +176,7 @@ func (g *Gate) choiceFile(ctx context.Context, t ledger.Task) ([]byte, error) {
 	return ReadFile(ctx, w, agenda.ChoiceFile)
 }
 
-// checkEnding 是没有改动可查的交付（message、dir）的关卡：按执行者这一轮最后的回复里的交付结论判（ParseEnding）。
+// checkEnding 是没有改动可查的交付（message、dir）的交付检查：按执行者这一轮最后的回复里的交付结论判（ParseEnding）。
 // 没做成、没写都转受阻交处理人读回复定（补说明重派或收尾），不交回执行者重跑同一份提示词。
 // 审阅任务的结论由原任务读（最后一行是「审阅结论」），这里不看。
 func (g *Gate) checkEnding(ctx context.Context, t ledger.Task) (checked, error) {
@@ -254,7 +254,7 @@ func (g *Gate) landChoice(ctx context.Context, t ledger.Task) (landed, error) {
 	return landed{note: "登记了选项单 " + c.ID}, nil
 }
 
-// checkPR 查事实、判关卡：git 在工作树所在机器上查（On），PR 由服务查 GitHub；过了记下 PR，按风险与信任定要不要审阅。
+// checkPR 查事实、判交付检查：git 在工作树所在机器上查（On），PR 由服务查 GitHub；过了记下 PR，按风险与信任定要不要审阅。
 func (g *Gate) checkPR(ctx context.Context, t ledger.Task) (checked, error) {
 	w, err := mustWorkspace(ctx, g.DB, t.ID)
 	if err != nil {
@@ -295,15 +295,15 @@ func (g *Gate) checkPR(ctx context.Context, t ledger.Task) (checked, error) {
 	if err != nil {
 		return checked{}, err
 	}
-	c := checked{note: fmt.Sprintf("关卡通过（%s）：%s", strings.Join(checks, "、"), facts.Diff)}
+	c := checked{note: fmt.Sprintf("交付检查通过（%s）：%s", strings.Join(checks, "、"), facts.Diff)}
 	if need, why := NeedReview(risk, prof.Trust); need {
 		c.review = why
 	}
 	return c, nil
 }
 
-// acceptBy 是这件任务过了关卡、审阅之后要等谁验收：部门的验收人（沿树继承），auto 为空。
-// 没有落地的交付方式（dir、message）和运行时自己建的审阅任务不等人验收。
+// acceptBy 是这件任务过了交付检查、审阅之后要等谁验收：部门的验收人（沿树继承），auto 为空。
+// 没有应用的交付方式（dir、message）和运行时自己建的审阅任务不等人验收。
 func acceptBy(ctx context.Context, q store.Querier, t ledger.Task, d Delivery) (string, error) {
 	if d.land == nil {
 		return "", nil
@@ -320,7 +320,7 @@ func acceptBy(ctx context.Context, q store.Querier, t ledger.Task, d Delivery) (
 
 var acceptLabel = map[string]string{org.AcceptUser: "你", org.AcceptLeader: "负责人"}
 
-// pass 过了关卡或审阅：要等验收（acceptBy）就停在等验收；否则当场落地。
+// pass 过了交付检查或审阅：要等验收（acceptBy）就停在等验收；否则当场应用。
 func (g *Gate) pass(ctx context.Context, t ledger.Task, d Delivery, kind ledger.EventKind, note string) error {
 	by, err := acceptBy(ctx, g.DB, t, d)
 	if err != nil {
@@ -334,7 +334,7 @@ func (g *Gate) pass(ctx context.Context, t ledger.Task, d Delivery, kind ledger.
 	return g.land(ctx, t, d, kind, Actor, note)
 }
 
-// land 做交付方式落地的第一步并落账：有后续步骤进那一步，没有任务完成；落不了交回原执行者。
+// land 做交付方式应用的第一步并记录结果：有后续步骤进那一步，没有任务完成；无法应用交回原执行者。
 func (g *Gate) land(ctx context.Context, t ledger.Task, d Delivery, kind ledger.EventKind, actor, note string) error {
 	var l landed
 	if d.land != nil {
@@ -344,7 +344,7 @@ func (g *Gate) land(ctx context.Context, t ledger.Task, d Delivery, kind ledger.
 		}
 	}
 	if l.bounce != "" {
-		_, err := Bounce(ctx, g.DB, t.ID, actor, note+"；落地没成："+l.bounce)
+		_, err := Bounce(ctx, g.DB, t.ID, actor, note+"；应用交付结果失败："+l.bounce)
 		return err
 	}
 	if l.note != "" {
@@ -368,13 +368,13 @@ func (g *Gate) awaiting(ctx context.Context, id, actor string) (ledger.Task, err
 		return t, err
 	}
 	if !org.MayAccept(actor, who) {
-		return t, api.Forbidden("%s 所在部门的验收人是用户，%s 不能代验；需要就上交", id, actor).
+		return t, api.Forbidden("%s 所在部门的验收人是用户，%s 不能代验；需要就上报", id, actor).
 			WithNext("atrium leader escalate <说明> --kind beyond --task " + id)
 	}
 	return t, nil
 }
 
-// Accept 是 task accept：验收通过，做交付方式落地的第一步（pr 进合入队列，local 合进本机主分支，choice 登记选项单）。
+// Accept 是 task accept：验收通过，做交付方式应用的第一步（pr 进合入队列，local 合进本机主分支，choice 登记选项单）。
 func (g *Gate) Accept(ctx context.Context, id, actor string) (ledger.Task, error) {
 	t, err := g.awaiting(ctx, id, actor)
 	if err != nil {
@@ -390,7 +390,7 @@ func (g *Gate) Accept(ctx context.Context, id, actor string) (ledger.Task, error
 	return ledger.Get(ctx, g.DB, id)
 }
 
-// Reject 是 task reject：验收打回，交回原执行者照原因改（与关卡不过同一套计次，第 3 次转受阻）。
+// Reject 是 task reject：验收打回，交回原执行者照原因改（与交付检查未通过同一套计次，第 3 次转受阻）。
 func (g *Gate) Reject(ctx context.Context, id, actor, reason string) (ledger.Task, error) {
 	if strings.TrimSpace(reason) == "" {
 		return ledger.Task{}, api.Usage("--reason: 不能为空（写清哪里不行，执行者照它改）")

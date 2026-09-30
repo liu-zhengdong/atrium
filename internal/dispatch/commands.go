@@ -31,7 +31,7 @@ type runBody struct {
 	DryRun bool `json:"dry_run"`
 }
 
-// Routes 注册派活接口。
+// Routes 注册分派任务接口。
 func Routes(r *api.Router, env *app.Env) {
 	hook(env)
 	r.AddAuth(authWorker(env))
@@ -132,14 +132,14 @@ func dryRun(q *api.Req, env *app.Env, id string, o Options) (RunResult, error) {
 	return res, nil
 }
 
-// Commands 注册 task run、task tell、task log（task 组由 ledger 声明）。停下是 ledger 的 task stop（转受阻），派活循环结束它的执行者。
+// Commands 注册 task run、task tell、task log（task 组由 ledger 声明）。停下是 ledger 的 task stop（转受阻），分派任务循环结束它的执行者。
 func Commands(t *cli.Table) {
-	t.Add(cli.Command{Path: "task run", Args: "<tN>", Summary: "派活：进派活队列（依赖没完成的等完成后再派），自动挑执行者与机器拉起；--dry-run 只看候选与推荐理由",
+	t.Add(cli.Command{Path: "task run", Args: "<tN>", Summary: "分派任务：进分派任务队列（依赖没完成的等完成后再派），自动挑执行者与机器拉起；--dry-run 只看候选与推荐理由",
 		Flags: []cli.Flag{
 			{Name: "worker", Value: "工具+模型[:强度]", Help: "写死执行者（缺省自动挑：档案能接、紧急／修复或 risk 高于 low 只挑 trust≥medium、额度富余、不正忙）。只写工具 = 跟随工具自带的最新模型（harness/<工具> 档案写了 model 就用它）；写了模型 = 固定"},
 			{Name: "risk", Value: "级别", Help: "low（缺省）/ medium / high：执行者档案 max_risk 要够；high 合入前另派审阅"},
 			{Name: "host", Value: "hN", Help: "写死机器（缺省本机优先、空位最多）"},
-			{Name: "secret", Value: "名称", Multi: true, Help: "派活时按名称注入的凭据（从任务部门往上找）"},
+			{Name: "secret", Value: "名称", Multi: true, Help: "分派任务时按名称注入的凭据（从任务部门往上找）"},
 			{Name: "dry-run", Bool: true, Help: "不入队，只列候选、不能接的原因与推荐"},
 		},
 		Run: func(c *cli.Ctx) error {
@@ -159,9 +159,9 @@ func Commands(t *cli.Table) {
 			if body.DryRun {
 				return c.Done(res, dryText(res), dryNext(id, res, body.Risk))
 			}
-			msg, follow := fmt.Sprintf("%s 已进派活队列（第 %d 位）", id, res.Position), "atrium task log "+id+" --follow"
+			msg, follow := fmt.Sprintf("%s 已进分派任务队列（第 %d 位）", id, res.Position), "atrium task log "+id+" --follow"
 			if len(res.Waiting) > 0 {
-				msg = fmt.Sprintf("%s 已进派活队列：等依赖 %s 完成后自动派（依赖失败或取消就转受阻）", id, strings.Join(res.Waiting, "、"))
+				msg = fmt.Sprintf("%s 已进分派任务队列：等依赖 %s 完成后自动派（依赖失败或取消就转受阻）", id, strings.Join(res.Waiting, "、"))
 				follow = "atrium task wait " + res.Waiting[0]
 			}
 			text, next, err := events.AsyncNext(c, msg, follow)
@@ -170,7 +170,7 @@ func Commands(t *cli.Table) {
 			}
 			return c.Done(res, text, next)
 		}})
-	t.Add(cli.Command{Path: "task tell", Args: "<tN> <文字>", Summary: "捎话：在跑的执行者按工具即时或本轮后送到，没在跑的下次拉起时写进提示词；交给负责人拆着的投给负责人",
+	t.Add(cli.Command{Path: "task tell", Args: "<tN> <文字>", Summary: "补充说明：在跑的执行者按工具即时或本轮后送到，没在跑的下次拉起时写进提示词；交给负责人拆着的发给负责人",
 		Run: func(c *cli.Ctx) error {
 			id, err := c.Arg(0, "<tN>")
 			if err != nil {
@@ -191,7 +191,7 @@ func Commands(t *cli.Table) {
 			if r.Via == "leader" {
 				follow = "atrium task show " + id
 			}
-			text, next, err := events.AsyncNext(c, "已捎话："+r.Note, follow)
+			text, next, err := events.AsyncNext(c, "补充说明已记录："+r.Note, follow)
 			if err != nil {
 				return err
 			}

@@ -45,9 +45,9 @@ func TestWorkerLive(t *testing.T) {
 		want   bool
 	}{
 		{ledger.Running, ledger.StageNone, 2, 2, true},
-		{ledger.Queued, ledger.StageNone, 0, 1, true},   // 拉起到落账之间
-		{ledger.Running, ledger.StageNone, 1, 2, true},  // 重派到落账之间
-		{ledger.Running, ledger.StageGate, 2, 2, false}, // 退出进了关卡
+		{ledger.Queued, ledger.StageNone, 0, 1, true},   // 拉起到记录结果之间
+		{ledger.Running, ledger.StageNone, 1, 2, true},  // 重派到记录结果之间
+		{ledger.Running, ledger.StageGate, 2, 2, false}, // 退出进了交付检查
 		{ledger.Queued, ledger.StageNone, 2, 2, false},  // 退出后重新排队
 		{ledger.Done, ledger.StageNone, 2, 2, false},
 		{ledger.Running, ledger.StageNone, 3, 2, false}, // 已有新一次拉起

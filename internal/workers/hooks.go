@@ -54,7 +54,7 @@ func hook(env *app.Env) {
 	})
 }
 
-// LeaderSpec 把一次负责人唤醒翻成进程调用：按登记的执行者组合解析档案，提示词从标准输入或参数给（不即时捎话）。
+// LeaderSpec 把一次负责人唤醒翻成进程调用：按登记的执行者组合解析档案，提示词从标准输入或参数给（不即时补充说明）。
 func LeaderSpec(ctx context.Context, env *app.Env, l leaders.Launch) (platform.Spec, error) {
 	r, err := Resolve(ctx, env.DB, l.Profile)
 	if err != nil {

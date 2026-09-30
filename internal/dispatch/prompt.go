@@ -28,7 +28,7 @@ type PromptInput struct {
 	Guide   string // 目标仓库自己的约定（.agents/README.md 正文）；没有就空
 }
 
-// langRule 放在提示词开头（标题之后）与续上的补充里：排在末尾时执行者照样用英文写交付说明（t452）。
+// langRule 放在提示词开头（标题之后）与继续的补充里：排在末尾时执行者照样用英文写交付说明（t452）。
 const langRule = "用中文写过程说明和最后的交付说明（命令、代码、标识符照原样）。"
 
 // 通用约束：对所有仓库成立的，每件活都附；怎么交由交付方式定（gates.PromptRules）；
@@ -88,7 +88,7 @@ func BuildPrompt(in PromptInput) string {
 	return b.String()
 }
 
-// ResumePrompt 是按会话续上时的补充（只带没送到的捎话）。
+// ResumePrompt 是按会话继续时的补充（只带没送到的补充说明）。
 func ResumePrompt(tells []string) string {
 	var b strings.Builder
 	b.WriteString("补充（运行时转来的，后说的优先）：\n")
@@ -104,11 +104,11 @@ type ExitInput struct {
 	Code      int // workers.ExitUnknown 表示拿不到
 	Signal    workers.Signal
 	Ending    workers.Ending
-	StopFor   string // 运行时停的：restart（带着捎话重派）；空表示自己退出
+	StopFor   string // 运行时停的：restart（带着补充说明重派）；空表示自己退出
 	Same      int    // 这一轮已同一执行者重试几次
 	Switches  int    // 这一轮已换过几次执行者
-	Pending   int    // 没送到的捎话
-	CanResume bool   // 能按会话续上（取到了会话 id）
+	Pending   int    // 没送到的补充说明
+	CanResume bool   // 能按会话继续（取到了会话 id）
 }
 
 // Route 是去向。
@@ -155,7 +155,7 @@ func RouteExit(in ExitInput) Route {
 	}
 	if in.Pending > 0 {
 		if in.CanResume {
-			return Route{"resume", "本轮结束，带着 " + itoa(in.Pending) + " 条补充续上会话"}
+			return Route{"resume", "本轮结束，带着 " + itoa(in.Pending) + " 条补充继续会话"}
 		}
 		return Route{"restart", "本轮结束，带着 " + itoa(in.Pending) + " 条补充重派"}
 	}

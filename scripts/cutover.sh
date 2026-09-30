@@ -97,7 +97,7 @@ run atrium map   # 非交互终端里打印网址
 
 step "完成"
 cat <<EOF
-v2 已在 ${ATRIUM_PORT:-4320} 上运行，数据目录 ${v2_data}，仍处于全局暂停：派活、负责人唤醒、周期任务、合入、发版都不会动。
+v2 已在 ${ATRIUM_PORT:-4320} 上运行，数据目录 ${v2_data}，仍处于全局暂停：分派任务、负责人唤醒、周期任务、合入、发版都不会动。
 旧库副本：${backup}（原库 $old_data 没动过）。
 还要手动做的（见 docs/cutover.md）：
   - 负责人没挂部门的，按秘书备忘恢复：atrium org edit oN --leader aN

@@ -133,7 +133,7 @@ func TestTraceClaudeEvents(t *testing.T) {
 		t.Errorf("在跑的命令：%q", g)
 	}
 	if tr.Ended || tr.Result != "" || !reflect.DeepEqual(tr.Lines, []string{"Error: something on stderr"}) {
-		t.Errorf("捎话后接着干，前一次收尾作废：%+v", tr)
+		t.Errorf("补充说明后接着干，前一次收尾作废：%+v", tr)
 	}
 }
 
@@ -182,7 +182,7 @@ func TestModelOf(t *testing.T) {
 	}
 }
 
-// 真实日志（t349）：agy 只报步骤不带话，23 个工具步骤攒成开头一段；执行者被捎话重启，没有收尾。
+// 真实日志（t349）：agy 只报步骤不带话，23 个工具步骤攒成开头一段；执行者被补充说明重启，没有收尾。
 func TestTraceAgyLog(t *testing.T) {
 	tr, err := ReadTrace("agy+gemini-3.8-flash-high", "testdata/agy-t349.jsonl")
 	if err != nil {

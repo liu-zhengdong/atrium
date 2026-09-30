@@ -23,7 +23,7 @@ func (e *env) localRepo() string {
 }
 
 // localTask 造一件本机交付的任务：照 dispatch.Workdir 在仓库上开任务工作树（分支 task-tN），执行者写入 files、
-// commit 为真时提交，然后正常退出停在关卡。
+// commit 为真时提交，然后正常退出停在交付检查。
 func (e *env) localTask(dept, repo string, files map[string]string, commit bool) (ledger.Task, string) {
 	e.t.Helper()
 	t, err := ledger.Add(e.ctx, e.db, ledger.NewTask{Title: "写文章", Org: dept, Repo: repo}, "u1")
@@ -59,21 +59,21 @@ func (e *env) file(dir, name string) string {
 	return string(b)
 }
 
-// landedOn 核对关卡的落地职责：主分支有了任务改动，工作树留给 dispatch 在终态统一回收。
+// landedOn 核对交付检查的应用交付结果职责：主分支有了任务改动，工作树留给 dispatch 在终态统一回收。
 func (e *env) landedOn(repo, wt, id, name, body string) {
 	e.t.Helper()
 	if got := e.file(repo, name); got != body {
 		e.t.Fatalf("主工作树里 %s 应为 %q：%q", name, body, got)
 	}
 	if _, err := os.Stat(wt); err != nil {
-		e.t.Fatalf("关卡不应提前删除任务工作树：%v", err)
+		e.t.Fatalf("交付检查不应提前删除任务工作树：%v", err)
 	}
 	if out := e.gh.Must(repo, "branch", "--list", "task-"+id); out == "" {
-		e.t.Fatalf("关卡不应提前删除任务分支：%s", out)
+		e.t.Fatalf("交付检查不应提前删除任务分支：%s", out)
 	}
 }
 
-// 关卡在本机查事实：有未提交改动交回；有提交就过，验收人 auto 当场合进本机主分支（没有改动见 TestGateNoChanges）。
+// 交付检查在本机查事实：有未提交改动交回；有提交就过，验收人 auto 当场合进本机主分支（没有改动见 TestGateNoChanges）。
 func TestLocalGate(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -100,12 +100,12 @@ func TestLocalGate(t *testing.T) {
 					t.Fatalf("应交回且原因含 %q：%+v %s", c.want, got, e.lastNote(task.ID))
 				}
 				if e.file(repo, "post.md") != "" {
-					t.Fatal("没过关卡不该动主分支")
+					t.Fatal("没过交付检查不该动主分支")
 				}
 				return
 			}
 			if got.Status != ledger.Done || !strings.Contains(e.lastNote(task.ID), "快进") {
-				t.Fatalf("应过关卡并快进合进 main：%+v %s", got, e.lastNote(task.ID))
+				t.Fatalf("应过交付检查并快进合进 main：%+v %s", got, e.lastNote(task.ID))
 			}
 			e.landedOn(repo, wt, task.ID, "post.md", "正文\n")
 			if len(e.gh.Calls) != 0 {
@@ -115,7 +115,7 @@ func TestLocalGate(t *testing.T) {
 	}
 }
 
-// 落地：主分支在派活后又有提交时先在任务工作树里合入主分支再快进；冲突交回原执行者，主分支与工作树都不留半截合并。
+// 应用：主分支在分派任务后又有提交时先在任务工作树里合入主分支再快进；冲突交回原执行者，主分支与工作树都不留半截合并。
 func TestLocalLand(t *testing.T) {
 	t.Run("主分支有新提交不冲突", func(t *testing.T) {
 		e := setup(t)
@@ -151,7 +151,7 @@ func TestLocalLand(t *testing.T) {
 	})
 }
 
-// 部门验收人是用户：关卡过了停在等验收、不动主分支；task accept 之后才合进本机主分支。
+// 部门验收人是用户：交付检查通过后停在等验收、不动主分支；task accept 之后才合进本机主分支。
 func TestLocalAccept(t *testing.T) {
 	e := setup(t)
 	o := e.dept(org.AcceptUser)

@@ -20,7 +20,7 @@ func TestNearest(t *testing.T) {
 	cases := []struct{ dept, skip, want, from string }{
 		{"o3", "", "a2", "o3"},
 		{"o2", "", "a1", "o1"},      // 本部门没有，往上找
-		{"o3", "a2", "a1", "o1"},    // 上交跳过自己
+		{"o3", "a2", "a1", "o1"},    // 上报跳过自己
 		{"o1", "a1", Secretary, ""}, // 顶层还是自己：投秘书
 		{"o4", "", Secretary, ""},
 		{"", "", Secretary, ""},

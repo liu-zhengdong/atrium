@@ -324,7 +324,7 @@ func TestRoutes(t *testing.T) {
 		t.Errorf("侧栏件数：%+v %v", nav, err)
 	}
 	workers.ClearMarks(ctx, db, "claude@h1")
-	// 部门有了负责人，卡住的活先归负责人，不再递到「等你」；详情里持球人是负责人。
+	// 部门有了负责人，卡住的活先归负责人，不再递到「等你」；详情里当前等待对象是负责人。
 	a, err := org.AddLeader(ctx, db, org.NewLeader{Name: "运行时负责人", Workers: []string{"claude"}})
 	if err != nil {
 		t.Fatal(err)
@@ -336,12 +336,12 @@ func TestRoutes(t *testing.T) {
 	if len(today.Asks) != 0 {
 		t.Errorf("有负责人时不该递到等你：%+v", today.Asks)
 	}
-	// 负责人上交到秘书这层、还没确认的，进「等你」。
+	// 负责人上报到秘书这层、还没确认的，进「等你」。
 	events.Emit(ctx, db, events.Event{Kind: events.LeaderEscalate, Task: task.ID, Dept: sub.ID, Target: org.Secretary,
-		Body: map[string]any{"from": a.ID, "label": "搞不定", "note": "证书要你签"}})
+		Body: map[string]any{"from": a.ID, "label": "无法解决", "note": "证书要你签"}})
 	read("today", &today)
 	if len(today.Asks) != 1 || today.Asks[0].Kind != "escalate" || today.Asks[0].Title != "证书要你签" || today.Asks[0].ID != task.ID {
-		t.Errorf("上交应进等你：%+v", today.Asks)
+		t.Errorf("上报应进等你：%+v", today.Asks)
 	}
 	read("dept/"+sub.ID, &page)
 	if page.Leader == nil || page.Leader.Name != "运行时负责人" || page.Leader.Inherited ||
@@ -364,11 +364,11 @@ func TestRoutes(t *testing.T) {
 	if _, err := org.Edit(ctx, db, other.ID, org.DeptPatch{Leader: &a.ID}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := org.SetMemo(ctx, db, a.ID, "先修卡死\n再做网页", a.ID); err != nil {
+	if _, err := org.SetMemo(ctx, db, a.ID, "先修长时间没进展\n再做网页", a.ID); err != nil {
 		t.Fatal(err)
 	}
 	read("dept/"+leaf.ID, &page)
-	if page.Leader == nil || page.Leader.ID != a.ID || !page.Leader.Inherited || page.Leader.Memo != "先修卡死\n再做网页" ||
+	if page.Leader == nil || page.Leader.ID != a.ID || !page.Leader.Inherited || page.Leader.Memo != "先修长时间没进展\n再做网页" ||
 		!reflect.DeepEqual(page.Leader.Depts, []Pair{{sub.ID, sub.Name}, {other.ID, "发版"}}) {
 		t.Errorf("继承的负责人：%+v", page.Leader)
 	}
@@ -483,7 +483,7 @@ func TestTaskTree(t *testing.T) {
 	}
 }
 
-// 周期任务：部门页只列本部门的并挂上一轮；今天页列 7 天内到点的、更远的只给条数；暂停沿树继承；派活失败标出来。
+// 周期任务：部门页只列本部门的并挂上一轮；今天页列 7 天内到点的、更远的只给条数；暂停沿树继承；分派任务失败标出来。
 func TestSchedules(t *testing.T) {
 	ctx := context.Background()
 	db, err := store.Open(filepath.Join(t.TempDir(), "atrium.db"))
@@ -507,12 +507,12 @@ func TestSchedules(t *testing.T) {
 	daily := add(leaf.ID, "1d", "09:00", "patrol")
 	half := add(other.ID, "12h", "", "")
 	add(other.ID, "30d", "", "research")
-	// 上一轮派活失败、还没结束；上级部门暂停。
+	// 上一轮分派任务失败、还没结束；上级部门暂停。
 	agenda.Enqueue = func(context.Context, *app.Env, string, string) error { return errors.New("没有能接的执行者") }
 	t.Cleanup(func() { agenda.Enqueue = nil })
 	round, err := agenda.RunNow(ctx, env, daily.ID, time.Local)
 	if err == nil || round.ID == "" {
-		t.Fatalf("派活失败也该生成任务：%+v %v", round, err)
+		t.Fatalf("分派任务失败也该生成任务：%+v %v", round, err)
 	}
 	if err := env.Pause.Set(ctx, sub.ID, "u1"); err != nil {
 		t.Fatal(err)
@@ -528,7 +528,7 @@ func TestSchedules(t *testing.T) {
 	s := page.Schedules[0]
 	if s.ID != daily.ID || !s.Paused || !s.Trouble || s.Kind != "体验巡检" || s.Cadence != "每天 09:00" ||
 		s.Last == nil || s.Last.ID != round.ID || s.Last.Who != "没派" {
-		t.Errorf("暂停中、上一轮派活失败没结束：%+v %+v", s, s.Last)
+		t.Errorf("暂停中、上一轮分派任务失败没结束：%+v %+v", s, s.Last)
 	}
 	if page, _ = loadDept(ctx, db, t.TempDir(), sub.ID); len(page.Schedules) != 0 {
 		t.Errorf("下属部门的周期任务不算在上级页：%+v", page.Schedules)
@@ -623,7 +623,7 @@ func TestDeptHeadAndTaskLinks(t *testing.T) {
 	}
 }
 
-// 上线提示只看 shipped 上交，已确认仍算，普通上交与任务结束不算。
+// 上线提示只看 shipped 上报，已确认仍算，普通上报与任务结束不算。
 func TestNavShippedID(t *testing.T) {
 	ctx := context.Background()
 	db, err := store.Open(filepath.Join(t.TempDir(), "atrium.db"))

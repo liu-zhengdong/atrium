@@ -56,7 +56,7 @@ func setup(t *testing.T) *env {
 	return e
 }
 
-// running 造一件执行者刚正常退出、停在关卡的任务。
+// running 造一件执行者刚正常退出、停在交付检查的任务。
 func (e *env) delivered(title, worker, dir string) ledger.Task {
 	e.t.Helper()
 	t, err := ledger.Add(e.ctx, e.db, ledger.NewTask{Title: title, Repo: "o/r"}, "u1")
@@ -86,7 +86,7 @@ func (e *env) start(id, worker string) {
 	}
 }
 
-// exit 模拟执行者正常退出：dispatch 先记它最后的回复（测试没另记的按「交付结论：完成」），再转关卡。
+// exit 模拟执行者正常退出：dispatch 先记它最后的回复（测试没另记的按「交付结论：完成」），再转交付检查。
 func (e *env) exit(id string) ledger.Task {
 	e.t.Helper()
 	if e.count(id, gates.KindResult) == 0 {
@@ -188,7 +188,7 @@ func TestGateBounces(t *testing.T) {
 	}
 }
 
-// 有仓库但工作树相对基线没有改动（装工具、调研这类不改代码的活）：不要 PR，按没有仓库交，过关卡即完成；
+// 有仓库但工作树相对基线没有改动（装工具、调研这类不改代码的活）：不要 PR，按没有仓库交，过交付检查即完成；
 // 只有未提交的文件算改动，照样按 PR 交回。
 func TestGateNoChanges(t *testing.T) {
 	cases := []struct {
@@ -291,7 +291,7 @@ func TestGateNoWorktreeBlocks(t *testing.T) {
 	}
 }
 
-// 没有仓库的任务（调研）：过关卡即完成；工作目录根有 choice.json 就登记成选项单，不合法交回执行者改。
+// 没有仓库的任务（调研）：过交付检查即完成；工作目录根有 choice.json 就登记成选项单，不合法交回执行者改。
 func TestGateNoRepo(t *testing.T) {
 	good := `{"title":"下一步","options":[` + strings.Repeat(`{"title":"A","gain":"g","why_now":"w","cost":"c","if_not":"i","evidence":"e"},`, 2) +
 		`{"title":"B","gain":"g","why_now":"w","cost":"c","if_not":"i","evidence":"e"}],"recommend":[2],"reason":"r"}`
@@ -332,7 +332,7 @@ func TestGateNoRepo(t *testing.T) {
 	}
 }
 
-// 低信任执行者：关卡过后建审阅任务；审阅者结论决定进合入队列还是交回。
+// 低信任执行者：交付检查过后建审阅任务；审阅者结论决定进合入队列还是交回。
 func TestReview(t *testing.T) {
 	cases := []struct {
 		name     string
@@ -371,7 +371,7 @@ func TestReview(t *testing.T) {
 				t.Fatalf("审阅任务不对：%+v", rt)
 			}
 			if !strings.Contains(rt.Detail, "## 原任务详述\n\n"+detail) || !strings.Contains(rt.Detail, tell) || !strings.Contains(rt.Detail, "以后面为准") {
-				t.Fatalf("审阅任务遗漏原说明、捎话或优先级：%s", rt.Detail)
+				t.Fatalf("审阅任务遗漏原说明、补充说明或优先级：%s", rt.Detail)
 			}
 			req, _, _ := gates.Last(e.ctx, e.db, rt.ID, gates.KindRequire)
 			if !strings.Contains(req, `"not_tool":"claude"`) || !strings.Contains(req, `"min_trust":"medium"`) {

@@ -45,7 +45,7 @@ func Commands(t *cli.Table, mods []app.Module) {
 			}
 			return c.Done(r, "已换用户令牌，新令牌在 "+r["token_file"], "atrium status")
 		}})
-	t.Add(cli.Command{Path: "pause", Summary: "一键停机：停下派活、唤醒、周期任务、合入、发版", Flags: scopeFlags,
+	t.Add(cli.Command{Path: "pause", Summary: "一键停机：停下分派任务、唤醒、周期任务、合入、发版", Flags: scopeFlags,
 		Run: func(c *cli.Ctx) error { return setPause(c, true) }})
 	t.Add(cli.Command{Path: "resume", Summary: "撤销 pause（不带参数只撤全局那一条）", Flags: scopeFlags,
 		Run: func(c *cli.Ctx) error { return setPause(c, false) }})

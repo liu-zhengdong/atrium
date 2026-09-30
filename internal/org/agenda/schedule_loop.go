@@ -99,7 +99,7 @@ func Tick(ctx context.Context, env *app.Env, now int64, loc *time.Location) erro
 	})
 }
 
-// 有周期任务新建时叫醒巡检循环重新算等多久。
+// 有周期任务新建时唤醒巡检循环重新算等多久。
 var (
 	wakeMu sync.Mutex
 	wakeCh = make(chan struct{}, 1)

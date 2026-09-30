@@ -10,7 +10,7 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/worktree"
 )
 
-// local 交付方式：本机仓库、不经 GitHub。关卡在本机查任务分支的提交与改动；落地把任务分支合进本机主分支
+// local 交付方式：本机仓库、不经 GitHub。交付检查在本机查任务分支的提交与改动；应用交付结果把任务分支合进本机主分支
 // （主工作树当前所在的分支）；任务结束后由 dispatch 统一回收工作树与分支。
 
 // localWorkspace 取本机交付的工作树登记：本机仓库只派本机（dispatch 的 hostNeed），登记在远程就是错的。
@@ -38,7 +38,7 @@ func (g *Gate) checkLocal(ctx context.Context, t ledger.Task) (checked, error) {
 	if !v.Pass {
 		return checked{reasons: v.Reasons}, nil
 	}
-	return checked{note: "关卡通过（本机交付）：" + facts.Diff}, nil
+	return checked{note: "交付检查通过（本机交付）：" + facts.Diff}, nil
 }
 
 // landLocal 把任务分支合进本机主分支：主分支已在任务分支里就直接快进，否则先在任务工作树里合入主分支

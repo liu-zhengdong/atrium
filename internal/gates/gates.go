@@ -1,10 +1,10 @@
-// Package gates 是验收关卡：执行者退出后运行时自己查事实（PR、提交、推送、改动规模、PR 正文），
+// Package gates 是验收交付检查：执行者退出后运行时自己查事实（PR、提交、推送、改动规模、PR 正文），
 // 按档案 checks 判过或不过，不采信执行者自述；高风险或低信任的交付先另派不同工具、不同模型的审阅者；
 // 部门的验收人是 leader、user 时停在等验收，由 task accept / task reject 判。
 //
-// 交付方式（pr、local、choice、message：怎么交、查什么、怎么落地）在 delivery.go（local 的关卡与落地在 local.go）；判定在 judge.go（纯函数）；
+// 交付方式（pr、local、choice、message：怎么交、查什么、怎么应用）在 delivery.go（local 的交付检查与应用在 local.go）；判定在 judge.go（纯函数）；
 // 查事实在 facts.go；与 dispatch 的约定在 records.go。
-// 结论经 ledger.Apply(GatePass / ReviewPass / Accept / Bounce / Block) 落账，理由用 ledger.Record 记进经历。
+// 结论经 ledger.Apply(GatePass / ReviewPass / Accept / Bounce / Block) 记录结果，理由用 ledger.Record 记进经历。
 // merge、release 也用本包的 Runner、ViewPR、Bounce、Paused。
 package gates
 
@@ -31,10 +31,10 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/store"
 )
 
-// Actor 是运行时关卡在经历里的署名。
+// Actor 是运行时交付检查在经历里的署名。
 const Actor = "gates"
 
-// Module 是本包接入点：后台循环推进关卡与审阅阶段的任务；task accept / task reject 判等验收的任务。
+// Module 是本包接入点：后台循环推进交付检查与审阅阶段的任务；task accept / task reject 判等验收的任务。
 func Module() app.Module {
 	return app.Module{Name: "gates", Commands: Commands, Routes: Routes,
 		Run: func(ctx context.Context, env *app.Env) error {
@@ -44,7 +44,7 @@ func Module() app.Module {
 }
 
 func Commands(t *cli.Table) {
-	t.Add(cli.Command{Path: "task accept", Args: "<tN>", Summary: "验收通过：等验收的交付落地（有 GitHub 仓库进合入队列，本机仓库合进本机主分支，调研登记选项单，其余直接完成）",
+	t.Add(cli.Command{Path: "task accept", Args: "<tN>", Summary: "验收通过：应用验收通过的交付结果（有 GitHub 仓库进合入队列，本机仓库合进本机主分支，调研登记选项单，其余直接完成）",
 		Run: func(c *cli.Ctx) error {
 			id, err := c.Arg(0, "<tN>")
 			if err != nil {
@@ -61,9 +61,9 @@ func Commands(t *cli.Table) {
 			case ledger.Done:
 				return c.Done(t, fmt.Sprintf("%s「%s」验收通过，已完成", t.ID, t.Title), "atrium task show "+t.ID)
 			case ledger.Queued, ledger.Blocked:
-				return c.Done(t, fmt.Sprintf("%s「%s」验收通过但落地没成，已交回（%s）", t.ID, t.Title, t.Status), "atrium task show "+t.ID)
+				return c.Done(t, fmt.Sprintf("%s「%s」验收通过但应用交付结果失败，已交回（%s）", t.ID, t.Title, t.Status), "atrium task show "+t.ID)
 			}
-			text, next, err := events.AsyncNext(c, fmt.Sprintf("%s「%s」验收通过，落地中（%s）", t.ID, t.Title, t.Stage), "atrium task wait "+t.ID)
+			text, next, err := events.AsyncNext(c, fmt.Sprintf("%s「%s」验收通过，正在应用交付结果（%s）", t.ID, t.Title, t.Stage), "atrium task wait "+t.ID)
 			if err != nil {
 				return err
 			}
@@ -180,7 +180,7 @@ func Paused(ctx context.Context, db *store.DB, p *pause.Store, t ledger.Task, ho
 	return p.Paused(ctx, pause.Scope{Orgs: orgs, Host: host})
 }
 
-// Sweep 推进一轮：先关卡，再审阅（含审阅阶段受阻的，见 review）。
+// Sweep 推进一轮：先交付检查，再审阅（含审阅阶段受阻的，见 review）。
 func (g *Gate) Sweep(ctx context.Context) error {
 	for _, stage := range []ledger.Stage{ledger.StageGate, ledger.StageReview} {
 		status := []ledger.Status{ledger.Running}
@@ -226,7 +226,7 @@ type gateRecord struct {
 	Facts Facts `json:"facts"`
 }
 
-// gate 按交付方式查事实、判关卡：不过交回执行者；过了按风险先审阅，或按部门的验收人等验收，或直接落地。
+// gate 按交付方式查事实、判交付检查：不过交回执行者；过了按风险先审阅，或按部门的验收人等验收，或直接应用。
 func (g *Gate) gate(ctx context.Context, t ledger.Task) error {
 	d, err := g.deliveryOf(ctx, t, true)
 	if err != nil {
@@ -237,11 +237,11 @@ func (g *Gate) gate(ctx context.Context, t ledger.Task) error {
 		return err
 	}
 	if len(c.reasons) > 0 {
-		_, err := Bounce(ctx, g.DB, t.ID, Actor, "关卡没过："+strings.Join(c.reasons, "；"))
+		_, err := Bounce(ctx, g.DB, t.ID, Actor, "交付检查未通过："+strings.Join(c.reasons, "；"))
 		return err
 	}
 	if c.block != "" {
-		_, err := Block(ctx, g.DB, t.ID, "关卡没过："+c.block)
+		_, err := Block(ctx, g.DB, t.ID, "交付检查未通过："+c.block)
 		return err
 	}
 
@@ -250,14 +250,14 @@ func (g *Gate) gate(ctx context.Context, t ledger.Task) error {
 		return err
 	}
 	if len(sc.reasons) > 0 {
-		_, err := Bounce(ctx, g.DB, t.ID, Actor, "关卡没过："+strings.Join(sc.reasons, "；"))
+		_, err := Bounce(ctx, g.DB, t.ID, Actor, "交付检查未通过："+strings.Join(sc.reasons, "；"))
 		return err
 	}
 	if sc.note != "" {
 		c.note = strings.TrimPrefix(c.note+"；"+sc.note, "；")
 	}
 	if c.review != "" {
-		_, err := ledger.Apply(ctx, g.DB, t.ID, ledger.Event{Kind: ledger.GatePass, NeedReview: true}, Actor, c.note+"；落地前审阅："+c.review)
+		_, err := ledger.Apply(ctx, g.DB, t.ID, ledger.Event{Kind: ledger.GatePass, NeedReview: true}, Actor, c.note+"；应用前审阅："+c.review)
 		return err
 	}
 	return g.pass(ctx, t, d, ledger.GatePass, c.note)
@@ -320,7 +320,7 @@ func lastID(ctx context.Context, q store.Querier, task, kind string) (int64, err
 	return id, err
 }
 
-// review 推进审阅阶段：这一轮还没有审阅任务就建一个交给派活；审阅任务结束后读结论。
+// review 推进审阅阶段：这一轮还没有审阅任务就建一个交给分派任务；审阅任务结束后读结论。
 // 审阅阶段受阻的任务（多是审阅任务失败）只在审阅任务之后重跑出结论时接着按结论走。
 func (g *Gate) review(ctx context.Context, t ledger.Task) error {
 	passedAt, err := lastID(ctx, g.DB, t.ID, string(ledger.GatePass))
@@ -451,7 +451,7 @@ func (g *Gate) startReview(ctx context.Context, t ledger.Task) error {
 		return err
 	}
 	if Enqueue == nil {
-		return errors.New("派活没接上（gates.Enqueue 由 dispatch 装配）")
+		return errors.New("分派任务没接上（gates.Enqueue 由 dispatch 装配）")
 	}
 	return Enqueue(ctx, rt.ID, Actor)
 }

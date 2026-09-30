@@ -1,8 +1,8 @@
-// Package dispatch 是派活：一个派活队列（状态 queued 的任务，按优先级、入队先后取）、挑执行者（档案能接 + 额度富余 +
-// 不正忙）、挑机器（本机优先、空位最多），在任务目录的 git worktree 里拉起执行者，退出后按信号重试、换人、续上或交关卡。
+// Package dispatch 是分派任务：一个分派任务队列（状态 queued 的任务，按优先级、入队先后取）、挑执行者（档案能接 + 额度富余 +
+// 不正忙）、挑机器（本机优先、空位最多），在任务目录的 git worktree 里拉起执行者，退出后按信号重试、换人、继续或进入交付检查。
 //
-// 命令：task run、task tell（POST /api/tasks/{id}/tell）、task log；停下是 ledger 的 task stop（转受阻，派活循环结束它的执行者）。
-// 状态只经 ledger.Apply：入队 Enqueue、拉起 Start、退出 ExitOK（进关卡，gates 接手）或 ExitFail、停下 Block。
+// 命令：task run、task tell（POST /api/tasks/{id}/tell）、task log；停下是 ledger 的 task stop（转受阻，分派任务循环结束它的执行者）。
+// 状态只经 ledger.Apply：入队 Enqueue、拉起 Start、退出 ExitOK（进交付检查，gates 接手）或 ExitFail、停下 Block。
 // 拉起记录以任务经历 kind "launch"（workers.Run）存，gates、watch 读它。每次自主动作前问 Pause。
 package dispatch
 
@@ -39,7 +39,7 @@ func Module() app.Module {
 
 const actor = "runtime"
 
-// dispatcher 是服务进程里派活的内存状态：本机在跑的执行者进程。
+// dispatcher 是服务进程里分派任务的内存状态：本机在跑的执行者进程。
 type dispatcher struct {
 	env             *app.Env
 	mu              sync.Mutex
@@ -49,7 +49,7 @@ type dispatcher struct {
 	wg              sync.WaitGroup
 	reclaimAfter    int64 // 遗留登记扫描游标，单件跳过也推进
 	reclaimDeferred bool  // 有执行者未退出或代理离线，后续继续扫描
-	// retired：本实例的派活循环已退出（服务停下或平滑重启）。之后看到的退出不收尾，交给新服务接管时按日志收。
+	// retired：本实例的分派任务循环已退出（服务停下或平滑重启）。之后看到的退出不收尾，交给新服务继续跟进时按日志收。
 	retired atomic.Bool
 }
 
@@ -184,7 +184,7 @@ func BounceCause(stage, note string) string {
 	case stage == string(ledger.StageMerge):
 		return "检查没过"
 	}
-	return "关卡没过"
+	return "交付检查未通过"
 }
 
 // lastBounce 取上次拉起之后最近一次交回：交回前的阶段与原因。
@@ -272,8 +272,8 @@ type launchOpts struct {
 	Secrets []string
 	Why     string
 	Cause   string   // Why 为 bounce 时的原因类别
-	Session string   // 续上会话
-	Pending []string // 续上时带的捎话
+	Session string   // 继续会话
+	Pending []string // 继续时带的补充说明
 }
 
 type tellRow struct {
@@ -281,7 +281,7 @@ type tellRow struct {
 	Text string
 }
 
-// tells 只取 upto 之后、还没即时送到的捎话。
+// tells 只取 upto 之后、还没即时送到的补充说明。
 func tells(ctx context.Context, q store.Querier, task string, upto int64) ([]tellRow, error) {
 	query := `SELECT id, body FROM task_events WHERE task = ? AND kind = 'tell' AND id > ?
 		AND CAST(id AS TEXT) NOT IN (SELECT body FROM task_events WHERE task = ? AND kind = 'tell_sent') ORDER BY id LIMIT 50`
@@ -302,7 +302,7 @@ func tells(ctx context.Context, q store.Querier, task string, upto int64) ([]tel
 	return out, rows.Err()
 }
 
-// bounceNotes 是上次拉起之后被交回的原因（关卡、审阅、合入写的 note）。
+// bounceNotes 是上次拉起之后被交回的原因（交付检查、审阅、合入写的 note）。
 func bounceNotes(ctx context.Context, q store.Querier, task string) ([]string, error) {
 	rows, err := q.QueryContext(ctx, `SELECT body FROM task_events WHERE task = ? AND kind = 'bounce'
 		AND id > (SELECT COALESCE(max(id), 0) FROM task_events WHERE task = ? AND kind = ?) ORDER BY id LIMIT 5`,
@@ -362,7 +362,7 @@ func (d *dispatcher) remoteWaiter(p *proc, rr int) func() int {
 	}
 }
 
-// record 落账：从队列拉起的转 running；记执行者与机器、拉起记录；删队列行。
+// record 记录结果：从队列拉起的转 running；记执行者与机器、拉起记录；删队列行。
 func (d *dispatcher) record(ctx context.Context, t ledger.Task, run workers.Run) error {
 	db := d.env.DB
 	if t.Status == ledger.Queued {
@@ -380,7 +380,7 @@ func (d *dispatcher) record(ctx context.Context, t ledger.Task, run workers.Run)
 	if err := ledger.Record(ctx, db, t.ID, workers.RunKind, actor, string(raw)); err != nil {
 		return err
 	}
-	// 关卡按登记的机器与目录查事实（gates.Workspace）；watch 按登记的进程看进展、判卡死（watch.Track，只看本机目录）。
+	// 交付检查按登记的机器与目录查事实（gates.Workspace）；watch 按登记的进程看进展、判长时间没进展（watch.Track，只看本机目录）。
 	wt, _ := json.Marshal(gates.Worktree{Host: run.Host, Dir: run.Dir})
 	if err := ledger.Record(ctx, db, t.ID, gates.KindWorktree, actor, string(wt)); err != nil {
 		return err
@@ -401,7 +401,7 @@ func (d *dispatcher) track(p *proc, wait func() int) {
 		go p.watchLive(func(uuid string) {
 			if id, ok := strings.CutPrefix(uuid, "tell-"); ok {
 				if err := ledger.Record(context.Background(), d.env.DB, p.task, "tell_sent", actor, id); err != nil {
-					d.env.Log.Error("记捎话送达失败", "task", p.task, "err", err)
+					d.env.Log.Error("记补充说明送达失败", "task", p.task, "err", err)
 				}
 			}
 		})
@@ -467,7 +467,7 @@ func tries(runs []workers.Run) (same, switches int, tried map[string]bool) {
 	return
 }
 
-// exited 是执行者退出后的收尾：判信号与结局，交关卡、判失败，或重试、换人、续上、重派。
+// exited 是执行者退出后的收尾：判信号与结局，进入交付检查、判失败，或重试、换人、继续、重派。
 // 任务已不在跑（watch 或人先收了尾）、或已换了一轮拉起，就不动。
 func (d *dispatcher) exited(ctx context.Context, p *proc, code int) error {
 	db := d.env.DB
@@ -657,7 +657,7 @@ func readHead(path string, n int) (string, error) {
 	return string(buf[:k]), nil
 }
 
-// adopt 接管服务重启前在跑的执行者：本机进程还活着就跟着等（查存活），已经没了就按日志收尾；远程的等代理报退出。
+// adopt 继续跟进服务重启前在跑的执行者：本机进程还活着就跟着等（查存活），已经没了就按日志收尾；远程的等代理报退出。
 func (d *dispatcher) adopt(ctx context.Context) error {
 	db := d.env.DB
 	if err := hosts.RecoverLaunches(ctx, db); err != nil {
@@ -680,7 +680,7 @@ func (d *dispatcher) adopt(ctx context.Context) error {
 		}
 		w, err := workers.Resolve(ctx, db, run.Worker)
 		if err != nil {
-			return fmt.Errorf("接管 %s：%w", t.ID, err)
+			return fmt.Errorf("继续跟进 %s：%w", t.ID, err)
 		}
 		p := &proc{task: t.ID, run: *run, adapter: w.Adapter, remote: run.Host != LocalHost, pending: map[string]bool{}, done: make(chan struct{})}
 		d.adoptProc(p)

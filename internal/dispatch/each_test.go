@@ -121,10 +121,10 @@ func TestLoopBadRecordsStillDispatches(t *testing.T) {
 		want := 1
 		if id == ids[0] {
 			want = 2
-		} // 接管与共享统计各留一次有归属的错误
+		} // 继续跟进与共享统计各留一次有归属的错误
 		if n != want {
 			t.Fatalf("%s 记录了 %d 次错误", id, n)
 		}
 	}
-	t.Log("坏拉起登记、坏队列 JSON 各自受阻；正常假执行者进入关卡，循环仍运行")
+	t.Log("坏拉起登记、坏队列 JSON 各自受阻；正常假执行者进入交付检查，循环仍运行")
 }

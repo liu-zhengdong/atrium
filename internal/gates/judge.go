@@ -10,7 +10,7 @@ import (
 
 // 本文件全是纯判定：吃运行时查到的事实，不碰进程、库与时间。
 
-// 档案 checks 里能写的关卡。
+// 档案 checks 里能写的交付检查。
 const (
 	CheckFinished = "finished"        // 已提交、已推送、比默认分支有新提交
 	CheckPR       = "pr_exists"       // 分支上有开着的 PR，头提交与本地一致
@@ -18,11 +18,11 @@ const (
 	CheckClaims   = "claims_verified" // PR 正文「端到端验证」一节不为空
 )
 
-// CheckCommitted 是本机交付（local）的关卡：工作树都提交了、任务分支比本机主分支有新提交；不看推送与 PR，
+// CheckCommitted 是本机交付（local）的交付检查：工作树都提交了、任务分支比本机主分支有新提交；不看推送与 PR，
 // 不由档案 checks 选。
 const CheckCommitted = "committed"
 
-// Known 是全部关卡名；档案写了别的名字判不过（写错了要看见，不静默跳过）。
+// Known 是全部交付检查名；档案写了别的名字判不过（写错了要看见，不静默跳过）。
 var Known = []string{CheckFinished, CheckPR, CheckGrowth, CheckClaims}
 
 // DefaultChecks：档案没写 checks 时查这些。
@@ -63,14 +63,14 @@ type Facts struct {
 	E2E     string     `json:"-"`    // PR 正文「端到端验证」一节
 }
 
-// Result 是一道关卡的结论。
+// Result 是一道交付检查的结论。
 type Result struct {
 	Check    string `json:"check"`
 	OK       bool   `json:"ok"`
 	Evidence string `json:"evidence"`
 }
 
-// Verdict 是关卡结论；Reasons 是没过的证据，原样交回执行者。
+// Verdict 是交付检查结论；Reasons 是没过的证据，原样交回执行者。
 type Verdict struct {
 	Pass    bool     `json:"pass"`
 	Results []Result `json:"results"`
@@ -140,10 +140,10 @@ func judgeOne(check string, f Facts) Result {
 		r.OK = strings.TrimSpace(f.E2E) != ""
 		r.Evidence = "PR 正文有「端到端验证」一节"
 		if !r.OK {
-			r.Evidence = "PR 正文没有「端到端验证」一节或该节为空：写在隔离实例里实跑的命令与输出"
+			r.Evidence = "PR 正文没有「端到端验证」一节或该节为空：写在隔离实例里实测的命令与输出"
 		}
 	default:
-		r.Evidence = fmt.Sprintf("未知关卡 %q（可用 %s）；改档案 checks", check, strings.Join(Known, "、"))
+		r.Evidence = fmt.Sprintf("未知交付检查 %q（可用 %s）；改档案 checks", check, strings.Join(Known, "、"))
 	}
 	return r
 }
@@ -339,7 +339,7 @@ func ReviewBrief(task, title, repo string, pr PR, dir, base, why, diff, detail s
 1. 做到原任务要求了吗，有没有越出范围的改动。
 2. 正确性：边界、错误处理、并发与重启后的状态。
 3. 安全：凭据不进日志与输出、SQL 参数化、外部输入校验、子进程环境。
-4. 测试：新分支有没有测试、断言了行为没有；PR「端到端验证」一节要有隔离实例里实跑的命令与输出，对不上就打回。
+4. 测试：新分支有没有测试、断言了行为没有；PR「端到端验证」一节要有隔离实例里实测的命令与输出，对不上就打回。
 5. 可维护性：符合仓库 AGENTS.md 约定，没有明显重复或无用代码。
 
 ## 结论格式

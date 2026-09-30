@@ -24,7 +24,7 @@ func guard(db *store.DB) api.Guard {
 		case RuleDeny:
 			return Forbid("负责人不能调 %s", q.Pattern)
 		case RuleRead, RuleMemo, RuleEscalate:
-			return nil // 备忘与上交由处理函数按身份判
+			return nil // 备忘与上报由处理函数按身份判
 		}
 		body, err := peekBody(q)
 		if err != nil {
@@ -140,7 +140,7 @@ func collect(ctx context.Context, db *store.DB, rule Rule, q *api.Req, body map[
 	return checks, err
 }
 
-// ackCheck：只能确认投给自己的事件。事件编号取路径 {id} 与请求体的 ids／id。
+// ackCheck：只能确认发给自己的事件。事件编号取路径 {id} 与请求体的 ids／id。
 func ackCheck(ctx context.Context, db *store.DB, leader string, q *api.Req, body map[string]any) error {
 	var ids []int64
 	add := func(v any) {
@@ -173,7 +173,7 @@ func ackCheck(ctx context.Context, db *store.DB, leader string, q *api.Req, body
 			return err
 		}
 		if target != leader {
-			return Forbid("事件 #%d 投给 %s，不是你（%s）", id, target, leader)
+			return Forbid("事件 #%d 发给 %s，不是你（%s）", id, target, leader)
 		}
 	}
 	return nil

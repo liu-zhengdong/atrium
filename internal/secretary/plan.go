@@ -18,7 +18,7 @@ import (
 // 桥的节奏。
 const (
 	BatchWindow = 30 * time.Second // 首条到了之后攒多久再送
-	RemindAfter = 30 * time.Minute // 送过这么久没确认、又被重投回来的再提醒一次
+	RemindAfter = 30 * time.Minute // 送过这么久没确认、又被重发回来的再提醒一次
 	ListenEvery = 30 * time.Second // 多久向服务报一次「在听」
 	ListenTTL   = 90               // 「在听」的有效秒数
 	sentLimit   = 1000             // 送过的记录上限
@@ -63,7 +63,7 @@ type Batch struct {
 
 func (b Batch) Empty() bool { return len(b.Fresh)+len(b.Remind) == 0 }
 
-// PlanBatch：同一事件（编号 + 更新时刻）送过就不再送；送过满 remind 还没确认、又被重投回来的再提醒一次。
+// PlanBatch：同一事件（编号 + 更新时刻）送过就不再送；送过满 remind 还没确认、又被重发回来的再提醒一次。
 func PlanBatch(sent Sent, rows []events.Row, now int64, remind time.Duration) Batch {
 	var b Batch
 	for _, r := range rows {

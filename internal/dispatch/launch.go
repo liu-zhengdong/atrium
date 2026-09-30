@@ -17,7 +17,7 @@ import (
 	"strings"
 )
 
-// launch 拉起一次执行者：备好工作目录与提示词、算出进程调用、白名单环境加凭据、落账、跟着等它退出。
+// launch 拉起一次执行者：备好工作目录与提示词、算出进程调用、白名单环境加凭据、记录结果、跟着等它退出。
 func (d *dispatcher) launch(ctx context.Context, t ledger.Task, o launchOpts) error {
 	db, data := d.env.DB, d.env.Paths.Data
 	remote := o.Host != LocalHost

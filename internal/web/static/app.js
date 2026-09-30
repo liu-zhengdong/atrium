@@ -116,9 +116,9 @@ function schedRow(s, where) {
   const warn = where === "today" && s.trouble;
   const head = `<div class="row sched${warn ? " trouble" : ""}" data-sched="${esc(s.id)}" tabindex="0">${icon.repeat}
     <div class="title"><span class="id">${esc(s.id)}</span>${esc(s.title)}</div>
-    ${where === "today" ? `<div class="dept">${esc(s.dept_name)}</div>` : ""}<div class="who">${warn ? `<span class="warn">上一轮派活失败</span>` : esc(tag)}</div><div class="time num">${esc(schedWhen(s))}</div></div>`;
+    ${where === "today" ? `<div class="dept">${esc(s.dept_name)}</div>` : ""}<div class="who">${warn ? `<span class="warn">上一轮分派任务失败</span>` : esc(tag)}</div><div class="time num">${esc(schedWhen(s))}</div></div>`;
   if (where !== "dept" || !s.last) return head;
-  const who = s.trouble ? `<span class="warn">派活失败</span>` : esc(s.last.who) + (s.skips ? ` · <span class="warn">跳过 ${s.skips} 轮</span>` : "");
+  const who = s.trouble ? `<span class="warn">分派任务失败</span>` : esc(s.last.who) + (s.skips ? ` · <span class="warn">跳过 ${s.skips} 轮</span>` : "");
   return head + taskRow({ ...s.last, title: "上一轮" }, ago, 1).replace(/<div class="who">.*?<\/div>/, `<div class="who">${who}</div>`);
 }
 
@@ -281,7 +281,7 @@ function renderLegion(d) {
   const catalog = d.workers.filter(p => !p.problem), extra = d.workers.filter(p => p.problem);
   const combos = comboRows(catalog, d.window) + (extra.length ? `<details class="combo-extra"><summary>${icon.chev}不在目录里 ${extra.length} 个</summary>${comboRows(extra, d.window)}</details>` : "");
   $("#page").innerHTML = `<h1 class="hello">执行者</h1>
-  <p class="pulse-line">派活按额度富余挑人${reserve ? `，斜线部分是给你自己留的 ${reserve}%` : ""}。</p>
+  <p class="pulse-line">分派任务按额度富余挑人${reserve ? `，斜线部分是给你自己留的 ${reserve}%` : ""}。</p>
   <section class="section"><h2>额度</h2>${accts}</section>
   <section class="section"><h2>机器</h2>${hosts}</section>
   <section class="section"><h2>组合</h2>${combos}</section>`;
@@ -417,7 +417,7 @@ function renderTask(d) {
       ${d.parent ? `<div class="crumb up"><a href="${esc(hashWith(d.parent.id))}"><span class="id">${esc(d.parent.id)}</span>${esc(d.parent.title)}</a><span>/</span></div>` : ""}
       <h3>${esc(t.title)}</h3>
       ${draft ? "" : `<div class="steps">${d.steps.map((s, i) => `<div class="step ${i < d.step ? "past" : i === d.step ? "now" + (stuck ? " stuck" : "") : ""}"><i></i>${s}</div>`).join("")}</div>`}
-      <div class="holder"><b>${label}</b>　${esc(draft ? "还没想清楚，不派活、不计时" : d.holder)} · ${esc(ago(t.updated_at))}</div>
+      <div class="holder"><b>${label}</b>　${esc(draft ? "还没想清楚，不分派任务、不计时" : d.holder)} · ${esc(ago(t.updated_at))}</div>
       ${draft ? `<p class="draft-detail">${t.detail ? esc(t.detail) : "没有详述"}</p>` : `<dl class="facts"><dt>执行者</dt><dd>${esc(t.worker || "还没派")}</dd><dt>机器</dt><dd>${t.host ? esc(t.host + (d.host_name ? " " + d.host_name : "")) : "还没派"}</dd><dt>PR</dt><dd>${pr}</dd>${t.skill ? `<dt>技能</dt><dd>${esc(t.skill)}</dd>` : ""}${d.schedule ? `<dt>来自</dt><dd><a href="${esc(hashWith(d.schedule))}">周期任务 ${esc(d.schedule)}</a></dd>` : ""}${d.choice ? `<dt>选项单</dt><dd><a href="${esc(hashWith(d.choice))}">${esc(d.choice)}</a></dd>` : ""}</dl>`}
       ${t.source || t.class ? `<dl class="facts"><dt>来源</dt><dd>${esc(sourceLabel[t.source] || "没写")}${byHTML(d)}</dd><dt>类</dt><dd>${esc(t.class || "没归类")}</dd></dl>` : ""}
       ${relHTML(d)}

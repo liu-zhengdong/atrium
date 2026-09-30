@@ -116,7 +116,7 @@ func PointsOver(chain []Point) []string {
 	return out
 }
 
-// ChainLine 是派活时附给执行者的一行：「k3（o1）规矩——为什么」。
+// ChainLine 是分派任务时附给执行者的一行：「k3（o1）规矩——为什么」。
 func ChainLine(p Point) string {
 	s := fmt.Sprintf("%s（%s）%s", p.ID, p.Org, p.Text)
 	if p.Why != "" {

@@ -58,7 +58,7 @@ func upgradeRig(t *testing.T) (*rig, string) {
 	return newRig(t), dir
 }
 
-// 代理旧于服务：hello 后下载服务的版本替换自身、以 ErrUpgraded 退出；在跑的执行者照跑，重起的代理接回它、补报退出。
+// 代理旧于服务：hello 后下载服务的版本替换自身、以 ErrUpgraded 退出；在跑的执行者照跑，重起的代理重新跟进它、补报退出。
 func TestAgentUpgradesToServer(t *testing.T) {
 	g, dir := upgradeRig(t)
 	exe := filepath.Join(t.TempDir(), "atrium")
@@ -96,12 +96,12 @@ func TestAgentUpgradesToServer(t *testing.T) {
 	if !platform.Alive(pid) {
 		t.Fatal("升级不该带走在跑的执行者")
 	}
-	// 系统服务按新二进制重起代理：同版本，不再升；接回执行者，补传日志、补报退出。
+	// 系统服务按新二进制重起代理：同版本，不再升；重新跟进执行者，补传日志、补报退出。
 	_, stop3, _ := g.run(dir, func(a *Agent) { a.Exe, a.GH = exe, gh })
 	defer stop3()
 	g.waitOnline(host)
 	if e := waitExit(t, g.env, "t1", 1); e.Lost {
-		t.Fatalf("升级后应接回执行者，不该按丢失收尾：%+v", e)
+		t.Fatalf("升级后应重新跟进执行者，不该按丢失收尾：%+v", e)
 	}
 	got, _ := os.ReadFile(log)
 	if !strings.Contains(string(got), "睡") || !strings.Contains(string(got), "醒") {

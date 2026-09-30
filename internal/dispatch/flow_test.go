@@ -206,7 +206,7 @@ func TestFlowClaudeToGate(t *testing.T) {
 	if !strings.Contains(string(prompt), "没有 PR") {
 		t.Errorf("交回原因没进提示词：%s", prompt)
 	}
-	if runs, _ := workers.Runs(ctx, env.DB, tk.ID, 10); len(runs) != 2 || runs[1].Why != workers.WhyBounce || runs[1].Cause != "关卡没过" {
+	if runs, _ := workers.Runs(ctx, env.DB, tk.ID, 10); len(runs) != 2 || runs[1].Why != workers.WhyBounce || runs[1].Cause != "交付检查未通过" {
 		t.Errorf("交回后的拉起缘由应记交回：%+v", runs)
 	}
 }
@@ -385,7 +385,7 @@ func TestFlowStopAndTell(t *testing.T) {
 	ctx := context.Background()
 	tk, _ := ledger.Add(ctx, env.DB, ledger.NewTask{Title: "长活"}, "u1")
 	if r, err := Tell(ctx, env, tk.ID, "先看文档", "u1"); err != nil || r.Via != "next" {
-		t.Fatalf("没在跑的捎话下次带上：%+v %v", r, err)
+		t.Fatalf("没在跑的补充说明下次带上：%+v %v", r, err)
 	}
 	if _, err := Enqueue(ctx, env, tk.ID, Options{Worker: "kimi"}, "u1"); err != nil {
 		t.Fatal(err)
@@ -396,9 +396,9 @@ func TestFlowStopAndTell(t *testing.T) {
 	waitFor(t, env, tk.ID, func(x ledger.Task) bool { return x.Status == ledger.Running })
 	prompt, _ := os.ReadFile(filepath.Join(TaskDir(env.Paths.Data, tk.ID), "prompt-1.md"))
 	if !strings.Contains(string(prompt), "先看文档") {
-		t.Errorf("捎话没进提示词：%s", prompt)
+		t.Errorf("补充说明没进提示词：%s", prompt)
 	}
-	// kimi 不能即时送，也不能续上：停掉带着补充重派。
+	// kimi 不能即时送，也不能继续：停掉带着补充重派。
 	r, err := Tell(ctx, env, tk.ID, "改成 B", "u1")
 	if err != nil || r.Via != "restart" {
 		t.Fatalf("%+v %v", r, err)
@@ -411,7 +411,7 @@ func TestFlowStopAndTell(t *testing.T) {
 	if !strings.Contains(string(prompt), "改成 B") {
 		t.Errorf("重派的提示词没带补充：%s", prompt)
 	}
-	// 停下：人把任务改成受阻，派活循环结束它的执行者，退出后不再收尾。
+	// 停下：人把任务改成受阻，分派任务循环结束它的执行者，退出后不再收尾。
 	if _, err := ledger.Apply(ctx, env.DB, tk.ID, ledger.Event{Kind: ledger.Set, To: ledger.Blocked}, "u1", "不做了"); err != nil {
 		t.Fatal(err)
 	}
@@ -452,7 +452,7 @@ func TestFlowStopAndTell(t *testing.T) {
 	}
 }
 
-// claude 的捎话即时写进标准输入：假执行者等第二条消息，回显后收尾；运行时记下送达，退出后不再续上。
+// claude 的补充说明即时写进标准输入：假执行者等第二条消息，回显后收尾；运行时记下送达，退出后不再继续。
 func TestFlowTellStdin(t *testing.T) {
 	env, d := setup(t)
 	ctx := context.Background()
@@ -481,7 +481,7 @@ cat >/dev/null
 	waitFor(t, env, tk.ID, func(x ledger.Task) bool { return x.Stage == ledger.StageGate })
 	runs, _ := workers.Runs(ctx, env.DB, tk.ID, 10)
 	if len(runs) != 1 {
-		t.Fatalf("送到了就不该再续上：%+v", runs)
+		t.Fatalf("送到了就不该再继续：%+v", runs)
 	}
 	h, _ := ledger.History(ctx, env.DB, tk.ID, 50)
 	sent := false
@@ -493,7 +493,7 @@ cat >/dev/null
 	}
 }
 
-// 执行者在跑时改说明：当一次捎话走 Tell（kimi 停掉带着补充重派），重派的提示词里有新说明。
+// 执行者在跑时改说明：当一次补充说明走 Tell（kimi 停掉带着补充重派），重派的提示词里有新说明。
 func TestFlowEditDetailTells(t *testing.T) {
 	env, d := setup(t)
 	ctx := context.Background()
@@ -529,7 +529,7 @@ func must[T any](v T, err error) T {
 	return v
 }
 
-// 服务重启后接管：新的派活实例认出还活着的执行者，任务取消后结束它。
+// 服务重启后继续跟进：新的分派任务实例认出还活着的执行者，任务取消后结束它。
 func TestFlowAdopt(t *testing.T) {
 	env, d := setup(t)
 	ctx := context.Background()
@@ -555,7 +555,7 @@ func TestFlowAdopt(t *testing.T) {
 		t.Fatal(err)
 	}
 	if d2.procOf(tk.ID) == nil {
-		t.Fatal("没接管")
+		t.Fatal("没继续跟进")
 	}
 	if _, err := ledger.Apply(ctx, env.DB, tk.ID, ledger.Event{Kind: ledger.Cancel}, "u1", ""); err != nil {
 		t.Fatal(err)
@@ -733,7 +733,7 @@ func gatesLast(ctx context.Context, env *app.Env, task, kind string) (string, bo
 	return body, err == nil, err
 }
 
-// 依赖没完成的任务先进队列等；依赖完成（done）后派活循环照常拉起它。
+// 依赖没完成的任务先进队列等；依赖完成（done）后分派任务循环照常拉起它。
 func TestFlowDepsAutoDispatch(t *testing.T) {
 	env, d := setup(t)
 	ctx := context.Background()
@@ -762,7 +762,7 @@ func TestFlowDepsAutoDispatch(t *testing.T) {
 	waitFor(t, env, t2.ID, func(x ledger.Task) bool { return x.Status == ledger.Running })
 }
 
-// 依赖失败或取消：等着的任务不再派，转受阻（去掉队列行），要处理地投给处理人。
+// 依赖失败或取消：等着的任务不再派，转受阻（去掉队列行），要处理地发给处理人。
 func TestFlowDepsBroken(t *testing.T) {
 	env, d := setup(t)
 	ctx := context.Background()
@@ -839,7 +839,7 @@ func TestEnqueueSetsWorker(t *testing.T) {
 	}
 }
 
-// Lost 即使日志声称成功也不能进关卡，沿现有临时退出路径有界重试。
+// Lost 即使日志声称成功也不能进交付检查，沿现有临时退出路径有界重试。
 func TestRemoteLostRetries(t *testing.T) {
 	env, d := setup(t)
 	ctx := context.Background()
@@ -889,7 +889,7 @@ func TestRemoteLostRetries(t *testing.T) {
 	found := false
 	for _, h := range history {
 		if h.Kind == "exit_ok" {
-			t.Fatal("Lost 进了关卡")
+			t.Fatal("Lost 进了交付检查")
 		}
 		if h.Kind == "exit" {
 			var x workers.Exit

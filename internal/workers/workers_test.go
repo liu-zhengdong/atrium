@@ -71,7 +71,7 @@ func TestBuild(t *testing.T) {
 		{tool: "cursor", in: in("gpt-5.3-codex-fast", "high"), want: []string{"-p", "--workspace", dir, "--model", "gpt-5.3-codex-high-fast"}},
 		{tool: "cursor", in: in("auto", "high"), bad: "auto"},
 		{tool: "claude", in: Request{Prompt: "x", PromptFile: pf, Dir: "rel"}, bad: "绝对路径"},
-		{tool: "kimi", in: Request{Prompt: "x", PromptFile: pf, Dir: dir, Live: true}, bad: "不能即时送捎话"},
+		{tool: "kimi", in: Request{Prompt: "x", PromptFile: pf, Dir: dir, Live: true}, bad: "不能即时送补充说明"},
 	}
 	for _, c := range cases {
 		a, _ := Builtin(c.tool)
@@ -388,7 +388,7 @@ func TestClassify(t *testing.T) {
 		{"claude 模型不存在", 1, `{"type":"result","is_error":true,"result":"There's an issue with the selected model (claude-nope). It may not exist or you may not have access to it."}`, SignalModel, time.Time{}},
 		{"codex 模型不支持", 1, "ERROR: The 'gpt-nope' model is not supported when using Codex with a ChatGPT account.\n", SignalModel, time.Time{}},
 		{"退出码 0 不判模型名", 0, "invalid model selection\n", SignalNone, time.Time{}},
-		{"接管不判临时错误", ExitUnknown, "Error: fetch failed\n", SignalNone, time.Time{}},
+		{"继续跟进不判临时错误", ExitUnknown, "Error: fetch failed\n", SignalNone, time.Time{}},
 		{"之后正常收尾", 1, "Error: fetch failed\n" + `{"type":"result","is_error":false,"stop_reason":"end_turn"}`, SignalNone, time.Time{}},
 		{"思考耗尽", 0, `{"type":"step_finish","part":{"reason":"length","tokens":{"reasoning":32000,"output":0}}}`, SignalThinking, time.Time{}},
 		{"长度用尽但有正文", 0, `{"type":"step_finish","part":{"reason":"length","tokens":{"reasoning":100,"output":900}}}`, SignalNone, time.Time{}},
@@ -437,7 +437,7 @@ func TestClassifyNoStart(t *testing.T) {
 		{"干了活之后退出码 1", "opencode+deepseek-v4.1-flash", 1, read("testdata/opencode-sample.jsonl") + unknown, SignalNone},
 		{"agy 做了 23 步后退出码 1", "agy+gemini-3.8-flash-high", 1, read("testdata/agy-t349.jsonl"), SignalNone},
 		{"退出码 0 不判", "opencode+deepseek-v4.1-flash", 0, unknown, SignalNone},
-		{"接管拿不到退出码不判", "opencode+deepseek-v4.1-flash", ExitUnknown, unknown, SignalNone},
+		{"继续跟进拿不到退出码不判", "opencode+deepseek-v4.1-flash", ExitUnknown, unknown, SignalNone},
 		{"通用命令行数不出步骤不判", "mycli", 1, "boom\n", SignalNone},
 		{"尾巴读满、开头被截的不判", "opencode+deepseek-v4.1-flash", 1, strings.Repeat("x", TailBytes) + "\n" + unknown, SignalNone},
 		{"认得出的原因照原因判", "opencode+deepseek-v4.1-flash", 1, `{"type":"error","error":{"name":"APIError","data":{"message":"Overloaded"}}}`, SignalTransient},

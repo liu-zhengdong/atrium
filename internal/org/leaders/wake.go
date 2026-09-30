@@ -161,7 +161,7 @@ func (h *hub) round(ctx context.Context, env *app.Env) error {
 		}(p)
 		return nil
 	}, func(p Pending, cause error) error {
-		// 这一批无法在该负责人处处理，转秘书；原记录不删除，后续不再叫醒这位。
+		// 这一批无法在该负责人处处理，转秘书；原记录不删除，后续不再唤醒这位。
 		env.Log.Warn("负责人待处理批次出错，转秘书", "leader", p.Leader, "err", cause)
 		_, err := events.Retarget(ctx, env.DB, p.IDs, p.Leader, org.Secretary)
 		return err
@@ -184,7 +184,7 @@ func (h *hub) paused(ctx context.Context, env *app.Env, leader string) (bool, er
 	return env.Pause.Paused(ctx, pause.Scope{Orgs: chain})
 }
 
-// pendingByLeader 读投给负责人的、没确认的「要处理」事件（每位最多 MaxBatch 条）；知会不叫醒负责人。
+// pendingByLeader 读发给负责人的、没确认的「要处理」事件（每位最多 MaxBatch 条）；知会不唤醒负责人。
 func pendingByLeader(ctx context.Context, q store.Querier) ([]Pending, error) {
 	rows, err := q.QueryContext(ctx, `SELECT target, id, at FROM events
 		WHERE acked_at IS NULL AND level = 'act' AND target LIKE 'a%' ORDER BY id LIMIT ?`, MaxBatch*org.MaxLeaders)
@@ -412,7 +412,7 @@ func eventRows(ctx context.Context, q store.Querier, ids []int64) ([]Event, erro
 	return out, rows.Err()
 }
 
-// unacked 返回这批里仍投给 leader、没确认的事件编号。
+// unacked 返回这批里仍发给 leader、没确认的事件编号。
 func unacked(ctx context.Context, q store.Querier, leader string, ids []int64) ([]int64, error) {
 	if len(ids) == 0 {
 		return nil, nil

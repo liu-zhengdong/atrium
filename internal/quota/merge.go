@@ -15,7 +15,7 @@ type Stored struct {
 // lastGood：读不到时上次读数最多沿用多久。
 const lastGood = 6 * 3600_000
 
-// Accounts 是派活认识的全部账号（与执行者工具对应：agy 的账号是 antigravity）。
+// Accounts 是分派任务认识的全部账号（与执行者工具对应：agy 的账号是 antigravity）。
 var Accounts = []string{"claude", "codex", "opencode", "kimi", "grok", "cursor", "antigravity"}
 
 // AccountOf 是执行者工具对应的额度账号。
@@ -144,10 +144,10 @@ func Lines(builtin map[string]Line, oq []Pace) []Line {
 	return out
 }
 
-// Spare 是给派活的一个账号的额度判定。
+// Spare 是给分派任务的一个账号的额度判定。
 type Spare struct {
 	Account string `json:"account"`
-	// Percent 是富余：周期已过 − 已用，就是 atrium quota 显示的那个数（PaceOf 算）；算不出为空。派活按它排先后。
+	// Percent 是富余：周期已过 − 已用，就是 atrium quota 显示的那个数（PaceOf 算）；算不出为空。分派任务按它排先后。
 	Percent *float64 `json:"percent,omitempty"`
 	Stale   bool     `json:"stale"` // 读数超过 10 分钟
 	// Stop 是不该再派的原因：已用到给用户留的份额（周窗与短窗取紧的）；能派为空。

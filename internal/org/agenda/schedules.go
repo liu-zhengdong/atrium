@@ -16,17 +16,17 @@ import (
 
 // 周期任务 sN：到点在部门下生成一件普通任务并按 task run 派发；上一轮没结束就跳过记一笔；停机错过只补一轮。
 
-// Enqueue 把一件任务送进派活队列（即 task run）。由 dispatch 在装配时接上：
+// Enqueue 把一件任务送进分派任务队列（即 task run）。由 dispatch 在装配时接上：
 //
 //	agenda.Enqueue = func(ctx context.Context, env *app.Env, task, actor string) error { … }
 //
-// 没接上时周期任务照样生成任务，但那一轮记「派活未接入」并报错。
+// 没接上时周期任务照样生成任务，但那一轮记「分派任务未接入」并报错。
 var Enqueue func(ctx context.Context, env *app.Env, task, actor string) error
 
 var Kinds = map[string]string{"task": "自定义", "patrol": "体验巡检", "research": "调研"}
 
-// DispatchFailed 是一轮派活失败时记在 last_note 里的字样；网页据此把这一轮标红。
-const DispatchFailed = "派活失败"
+// DispatchFailed 是一轮分派任务失败时记在 last_note 里的字样；网页据此把这一轮标红。
+const DispatchFailed = "分派任务失败"
 
 const (
 	maxScheduleTitle  = 150
@@ -311,7 +311,7 @@ func recentUnpicked(ctx context.Context, q store.Querier, dept string) ([]string
 	return out, nil
 }
 
-// runRound 生成一轮：建任务、送进派活队列、记在周期任务上。next 为 0 表示不改下一轮（手动 run）。
+// runRound 生成一轮：建任务、送进分派任务队列、记在周期任务上。next 为 0 表示不改下一轮（手动 run）。
 func runRound(ctx context.Context, env *app.Env, x Schedule, next int64, note string, now int64, loc *time.Location) (ledger.Task, error) {
 	var unpicked []string
 	if x.Kind == "research" {
@@ -330,7 +330,7 @@ func runRound(ctx context.Context, env *app.Env, x Schedule, next int64, note st
 	}
 	var runErr error
 	if Enqueue == nil {
-		runErr = fmt.Errorf("派活未接入：dispatch 没有设置 agenda.Enqueue，%s 留在 todo", t.ID)
+		runErr = fmt.Errorf("分派任务未接入：dispatch 没有设置 agenda.Enqueue，%s 留在 todo", t.ID)
 	} else {
 		runErr = Enqueue(ctx, env, t.ID, x.ID)
 	}

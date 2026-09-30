@@ -18,7 +18,7 @@ type Fact struct {
 	Account     string
 	Trust       string
 	MaxRisk     string
-	Refusal     string // 档案是否接受自动派活（workers.Rules.Refusal）
+	Refusal     string // 档案是否接受自动分派任务（workers.Rules.Refusal）
 	Problem     string // 档案写得不对、模型与强度不搭
 	Unavailable string // 没有符合任务条件的可用主机，或隔离实例不允许
 	Waiting     string // 主机暂未就绪；仍符合条件，等待后再派

@@ -147,7 +147,7 @@ func (ix *orgIndex) subtree(id string) []string {
 type Nav struct {
 	Depts     []DeptBrief `json:"depts"`
 	Asks      int         `json:"asks"`
-	ShippedID int64       `json:"shipped_id"` // 最近 shipped 上交事件号；跨页面共用，不把任务结束算作上线
+	ShippedID int64       `json:"shipped_id"` // 最近 shipped 上报事件号；跨页面共用，不把任务结束算作上线
 }
 
 func loadNav(ctx context.Context, q store.Querier) (Nav, error) {
@@ -168,7 +168,7 @@ func loadNav(ctx context.Context, q store.Querier) (Nav, error) {
 }
 
 // Ask 是「等你」的一件：选项单等你挑，交付等你验收（部门的验收人是你），卡住的任务递到了你这层（往上没有负责人），
-// 负责人上交到秘书这层还没处理的事，或等人处理的执行者不可用标记（没登录、缺环境、模型名无效、自检不过；
+// 负责人上报到秘书这层还没处理的事，或等人处理的执行者不可用标记（没登录、缺环境、模型名无效、自检不过；
 // 从 worker_marks 现读，解除就消失；额度用尽这类会自己恢复的不算）。
 type Ask struct {
 	Kind     string `json:"kind"` // choose | accept | stuck | escalate | worker
@@ -249,7 +249,7 @@ func loadAsks(ctx context.Context, q store.Querier, ix *orgIndex) ([]Ask, error)
 	return append(out, ups...), nil
 }
 
-// escalations 是负责人上交到秘书这层（往上没有负责人）、要处理、还没确认的事件。
+// escalations 是负责人上报到秘书这层（往上没有负责人）、要处理、还没确认的事件。
 func escalations(ctx context.Context, q store.Querier, ix *orgIndex) ([]Ask, error) {
 	rows, err := q.QueryContext(ctx, `SELECT COALESCE(task, ''), COALESCE(department, ''), body, updated_at FROM events
 		WHERE kind = ? AND target = ? AND level = ? AND acked_at IS NULL ORDER BY id LIMIT 200`, events.LeaderEscalate, org.Secretary, events.Act)
@@ -266,9 +266,9 @@ func escalations(ctx context.Context, q store.Querier, ix *orgIndex) ([]Ask, err
 		}
 		var b struct{ From, Label, Note string }
 		if err := json.Unmarshal([]byte(raw), &b); err != nil {
-			return nil, fmt.Errorf("上交事件的内容坏了：%w", err)
+			return nil, fmt.Errorf("上报事件的内容坏了：%w", err)
 		}
-		out = append(out, Ask{Kind: "escalate", ID: task, Title: b.Note, Sub: b.From + " 上交：" + b.Label, Dept: dept, DeptName: ix.name(dept), At: at})
+		out = append(out, Ask{Kind: "escalate", ID: task, Title: b.Note, Sub: b.From + " 上报：" + b.Label, Dept: dept, DeptName: ix.name(dept), At: at})
 	}
 	return out, rows.Err()
 }
@@ -553,8 +553,8 @@ type Sched struct {
 	Paused   bool   `json:"paused"` // 在暂停范围内：到点不生成
 	Last     *Row   `json:"last"`   // 上一轮生成的任务；还没跑过为空
 	Skips    int    `json:"skips"`
-	Note     string `json:"note,omitempty"` // 最近一笔记录（跳过、派活失败、停机错过）
-	Trouble  bool   `json:"trouble"`        // 最近一轮派活失败
+	Note     string `json:"note,omitempty"` // 最近一笔记录（跳过、分派任务失败、停机错过）
+	Trouble  bool   `json:"trouble"`        // 最近一轮分派任务失败
 }
 
 func toSched(ctx context.Context, q store.Querier, x agenda.Schedule, ix *orgIndex, paused []string) (Sched, error) {
@@ -799,7 +799,7 @@ type TaskDetail struct {
 	// 由哪条周期任务生成（sN），它交出的或它选自的选项单（cN）；没有为空。
 	Schedule string `json:"schedule,omitempty"`
 	Choice   string `json:"choice,omitempty"`
-	// 带来源的：派活人（记录人）的名字，是负责人时给他的负责人抽屉地址「oN/aN」（负责的第一个部门/身份）。
+	// 带来源的：任务分派人（记录人）的名字，是负责人时给他的负责人抽屉地址「oN/aN」（负责的第一个部门/身份）。
 	ByName string `json:"by_name,omitempty"`
 	ByLead string `json:"by_lead,omitempty"`
 }
@@ -856,7 +856,7 @@ func loadTask(ctx context.Context, q store.Querier, id string) (TaskDetail, erro
 	return out, err
 }
 
-// recorder 填来源一行的记录人：派活人的名字（org.NameOf），负责人另给他的负责人抽屉地址。
+// recorder 填来源一行的记录人：任务分派人的名字（org.NameOf），负责人另给他的负责人抽屉地址。
 func recorder(ctx context.Context, q store.Querier, d *TaskDetail) error {
 	p, err := ledger.PartiesOf(ctx, q, d.Task.ID)
 	if err != nil || p.By == "" {
@@ -940,7 +940,7 @@ func relations(ctx context.Context, q store.Querier, d *TaskDetail) error {
 	return nil
 }
 
-// holderText 是「现在谁拿着球」：没结束的任务用 watch 的持球判定（与 top、statusline 同一份），
+// holderText 是「现在在等谁」：没结束的任务用 watch 的等待对象判定（与 top、statusline 同一份），
 // 结束了的按结果说。
 func holderText(ctx context.Context, q store.Querier, t ledger.Task) (string, error) {
 	if t.Status.Finished() && t.Status != ledger.Failed {

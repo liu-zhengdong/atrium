@@ -13,15 +13,15 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/store"
 )
 
-// Escalation 是上交的回执。
+// Escalation 是上报的回执。
 type Escalation struct {
 	To   string `json:"to"`
 	Kind string `json:"kind"`
 	Task string `json:"task,omitempty"`
 }
 
-// Escalate：负责人上交一件事，投给上一层负责人（没有投秘书）；给了任务就在任务经历里也记一笔。
-// 转交下层上交（--event）时带上原文；原事件由这位自己 events ack。
+// Escalate：负责人上报一件事，发给上一层负责人（没有投秘书）；给了任务就在任务经历里也记一笔。
+// 转交下层上报（--event）时带上原文；原事件由这位自己 events ack。
 func Escalate(ctx context.Context, db *store.DB, leader string, in EscalateIn) (Escalation, error) {
 	if err := CheckEscalate(in); err != nil {
 		return Escalation{}, err
@@ -50,7 +50,7 @@ func Escalate(ctx context.Context, db *store.DB, leader string, in EscalateIn) (
 				return err
 			}
 			if target != leader {
-				return Forbid("--event: 事件 #%d 投给 %s，不是你（%s）", in.Event, target, leader)
+				return Forbid("--event: 事件 #%d 发给 %s，不是你（%s）", in.Event, target, leader)
 			}
 			body["event"] = in.Event
 			body["original"] = map[string]any{"kind": kind, "body": json.RawMessage(orNull(raw))}
@@ -76,7 +76,7 @@ func Escalate(ctx context.Context, db *store.DB, leader string, in EscalateIn) (
 		}
 		if task != "" {
 			return ledger.Record(ctx, tx, task, "escalated", leader,
-				fmt.Sprintf("上交 %s（%s）：%s", out.To, kindLabel(in.Kind), in.Note))
+				fmt.Sprintf("上报 %s（%s）：%s", out.To, kindLabel(in.Kind), in.Note))
 		}
 		return nil
 	})

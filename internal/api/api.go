@@ -17,7 +17,7 @@ import (
 )
 
 // Actor 是请求的发起身份：用户令牌得到 u1（带 AsHeader: secretary 时为 secretary）；负责人令牌得到 Kind "leader"，ID aN。
-// 权限按 Kind 判，署名（派活人、决定人、备注作者）用 ID。
+// 权限按 Kind 判，署名（任务分派人、决定人、备注作者）用 ID。
 type Actor struct {
 	ID   string `json:"id"`
 	Kind string `json:"kind"`

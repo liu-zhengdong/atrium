@@ -14,7 +14,7 @@ import (
 
 // 与 dispatch 的约定（都记在任务经历 task_events 里，取最近一条）：
 //
-//	worktree        dispatch 拉起执行者时记 Worktree：{"host":"hN","dir":"<那台上的绝对路径>"}；关卡按 host 查事实
+//	worktree        dispatch 拉起执行者时记 Worktree：{"host":"hN","dir":"<那台上的绝对路径>"}；交付检查按 host 查事实
 //	risk            task run --risk 记：high / medium / low（没记按 low）
 //	result          执行者退出时记它最后的回复原文；审阅结论从这里读
 //	worker_require  gates 建审阅任务时记（Requirement 的 JSON）；dispatch 挑执行者时按它排除
@@ -25,7 +25,7 @@ const (
 	KindRequire  = "worker_require"
 	KindReviewOf = "review_of" // 审阅任务上：被审的原任务 tN
 	KindReviewer = "reviewer"  // 原任务上：这一轮的审阅任务 tN
-	KindGate     = "gate"      // 关卡结论（Verdict JSON）
+	KindGate     = "gate"      // 交付检查结论（Verdict JSON）
 	KindReview   = "review"    // 审阅结论
 	KindMerge    = "merge"     // 合入队列的经过：冲突文件、检查没过的摘要、跳过检查
 	// KindMergeCommit 是合入后 merge 记的 {"pr","commit"}；release 据此等含它的版本。
@@ -76,7 +76,7 @@ func Risk(ctx context.Context, q store.Querier, task string) (string, error) {
 	return strings.TrimSpace(body), nil
 }
 
-// Profile 是关卡要的档案事实：工具、模型、信任、checks。
+// Profile 是交付检查要的档案事实：工具、模型、信任、checks。
 type Profile struct {
 	Name   string
 	Tool   string
@@ -94,7 +94,7 @@ func LoadProfile(ctx context.Context, q store.Querier, worker string) (Profile, 
 	return Profile{Name: r.ID, Tool: r.Spec.Tool, Model: r.Spec.Model, Trust: r.Rules.EffectiveTrust(), Checks: r.Rules.Checks}, nil
 }
 
-// Enqueue 是派活入队（即 task run：dispatch.Enqueue），dispatch 装配时接上。建审阅任务后用它派出去。
+// Enqueue 是分派任务入队（即 task run：dispatch.Enqueue），dispatch 装配时接上。建审阅任务后用它派出去。
 // 交回（Bounce）不用它：转 queued 的任务 dispatch 沿用上次拉起的执行者与选项。
 var Enqueue func(ctx context.Context, id, by string) error
 

@@ -43,7 +43,7 @@ func RepoSource(data, repo string) (local, cloneURL string, err error) {
 	return "", "", api.Usage("任务的仓库 %q 看不懂：写 owner/name、克隆地址或本机克隆的绝对路径", repo)
 }
 
-// RemoteRepo 是派到远程时仓库的写法：本机克隆的绝对路径换成它 origin 的 owner/name（与关卡查 PR 同一个换算 gates.Slug），
+// RemoteRepo 是派到远程时仓库的写法：本机克隆的绝对路径换成它 origin 的 owner/name（与交付检查查 PR 同一个换算 gates.Slug），
 // 其余原样。换算不了返回错误：这件活只派本机。
 func RemoteRepo(ctx context.Context, repo string) (string, error) {
 	if !filepath.IsAbs(repo) {

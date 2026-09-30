@@ -68,7 +68,7 @@ func BuildTree(tasks []Task, deps map[string][]DepState) *TreeNode {
 type Detail struct {
 	Task      Task        `json:"task"`
 	Parties   Parties     `json:"parties"`
-	ByName    string      `json:"by_name,omitempty"` // 派活人的名字，只给带来源的（来源一行写「组织发现 · 名字」）
+	ByName    string      `json:"by_name,omitempty"` // 任务分派人的名字，只给带来源的（来源一行写「组织发现 · 名字」）
 	Deps      []DepState  `json:"deps"`
 	Ready     bool        `json:"ready"`
 	WaitingOn []string    `json:"waiting_on,omitempty"`

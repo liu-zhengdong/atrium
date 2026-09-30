@@ -39,7 +39,7 @@ func TestSubordinateStructureRoutes(t *testing.T) {
 		err := c.client.Do(ctx, c.method, c.path, c.body, nil)
 		var ae *api.Error
 		if !errors.As(err, &ae) || ae.Code != "forbidden" || !strings.Contains(ae.Next, "--kind beyond") {
-			t.Errorf("%s 应拒绝并提示上交：%v", c.name, err)
+			t.Errorf("%s 应拒绝并提示上报：%v", c.name, err)
 		}
 	}
 	var child org.Dept

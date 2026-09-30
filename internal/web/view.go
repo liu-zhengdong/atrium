@@ -14,10 +14,10 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/quota"
 )
 
-// 本文件是网页的纯判定：任务在五步里走到哪、行尾写什么。持球人用 watch.HolderOf，不在这里另判。
+// 本文件是网页的纯判定：任务在五步里走到哪、行尾写什么。当前等待对象用 watch.HolderOf，不在这里另判。
 
 // Steps 是任务详情的五步。
-var Steps = []string{"派活", "执行", "验收", "合入", "上线"}
+var Steps = []string{"分派任务", "执行", "验收", "合入", "上线"}
 
 // step 返回任务当前在第几步（0 起）；done 的任务返回 len(Steps)（全部走完）。
 func step(t ledger.Task) int {

@@ -16,19 +16,19 @@ const RunKind = "launch"
 
 // 这次拉起的缘由。
 const (
-	WhyFirst   = "first"   // 派活队列里取出
-	WhySame    = "same"    // 临时错误或卡死后同一执行者重试
+	WhyFirst   = "first"   // 分派任务队列里取出
+	WhySame    = "same"    // 临时错误或长时间没进展后同一执行者重试
 	WhySwitch  = "switch"  // 额度用尽、思考耗尽、临时错误再犯：换执行者
-	WhyResume  = "resume"  // 本轮结束后带着捎话续上会话
-	WhyRestart = "restart" // 停掉带着捎话重派
-	WhyBounce  = "bounce"  // 交付被交回（冲突、检查没过、审阅打回、验收打回、关卡没过）后原执行者接着改；原因在 Cause
+	WhyResume  = "resume"  // 本轮结束后带着补充说明继续会话
+	WhyRestart = "restart" // 停掉带着补充说明重派
+	WhyBounce  = "bounce"  // 交付被交回（冲突、检查没过、审阅打回、验收打回、交付检查未通过）后原执行者接着改；原因在 Cause
 )
 
 // Run 是一次拉起的记录（任务经历 kind "launch" 的正文）。gates 读 Risk、Dir、Worker；watch 读 PID、Log、Host。
 type Run struct {
 	N         int      `json:"n"` // 这件任务的第几次拉起（1 起），日志 run-N.log
 	Why       string   `json:"why"`
-	Cause     string   `json:"cause,omitempty"` // Why 为 bounce 时：冲突／检查没过／审阅打回／验收打回／关卡没过
+	Cause     string   `json:"cause,omitempty"` // Why 为 bounce 时：冲突／检查没过／审阅打回／验收打回／交付检查未通过
 	Worker    string   `json:"worker"`
 	Host      string   `json:"host"`
 	PID       int      `json:"pid,omitempty"` // 本机进程；远程为 0
@@ -38,7 +38,7 @@ type Run struct {
 	Risk      string   `json:"risk"`
 	Secrets   []string `json:"secrets,omitempty"`    // 注入的凭据名（值不记）
 	RemoteRun int      `json:"remote_run,omitempty"` // 远程机器上的轮号（hosts 记的）
-	TellsUpto int64    `json:"tells_upto"`           // 提示词里已含到哪条捎话（任务经历 id）
+	TellsUpto int64    `json:"tells_upto"`           // 提示词里已含到哪条补充说明（任务经历 id）
 	At        int64    `json:"at"`
 }
 

@@ -10,7 +10,7 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/workers"
 )
 
-// 本文件是派活用到的别的包的能力，集中在一处：hosts（挑机器、远程拉起、等退出）、quota（富余）、
+// 本文件是分派任务用到的别的包的能力，集中在一处：hosts（挑机器、远程拉起、等退出）、quota（富余）、
 // org（技能、凭据）。都是变量，测试换成假的。
 
 // HostNeed 是一件活对机器的要求。
@@ -59,7 +59,7 @@ var (
 	}
 )
 
-// Skill 是派活要的技能信息。
+// Skill 是分派任务要的技能信息。
 type Skill struct {
 	Workers []string
 	Secrets []string

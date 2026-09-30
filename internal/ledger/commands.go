@@ -22,10 +22,10 @@ func Commands(t *cli.Table) {
 			{Name: "after", Value: "tN", Multi: true, Help: "依赖：这些任务完成后才能派"},
 			{Name: "skill", Value: "名字", Help: "用哪个技能"},
 			{Name: "priority", Value: "级别", Help: "urgent 紧急 / fix 修复 / normal 普通（缺省）/ idle 闲时"},
-			{Name: "repo", Value: "仓库", Help: "在哪个仓库干活，如 owner/name（建工作树，交 PR 或本机合入）；不写时 task run 派活沿用部门的仓库（部门只有一个时）"},
+			{Name: "repo", Value: "仓库", Help: "在哪个仓库干活，如 owner/name（建工作树，交 PR 或本机合入）；不写时 task run 分派任务沿用部门的仓库（部门只有一个时）"},
 			{Name: "dir", Value: "路径", Help: "工作地点：本机文件夹的绝对路径，不必是 git 仓库；执行者在原地干，交付说明写在最后的回复里（与 --repo 只给一个）"},
-			{Name: "owner", Value: "身份", Help: "处理人：结果（完成、上线、失败、卡住）要处理地投给他——u1、secretary 或 aN（缺省派活的人；u1、secretary 在有负责人的部门由负责人收）；aN 且不写仓库与工作地点 = 交给这位负责人去拆，建好就唤醒它；--detail 写清服务三个目标里的哪一个，长期方向写进部门介绍，不建成做不完的任务"},
-			{Name: "draft", Bool: true, Help: "建成草稿：还没想清楚、条件还不够，不派活、不计时；要写部门（按部门计上限，满了由该部门负责人整理）；想清楚了 task set tN --status todo"},
+			{Name: "owner", Value: "身份", Help: "处理人：结果（完成、上线、失败、卡住）要处理地发给他——u1、secretary 或 aN（缺省分派任务的人；u1、secretary 在有负责人的部门由负责人收）；aN 且不写仓库与工作地点 = 交给这位负责人去拆，建好就唤醒它；--detail 写清服务三个目标里的哪一个，长期方向写进部门介绍，不建成做不完的任务"},
+			{Name: "draft", Bool: true, Help: "建成草稿：还没想清楚、条件还不够，不分派任务、不计时；要写部门（按部门计上限，满了由该部门负责人整理）；想清楚了 task set tN --status todo"},
 			{Name: "source", Value: "来源", Help: "草稿记的发现从哪来：user 用户纠正 / org 组织发现（只给草稿）"},
 			{Name: "class", Value: "类名", Help: "草稿记的发现按原因归的类，如「执行者可用性」；回执列出已有的类（只给草稿）"},
 		},
@@ -128,7 +128,7 @@ func Commands(t *cli.Table) {
 				return err
 			}
 			t := d.Task
-			// 没结束的任务问 watch「现在球在谁手里」（持球人判定只有一份，在 watch）。
+			// 没结束的任务问 watch「现在在等谁」（当前等待对象判定只有一份，在 watch）。
 			var h struct {
 				Holder struct {
 					Text string `json:"text"`
@@ -145,7 +145,7 @@ func Commands(t *cli.Table) {
 			if h.Holder.Text != "" {
 				fmt.Fprintf(&b, "现在：%s\n", h.Holder.Text)
 			}
-			for _, kv := range [][2]string{{"部门", t.Org}, {"父任务", t.Parent}, {"派活人", d.Parties.By}, {"处理人", d.Parties.Owner}} {
+			for _, kv := range [][2]string{{"部门", t.Org}, {"父任务", t.Parent}, {"任务分派人", d.Parties.By}, {"处理人", d.Parties.Owner}} {
 				if kv[1] != "" {
 					fmt.Fprintf(&b, "%s：%s\n", kv[0], kv[1])
 				}
@@ -185,7 +185,7 @@ func Commands(t *cli.Table) {
 			case t.Status == Todo && d.Ready:
 				next = "atrium task run " + t.ID
 			case t.Status == Todo && len(d.Broken) > 0:
-				next = h.Holder.Next // 依赖等不到了：改依赖（与持球判定同一条）
+				next = h.Holder.Next // 依赖等不到了：改依赖（与等待对象判定同一条）
 			case t.Stage == StageAccept && t.Status == Running:
 				next = "atrium task accept " + t.ID
 			case (t.Status == Todo || t.Status == Queued) && len(d.WaitingOn) > 0:
@@ -202,14 +202,14 @@ func Commands(t *cli.Table) {
 			}
 			out := struct {
 				Detail
-				Holder string `json:"holder,omitempty"` // 现在谁拿着球（没结束的任务）
+				Holder string `json:"holder,omitempty"` // 现在在等谁（没结束的任务）
 			}{d, h.Holder.Text}
 			return c.Done(out, text, next)
 		}})
 	t.Add(cli.Command{Path: "task set", Args: "<tN>", Summary: "改任务的描述、依赖或状态",
 		Flags: []cli.Flag{
 			{Name: "title", Value: "文字", Help: "标题"},
-			{Name: "detail", Value: "文字", Help: "详述；有人在做的（交给负责人拆着的、执行者在跑的）改完当一次捎话送到（同 task tell）"},
+			{Name: "detail", Value: "文字", Help: "详述；有人在做的（交给负责人拆着的、执行者在跑的）改完当一次补充说明送到（同 task tell）"},
 			{Name: "priority", Value: "级别", Help: "urgent / fix / normal / idle"},
 			{Name: "org", Value: "oN", Help: "改所属部门（给空串清掉）"},
 			{Name: "skill", Value: "名字", Help: "技能（给空串清掉）"},
@@ -218,7 +218,7 @@ func Commands(t *cli.Table) {
 			{Name: "after", Value: "tN", Multi: true, Help: "整体替换依赖（给空串清空）"},
 			{Name: "source", Value: "来源", Help: "发现从哪来：user 用户纠正 / org 组织发现（给空串清掉）"},
 			{Name: "class", Value: "类名", Help: "发现归的类（给空串清掉）；把写成两个名字的同一类并起来"},
-			{Name: "owner", Value: "身份", Help: "改处理人：u1、secretary 或 aN（给空串回到派活人），记进经历；aN 且任务待派、没有仓库与工作地点 = 交给这位负责人去拆，改好就唤醒它（草稿转待派时再唤醒）"},
+			{Name: "owner", Value: "身份", Help: "改处理人：u1、secretary 或 aN（给空串回到任务分派人），记进经历；aN 且任务待派、没有仓库与工作地点 = 交给这位负责人去拆，改好就唤醒它（草稿转待派时再唤醒）"},
 			{Name: "status", Value: "状态", Help: "人工改状态：draft（退回草稿）、todo（转待派）、done、failed、cancelled（停下用 task stop）"},
 			{Name: "note", Value: "文字", Help: "改状态的原因，记进经历"},
 		},
@@ -283,7 +283,7 @@ func Commands(t *cli.Table) {
 			if err := c.Call("PATCH", "/api/tasks/"+url.PathEscape(id), body, &t); err != nil {
 				return err
 			}
-			return c.Done(t, fmt.Sprintf("已停下 %s「%s」：%s；在跑的执行者由派活循环结束", t.ID, t.Title, stateLabel(t)), "atrium task run "+t.ID)
+			return c.Done(t, fmt.Sprintf("已停下 %s「%s」：%s；在跑的执行者由分派任务循环结束", t.ID, t.Title, stateLabel(t)), "atrium task run "+t.ID)
 		}})
 	t.Add(cli.Command{Path: "task tree", Args: "[tN]", Summary: "看任务树、各层汇总与每件能派还是在等谁（不给 tN 看全部顶层没结束的）",
 		Run: func(c *cli.Ctx) error {

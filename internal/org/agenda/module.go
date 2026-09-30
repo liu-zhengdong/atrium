@@ -285,8 +285,8 @@ func Commands(t *cli.Table) {
 				return err
 			}
 			if owner := d.Parties.Owner; api.IsRef(owner, "a") {
-				// 交给了部门负责人：由它设计方案、拆活、派活，拍板的人等结果。
-				text, next, err := events.AsyncNext(c, text+"\n已交给负责人 "+owner+" 去设计、拆活", "atrium task wait "+first)
+				// 交给了部门负责人：由它设计方案、拆分任务、分派任务，拍板的人等结果。
+				text, next, err := events.AsyncNext(c, text+"\n已交给负责人 "+owner+" 去设计、拆分任务", "atrium task wait "+first)
 				if err != nil {
 					return err
 				}

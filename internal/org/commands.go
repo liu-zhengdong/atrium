@@ -126,7 +126,7 @@ func Commands(t *cli.Table) {
 	t.Add(cli.Command{Path: "org edit", Args: "<oN>", Summary: "改部门：名字、上级、介绍、负责人、验收人、仓库；--delete 删掉",
 		Flags: append([]cli.Flag{
 			{Name: "name", Value: "名字", Help: "改名"},
-			{Name: "accept", Value: "谁", Help: "验收人（沿树继承）：auto 运行时过了关卡就落地（缺省）/ leader 负责人 / user 你；给 - 改回继承上级"},
+			{Name: "accept", Value: "谁", Help: "验收人（沿树继承）：auto 运行时过了交付检查就应用（缺省）/ leader 负责人 / user 你；给 - 改回继承上级"},
 			{Name: "parent", Value: "oN", Help: "挪到别的上级下（给 - 挪到顶层）"},
 			{Name: "repo-add", Value: "仓库", Multi: true, Help: "加仓库"},
 			{Name: "repo-rm", Value: "仓库", Multi: true, Help: "去掉仓库"},

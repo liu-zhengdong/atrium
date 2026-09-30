@@ -187,7 +187,7 @@ func (p *Profile) keyString(k string) (string, bool) {
 	return s, ok
 }
 
-// Check 在派活前核对模型与强度搭不搭（不等排到时才报错）。
+// Check 在分派任务前核对模型与强度搭不搭（不等排到时才报错）。
 func (r Resolved) Check() error {
 	dir := os.TempDir()
 	_, err := r.Adapter.Build(r.Request("检查", filepath.Join(dir, "prompt.md"), dir))

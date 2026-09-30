@@ -228,9 +228,9 @@ func safeRel(p string) bool {
 // single_instance 由内置适配器的「同一时刻只跑一个」负责。
 var droppedProfileKeys = []string{"invoke", "cost", "progress", "single_instance"}
 
-// convertProfile 把旧档案原文换成新版认的写法（纯函数）：去掉 droppedProfileKeys；checks 里去掉新版没有的关卡
+// convertProfile 把旧档案原文换成新版认的写法（纯函数）：去掉 droppedProfileKeys；checks 里去掉新版没有的交付检查
 // （local_check：合入队列总跑 .agents/check，不再是档案可选项）。没改动时原样返回（保留注释）。
-// 返回去掉的「键」与「关卡」，供回执汇总。
+// 返回去掉的「键」与「交付检查」，供回执汇总。
 func convertProfile(src string, known []string) (out string, dropped []string, err error) {
 	keys, body, err := workers.SplitSource(src)
 	if err != nil {

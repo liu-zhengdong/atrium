@@ -8,11 +8,11 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/store"
 )
 
-// 验收人：部门级设置，沿树继承——交付过了关卡（和审阅）之后，谁判它能不能落地。
+// 验收人：部门级设置，沿树继承——交付过了交付检查（和审阅）之后，谁判它能不能应用。
 const (
-	AcceptAuto   = "auto"   // 运行时：过了关卡、审阅直接落地（缺省）
+	AcceptAuto   = "auto"   // 运行时：过了交付检查、审阅直接应用（缺省）
 	AcceptLeader = "leader" // 部门往上最近的负责人
-	AcceptUser   = "user"   // 用户（经秘书投给你）
+	AcceptUser   = "user"   // 用户（经秘书发给你）
 )
 
 // ResolveAcceptor 纯判定：从 dept 往上找最近设了验收人的部门；都没设为 auto。from 是设它的部门（没设为空）。

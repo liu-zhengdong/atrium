@@ -34,7 +34,7 @@ func Commands(t *cli.Table) {
 	t.Group("host", "机器")
 	t.Add(cli.Command{Path: "host add", Args: "<名称>", Summary: "登记一台远程机器，给一次性接入码（30 分钟有效）",
 		Flags: []cli.Flag{
-			{Name: "repo", Value: "owner/name|*", Multi: true, Help: "自动派活能接的仓库（* 为全部）；不登记只接 --host 指定的活"},
+			{Name: "repo", Value: "owner/name|*", Multi: true, Help: "自动分派任务能接的仓库（* 为全部）；不登记只接 --host 指定的活"},
 			{Name: "max", Value: "N", Help: "同时最多跑几个执行者（缺省按那台核数）"},
 			{Name: "ssh", Value: "user@地址", Help: "由服务拉起 ssh 反向隧道连那台（断开自动重连）"},
 			{Name: "tunnel", Value: "本机端口:远端端口", Help: "隧道两端端口（缺省都用服务端口）"},

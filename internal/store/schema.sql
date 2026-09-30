@@ -138,7 +138,7 @@ CREATE TABLE IF NOT EXISTS task_deps (
 );
 CREATE INDEX IF NOT EXISTS task_deps_on ON task_deps (depends_on);
 
--- 任务的全部经历：状态变化、备注、关卡结论、交回……body 是 JSON 或纯文本。
+-- 任务的全部经历：状态变化、备注、交付检查结论、交回……body 是 JSON 或纯文本。
 CREATE TABLE IF NOT EXISTS task_events (
   id    INTEGER PRIMARY KEY AUTOINCREMENT,
   task  TEXT NOT NULL REFERENCES tasks (id),
@@ -152,7 +152,7 @@ CREATE INDEX IF NOT EXISTS task_worktrees ON task_events (id) WHERE kind = 'work
 CREATE INDEX IF NOT EXISTS task_worktrees_reclaimed ON task_events (task, body) WHERE kind = 'worktree_reclaimed';
 CREATE INDEX IF NOT EXISTS task_worker_lifecycle ON task_events (task, kind, id) WHERE kind = 'launch' OR kind = 'exit';
 
--- 派活队列：task run 的入队选项（opts：执行者、风险、机器、凭据名，JSON）。队列本身是状态 queued 的任务，
+-- 分派任务队列：task run 的入队选项（opts：执行者、风险、机器、凭据名，JSON）。队列本身是状态 queued 的任务，
 -- 按任务优先级（tasks.priority）、入队先后取；没有这一行（交回）时沿用上次拉起的执行者。
 CREATE TABLE IF NOT EXISTS queue (
   task        TEXT PRIMARY KEY REFERENCES tasks (id),
@@ -259,7 +259,7 @@ CREATE TABLE IF NOT EXISTS material_metering (
   version INTEGER PRIMARY KEY CHECK (version = 1)
 );
 
--- 机器：本机 h1，远程 hN。接入码与机器令牌只存哈希；info、load 是代理上报的 JSON；repos 是自动派活能接的仓库（JSON 数组，"*" 为全部）。
+-- 机器：本机 h1，远程 hN。接入码与机器令牌只存哈希；info、load 是代理上报的 JSON；repos 是自动分派任务能接的仓库（JSON 数组，"*" 为全部）。
 CREATE TABLE IF NOT EXISTS hosts (
   id              TEXT PRIMARY KEY,
   name            TEXT NOT NULL,

@@ -43,7 +43,7 @@ func TestNamedOnlyWorker(t *testing.T) {
 	for _, c := range v.Candidates {
 		if c.ID == "fake" {
 			found = true
-			if c.Eligible || !strings.Contains(strings.Join(c.Refusals, "；"), "档案 auto=false：只接点名派活") {
+			if c.Eligible || !strings.Contains(strings.Join(c.Refusals, "；"), "档案 auto=false：只接点名分派任务") {
 				t.Fatalf("自动候选：%+v", c)
 			}
 		}

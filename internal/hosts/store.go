@@ -420,7 +420,7 @@ func finishRun(ctx context.Context, q store.Querier, r RunRef, e Exit) error {
 
 func validLogFile(p string) bool { return p != "" && !strings.ContainsRune(p, 0) }
 
-// RecoverLaunches 在派活启动前收尾旧进程未回执的轮次；其内存指令队列已不存在。
+// RecoverLaunches 在分派任务启动前收尾旧进程未回执的轮次；其内存指令队列已不存在。
 func RecoverLaunches(ctx context.Context, q store.Querier) error {
 	_, err := q.ExecContext(ctx, `UPDATE host_runs SET exit_lost = 1, exited_at = ? WHERE pid = 0 AND exited_at IS NULL`, store.Now())
 	return err

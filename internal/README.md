@@ -131,6 +131,7 @@ type Module struct {
 
 - `org.Ancestors(ctx, q, "oN")` → 顶层到本部门的链；`org.Chain(ctx, q, "oN")` → 要点链（顶层在前，同部门按 pos）；`org.ChainLine(p)` → 派活附的一行「k3（o1）规矩——为什么」。
 - 用户全局原则：`org.Principles()` 现读服务主机 `~/AGENTS.md`，原文拼成一节（文件不存在为空）；执行者（含审阅者）、负责人、秘书的提示词都从这里取，排在部门要点之前。测试把 `HOME`／`USERPROFILE` 指向临时目录。
+- 技能索引：`org.SkillIndex(org.Skills(…), except)` 把全部技能拼成一节（名字、一句话、当前版 SKILL.md 路径），读的人按手上的活自取；执行者、负责人、秘书的提示词都附。执行者提示词里 `except` 是任务挂上的技能（它另有「按这份做法干」一节，索引不重复）。
 - 上限表在 `org/limits.go`（`Limits`：会增长的东西 → 上限 → 满了找谁 → 怎么办）；满了一律 `org.Full(key, dept, used)`，计数 `org.Counts(ctx, q, dept)`（网页「6/7」，接口 `GET /api/limits?node=oN`）。
 - 上限只挡写入，不截读取：读路径按技术上限 `org.ReadCap`（1000）查，超了报错而不是少给；超了业务上限的（导入的旧数据）照样全部返回，给人看的地方用 `org.Tally`／`org.Over` 标「超限 8/7」，要点链用 `org.PointsOver` 在派活与负责人提示词里加一行。
 - 巡检每轮 `org.ScanNotices` 对照 `limit_notices`：刚到或超了且未提醒则 watch 发 `limit.full`（要处理）；部门负责人投 `org.Recipient`，秘书、用户及其余投秘书。回到上限以内才删已提醒，再超再发。判定纯函数 `org.DecideNotice`。

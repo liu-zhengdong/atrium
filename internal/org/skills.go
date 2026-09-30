@@ -156,6 +156,27 @@ func SkillSummary(body string) string {
 	return ""
 }
 
+// SkillIndex 纯函数：全部技能的索引拼成提示词里的一节（名字、一句话、当前版 SKILL.md 路径），由读的人按手上的活自取。
+// 执行者、负责人、秘书的提示词都从这里取（同 Principles）；except 是这件活已挂上的技能，另有「按这份做法干」，索引里不重复。没有技能为空。
+// 技能总数有上限（MaxSkills），一行约两百字节，整节量级在 10KB 以内。
+func SkillIndex(skills []Skill, except string) string {
+	var b strings.Builder
+	for _, k := range skills {
+		if k.Name == except {
+			continue
+		}
+		summary := k.Summary
+		if summary == "" {
+			summary = "（没有说明）"
+		}
+		fmt.Fprintf(&b, "- %s：%s——%s\n", k.Name, summary, k.Path)
+	}
+	if b.Len() == 0 {
+		return ""
+	}
+	return "## 技能索引（Atrium 全部技能）\n\n跟这件活相关的先读再动手（附属文件在同一目录）：\n\n" + b.String()
+}
+
 func clip(s string, n int) string {
 	if utf8.RuneCountInString(s) <= n {
 		return s

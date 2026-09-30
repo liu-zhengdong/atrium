@@ -257,7 +257,7 @@ func (h *hub) launch(ctx context.Context, env *app.Env, p Pending) error {
 	if l == nil {
 		return errors.New("拉起接口还没接上（leaders.SetLauncher）")
 	}
-	prompt, err := buildPrompt(ctx, env.DB, who, p.IDs)
+	prompt, err := buildPrompt(ctx, env.DB, env.Paths.Data, who, p.IDs)
 	if err != nil {
 		return err
 	}
@@ -323,7 +323,7 @@ func leaderEnv(base map[string]string, token, data string) map[string]string {
 	return env
 }
 
-func buildPrompt(ctx context.Context, q store.Querier, who org.Identity, ids []int64) (string, error) {
+func buildPrompt(ctx context.Context, q store.Querier, data string, who org.Identity, ids []int64) (string, error) {
 	in := PromptInput{Leader: who}
 	ps, err := org.Parents(ctx, q)
 	if err != nil {
@@ -332,6 +332,11 @@ func buildPrompt(ctx context.Context, q store.Querier, who org.Identity, ids []i
 	if in.Global, err = org.Principles(); err != nil {
 		return "", err
 	}
+	skills, err := org.Skills(ctx, q, data)
+	if err != nil {
+		return "", err
+	}
+	in.Skills = org.SkillIndex(skills, "")
 	lm, err := org.LeaderMap(ctx, q)
 	if err != nil {
 		return "", err

@@ -159,6 +159,7 @@ type DeptBrief struct {
 type PromptInput struct {
 	Leader   org.Identity
 	Global   string // 用户的全局原则（org.Principles 拼好的一节）；没有为空
+	Skills   string // 技能索引（org.SkillIndex 拼好的一节）；没有为空
 	Depts    []DeptBrief
 	Memo     string
 	Events   []Event
@@ -178,6 +179,9 @@ func Prompt(in PromptInput) string {
 	w("")
 	if in.Global != "" {
 		w("%s", in.Global)
+	}
+	if in.Skills != "" {
+		w("%s", in.Skills)
 	}
 	w("## 你负责的部门")
 	if len(in.Depts) == 0 {

@@ -108,6 +108,18 @@ func TestSkillPure(t *testing.T) {
 			t.Errorf("%q → %q，想要 %q", body, got, want)
 		}
 	}
+	ks := []Skill{{Name: "fix", Summary: "修 bug", Path: "/d/fix/SKILL.md"}, {Name: "web", Path: "/d/web/SKILL.md"}}
+	for _, c := range []struct{ except, want string }{
+		{"", "## 技能索引（Atrium 全部技能）\n\n跟这件活相关的先读再动手（附属文件在同一目录）：\n\n- fix：修 bug——/d/fix/SKILL.md\n- web：（没有说明）——/d/web/SKILL.md\n"},
+		{"fix", "## 技能索引（Atrium 全部技能）\n\n跟这件活相关的先读再动手（附属文件在同一目录）：\n\n- web：（没有说明）——/d/web/SKILL.md\n"},
+	} {
+		if got := SkillIndex(ks, c.except); got != c.want {
+			t.Errorf("除去 %q：\n%s\n想要：\n%s", c.except, got, c.want)
+		}
+	}
+	if SkillIndex(nil, "") != "" || SkillIndex(ks[:1], "fix") != "" {
+		t.Error("没有技能（或只有挂上的那个）不出索引")
+	}
 	for name, ok := range map[string]bool{"web-design": true, "a1": true, "Web": false, "a--b": false, "-a": false, "a/b": false} {
 		if (CheckSkillName(name) == nil) != ok {
 			t.Errorf("技能名 %q", name)

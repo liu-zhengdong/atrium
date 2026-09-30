@@ -62,7 +62,7 @@ func TestBuild(t *testing.T) {
 		{tool: "claude", in: in("", "ultra"), bad: "思考强度只能是"},
 		{tool: "codex", in: in("gpt-6", "high"), want: []string{"exec", "--json", "--skip-git-repo-check", "--ignore-user-config", "--dangerously-bypass-approvals-and-sandbox", "-C", dir, "--disable", "apps", "-m", "gpt-6", `model_reasoning_effort="high"`, "-"}},
 		{tool: "codex", in: Request{Prompt: "x", PromptFile: pf, Dir: dir, Session: "0123abcd-0123-0123-0123-0123456789ab"}, want: []string{"exec", "resume", "--json", "--skip-git-repo-check", "--ignore-user-config", "--dangerously-bypass-approvals-and-sandbox", "--disable", "apps", "0123abcd-0123-0123-0123-0123456789ab", "-"}},
-		{tool: "codex", in: Request{Prompt: "x", PromptFile: pf, Dir: dir, ComputerUse: []string{`mcp_servers={computer-use={command="cu"}}`}}, want: []string{"--ignore-user-config", "-C", dir, "-c", `mcp_servers={computer-use={command="cu"}}`, "-"}},
+		{tool: "codex", in: Request{Prompt: "x", PromptFile: pf, Dir: dir, ComputerUse: []string{`mcp_servers={computer-use={command="cu"}}`}}, want: []string{"--ignore-user-config", "-C", dir, "-c", "-"}},
 		{tool: "opencode", in: in("p/m", "low"), want: []string{"run", "--format", "json", "--auto", "-m", "p/m", "--variant", "low"}},
 		{tool: "kimi", in: in("k2", ""), want: []string{"-p", "请先完整读取任务说明文件 " + pf + "，然后按文件内容执行。", "-m", "k2"}},
 		{tool: "kimi", in: in("", "high"), bad: "不接受思考强度"},

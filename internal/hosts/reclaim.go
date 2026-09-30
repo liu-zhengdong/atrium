@@ -82,7 +82,7 @@ func (a *Agent) reclaim(ctx context.Context, r *ReclaimRequest) error {
 			return err
 		}
 	}
-	return worktree.RemoveTemp(filepath.Join(a.Dir, "tasks", r.Task, "tmp"))
+	return worktree.RemoveTemp(a.tempDir(r.Task))
 }
 
 func (a *Agent) reclaimGeneration(task string) (int, error) {

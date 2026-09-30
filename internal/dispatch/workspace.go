@@ -22,6 +22,10 @@ import (
 // TaskDir 是任务目录：提示词、日志、工作树都在这里。
 func TaskDir(data, task string) string { return filepath.Join(data, "tasks", task) }
 
+// TempDir 是任务的临时目录，也是本机执行者的会话临时目录（同一任务的各次运行先后共用）：
+// 执行者退出后按它回收残留进程（服务重启后继续跟进时照样算得出），任务结束后随工作树回收。
+func TempDir(data, task string) string { return filepath.Join(TaskDir(data, task), "tmp") }
+
 // Branch 是任务的分支名。
 func Branch(task string) string { return "task-" + task }
 

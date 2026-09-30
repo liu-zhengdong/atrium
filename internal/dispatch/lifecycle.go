@@ -100,7 +100,7 @@ func (d *dispatcher) reap(ctx context.Context) error {
 	})
 }
 
-// adoptProc 跟着已存在的进程等退出，本机与远程共用启动继续跟进和终态补清的路径。
+// adoptProc 跟着已存在的进程等退出，本机与远程共用启动继续跟进和终态补清的路径；本机的退出后回收会话残留。
 func (d *dispatcher) adoptProc(p *proc) {
 	if p.remote {
 		d.track(p, d.remoteWaiter(p, p.run.RemoteRun))
@@ -109,6 +109,9 @@ func (d *dispatcher) adoptProc(p *proc) {
 	d.track(p, func() int {
 		for platform.Alive(p.run.PID) {
 			time.Sleep(2 * time.Second)
+		}
+		if err := platform.EndSession(p.run.PID, TempDir(d.env.Paths.Data, p.task)); err != nil {
+			d.env.Log.Error("回收执行者会话残留失败", "task", p.task, "err", err)
 		}
 		return workers.ExitUnknown
 	})

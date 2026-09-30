@@ -33,7 +33,8 @@ func leaderLine(i Identity) string {
 func identityCommands(t *cli.Table) {
 	t.Group("leader", "负责人")
 	t.Add(cli.Command{Path: "leader add", Args: "<名字>", Summary: "登记负责人（aN）",
-		Flags: []cli.Flag{{Name: "workers", Value: "执行者", Multi: true, Help: "执行者组合：唤醒时按顺序轮换，写法同 task run --worker（工具+模型[:强度]，必填）"}},
+		Flags: []cli.Flag{{Name: "workers", Value: "执行者", Multi: true, Help: "执行者组合：唤醒时按顺序轮换，写法同 task run --worker（工具+模型[:强度]）；负责人不给时沿用自己的组合"},
+			{Name: "org", Value: "oN", Help: "一步绑定到这个部门（负责人登记时必填）"}},
 		Run: func(c *cli.Ctx) error {
 			name, err := c.Arg(0, "<名字>")
 			if err != nil {
@@ -43,10 +44,14 @@ func identityCommands(t *cli.Table) {
 				return err
 			}
 			var i Identity
-			if err := c.Call("POST", "/api/leaders", NewLeader{Name: name, Workers: c.List("workers")}, &i); err != nil {
+			if err := c.Call("POST", "/api/leaders", NewLeader{Name: name, Workers: c.List("workers"), Dept: c.Str("org")}, &i); err != nil {
 				return err
 			}
-			return c.Done(i, "已登记负责人 "+leaderLine(i), "atrium org edit <oN> --leader "+i.ID)
+			next := "atrium org edit <oN> --leader " + i.ID
+			if c.Str("org") != "" {
+				next = "atrium leader ls " + i.ID
+			}
+			return c.Done(i, "已登记负责人 "+leaderLine(i), next)
 		}})
 	t.Add(cli.Command{Path: "leader edit", Args: "<aN>", Summary: "改负责人的名字或执行者组合；--delete 删掉",
 		Flags: []cli.Flag{

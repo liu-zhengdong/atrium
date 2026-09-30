@@ -1,13 +1,11 @@
 package leaders
 
 import (
-	"errors"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/liu-zhengdong/atrium/internal/api"
 	"github.com/liu-zhengdong/atrium/internal/org"
 )
 
@@ -82,8 +80,8 @@ func TestRuleFor(t *testing.T) {
 		"PATCH /api/tasks/{id}":             RuleTaskRef,
 		"POST /api/tasks/{id}/notes":        RuleTaskRef,
 		"POST /api/tasks/{id}/run":          RuleTaskRef,
-		"POST /api/org":                     RuleDeny,
-		"PATCH /api/org/{id}":               RuleDeptIntro,
+		"POST /api/org":                     RuleDeptCreate,
+		"PATCH /api/org/{id}":               RuleDeptPatch,
 		"POST /api/org/{id}/points":         RuleDeptRef,
 		"POST /api/org/{id}/materials":      RuleDeptRef,
 		"PATCH /api/points/{id}":            RulePointRef,
@@ -95,7 +93,7 @@ func TestRuleFor(t *testing.T) {
 		"PUT /api/memo":                     RuleMemo,
 		"POST /api/events/ack":              RuleEventsAck,
 		"POST /api/escalations":             RuleEscalate,
-		"POST /api/leaders":                 RuleDeny,
+		"POST /api/leaders":                 RuleLeaderCreate,
 		"PATCH /api/leaders/{id}":           RuleDeny,
 		"POST /api/pause":                   RuleDeny,
 		"POST /api/choices/{id}/pick":       RuleDeny,
@@ -110,7 +108,7 @@ func TestRuleFor(t *testing.T) {
 	}
 }
 
-func TestIntroOnly(t *testing.T) {
+func TestIntroFieldsOnly(t *testing.T) {
 	cases := []struct {
 		body map[string]any
 		ok   bool
@@ -131,14 +129,45 @@ func TestIntroOnly(t *testing.T) {
 		{map[string]any{"NEXT": "x"}, false},
 	}
 	for _, c := range cases {
-		err := IntroOnly(c.body)
-		if (err == nil) != c.ok {
-			t.Errorf("%v：%v", c.body, err)
+		if got := IntroFieldsOnly(c.body); got != c.ok {
+			t.Errorf("%v：%v，应为 %v", c.body, got, c.ok)
 		}
-		var ae *api.Error
-		if err != nil && (!errors.As(err, &ae) || ae.Status != 403 || !strings.Contains(ae.Message, "只归秘书和用户")) {
-			t.Errorf("%v：拒绝要 403 且说明只归秘书和用户：%v", c.body, err)
-		}
+	}
+}
+
+func TestStructureTargets(t *testing.T) {
+	cases := []struct {
+		name  string
+		rule  Rule
+		body  map[string]any
+		want  []string
+		intro bool
+		deny  bool
+	}{
+		{"在 a9 的 o5 下建", RuleDeptCreate, map[string]any{"name": "x", "parent": "o5"}, []string{"o5"}, false, false},
+		{"介绍", RuleDeptPatch, map[string]any{"next": "x"}, []string{"o5"}, true, false},
+		{"挪上级", RuleDeptPatch, map[string]any{"parent": "o2"}, []string{"o5", "o2"}, false, false},
+		{"裁撤并入", RuleDeptPatch, map[string]any{"delete": true, "into": "o6"}, []string{"o5", "o6"}, false, false},
+		{"登记并绑定", RuleLeaderCreate, map[string]any{"name": "x", "org": "o5"}, []string{"o5"}, false, false},
+		{"大写键绕过", RuleDeptPatch, map[string]any{"Parent": "o2"}, nil, false, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			checks, intro, err := StructureTargets(c.rule, "o5", c.body)
+			if (err != nil) != c.deny || intro != c.intro {
+				t.Fatalf("%v %v", intro, err)
+			}
+			if err != nil {
+				return
+			}
+			got := make([]string, len(checks))
+			for i, check := range checks {
+				got[i] = check.Dept
+			}
+			if !reflect.DeepEqual(got, c.want) {
+				t.Errorf("目标 %v，应为 %v", got, c.want)
+			}
+		})
 	}
 }
 

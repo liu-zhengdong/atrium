@@ -195,7 +195,7 @@ func checkLeader(ctx context.Context, q store.Querier, id string) error {
 	return nil
 }
 
-func Add(ctx context.Context, db *store.DB, in NewDept) (Dept, error) {
+func Add(ctx context.Context, db *store.DB, in NewDept, actor ...string) (Dept, error) {
 	if err := checkText("name", in.Name, maxName, true); err != nil {
 		return Dept{}, err
 	}
@@ -219,11 +219,31 @@ func Add(ctx context.Context, db *store.DB, in NewDept) (Dept, error) {
 				return api.NotFound("--parent: 部门 %s 不存在", in.Parent).WithNext("atrium org tree")
 			}
 		}
+		if len(actor) > 0 && actor[0] != "" {
+			lm, err := LeaderMap(ctx, tx)
+			if err != nil {
+				return err
+			}
+			if !SubordinateScope(ps, lm, actor[0])[in.Parent] {
+				return SubordinateForbidden(in.Parent)
+			}
+		}
 		if err := CheckPlace(ps, "", in.Parent); err != nil {
 			return err
 		}
 		if in.Leader != "" {
 			if err := checkLeader(ctx, tx, in.Leader); err != nil {
+				return err
+			}
+		}
+		if in.Leader != "" {
+			lm, err := LeaderMap(ctx, tx)
+			if err != nil {
+				return err
+			}
+			ps["__new"] = in.Parent
+			lm["__new"] = in.Leader
+			if err := CheckDirectReports(ps, lm); err != nil {
 				return err
 			}
 		}
@@ -286,7 +306,7 @@ func (p DeptPatch) edits() bool {
 		p.Leader != nil || p.Accept != nil || len(p.RepoAdd) > 0 || len(p.RepoDrop) > 0
 }
 
-func Edit(ctx context.Context, db *store.DB, id string, p DeptPatch) (Dept, error) {
+func Edit(ctx context.Context, db *store.DB, id string, p DeptPatch, actor ...string) (Dept, error) {
 	switch {
 	case p.Delete:
 		return Dept{}, api.Usage("--delete: 删部门走 DeleteDept")
@@ -304,8 +324,30 @@ func Edit(ctx context.Context, db *store.DB, id string, p DeptPatch) (Dept, erro
 		return Dept{}, err
 	}
 	err := db.Tx(ctx, func(tx *sql.Tx) error {
-		if _, err := Get(ctx, tx, id); err != nil {
+		cur, err := Get(ctx, tx, id)
+		if err != nil {
 			return err
+		}
+		ps, err := parents(ctx, tx)
+		if err != nil {
+			return err
+		}
+		lm, err := LeaderMap(ctx, tx)
+		if err != nil {
+			return err
+		}
+		if len(actor) > 0 && actor[0] != "" {
+			if p.Name != nil || p.Parent != nil || p.Leader != nil || p.Accept != nil || len(p.RepoAdd) > 0 || len(p.RepoDrop) > 0 {
+				scope := SubordinateScope(ps, lm, actor[0])
+				if !scope[id] {
+					return SubordinateForbidden(id)
+				}
+				if p.Parent != nil && !scope[*p.Parent] {
+					return SubordinateForbidden(*p.Parent)
+				}
+			} else if !Scope(ps, lm, actor[0])[id] {
+				return SubordinateForbidden(id)
+			}
 		}
 		sets, args := []string{}, []any{}
 		add := func(col string, v any) { sets, args = append(sets, col+" = ?"), append(args, v) }
@@ -314,10 +356,6 @@ func Edit(ctx context.Context, db *store.DB, id string, p DeptPatch) (Dept, erro
 			if parent == "-" {
 				parent = ""
 			}
-			ps, err := parents(ctx, tx)
-			if err != nil {
-				return err
-			}
 			if _, ok := ps[parent]; parent != "" && !ok {
 				return api.NotFound("--parent: 部门 %s 不存在", parent)
 			}
@@ -325,6 +363,7 @@ func Edit(ctx context.Context, db *store.DB, id string, p DeptPatch) (Dept, erro
 				return err
 			}
 			add("parent", store.Null(parent))
+			ps[id] = parent
 		}
 		if p.Leader != nil {
 			leader := *p.Leader
@@ -334,6 +373,16 @@ func Edit(ctx context.Context, db *store.DB, id string, p DeptPatch) (Dept, erro
 				return err
 			}
 			add("leader", store.Null(leader))
+			if leader == "" {
+				delete(lm, id)
+			} else {
+				lm[id] = leader
+			}
+		}
+		if p.Parent != nil || p.Leader != nil {
+			if err := CheckDirectReports(ps, lm); err != nil {
+				return err
+			}
 		}
 		for _, f := range []struct {
 			col string
@@ -350,6 +399,11 @@ func Edit(ctx context.Context, db *store.DB, id string, p DeptPatch) (Dept, erro
 		args = append(args, id)
 		if _, err := tx.ExecContext(ctx, `UPDATE departments SET `+strings.Join(sets, ", ")+` WHERE id = ?`, args...); err != nil {
 			return err
+		}
+		if len(actor) > 0 && actor[0] != "" && p.Leader != nil && cur.Leader != "" && cur.Leader != lm[id] {
+			if err := RetireOrphanLeader(ctx, tx, cur.Leader); err != nil {
+				return err
+			}
 		}
 		if p.Accept != nil {
 			if err := setAcceptor(ctx, tx, id, *p.Accept); err != nil {

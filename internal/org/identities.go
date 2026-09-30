@@ -29,6 +29,7 @@ type Identity struct {
 type NewLeader struct {
 	Name    string   `json:"name"`
 	Workers []string `json:"workers"`
+	Dept    string   `json:"org,omitempty"` // 登记时一步绑定部门；用户仍可单独登记
 }
 
 // LeaderPatch 是 leader edit 的输入；nil 表示不改。Delete 为真时删掉这位负责人（DeleteLeader），不能与别的字段一起给。
@@ -69,14 +70,51 @@ func checkWorkers(ctx context.Context, q store.Querier, list []string) error {
 }
 
 func AddLeader(ctx context.Context, db *store.DB, in NewLeader) (Identity, error) {
+	return AddLeaderBy(ctx, db, in, "")
+}
+
+// AddLeaderBy 把登记与绑定放在同一个事务；actor 为空表示用户直接操作。
+func AddLeaderBy(ctx context.Context, db *store.DB, in NewLeader, actor string) (Identity, error) {
 	if err := checkText("name", in.Name, maxName, true); err != nil {
 		return Identity{}, err
+	}
+	if actor != "" && len(in.Workers) == 0 {
+		parent, err := GetIdentity(ctx, db, actor)
+		if err != nil {
+			return Identity{}, err
+		}
+		in.Workers = parent.Workers
 	}
 	if err := checkWorkers(ctx, db, in.Workers); err != nil {
 		return Identity{}, err
 	}
 	var id string
 	err := db.Tx(ctx, func(tx *sql.Tx) error {
+		oldLeader := ""
+		if actor != "" && in.Dept == "" {
+			return api.Usage("--org: 负责人登记新负责人时必须一步绑定部门")
+		}
+		if in.Dept != "" {
+			ps, err := parents(ctx, tx)
+			if err != nil {
+				return err
+			}
+			lm, err := LeaderMap(ctx, tx)
+			if err != nil {
+				return err
+			}
+			if _, ok := ps[in.Dept]; !ok {
+				return api.NotFound("--org: 部门 %s 不存在", in.Dept)
+			}
+			if actor != "" && !SubordinateScope(ps, lm, actor)[in.Dept] {
+				return SubordinateForbidden(in.Dept)
+			}
+			oldLeader = lm[in.Dept]
+			lm[in.Dept] = "new"
+			if err := CheckDirectReports(ps, lm); err != nil {
+				return err
+			}
+		}
 		var n int
 		if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM identities WHERE kind = 'leader'`).Scan(&n); err != nil {
 			return err
@@ -90,12 +128,43 @@ func AddLeader(ctx context.Context, db *store.DB, in NewLeader) (Identity, error
 		}
 		_, err = tx.ExecContext(ctx, `INSERT INTO identities (id, kind, name, workers, created_at) VALUES (?, 'leader', ?, ?, ?)`,
 			id, strings.TrimSpace(in.Name), strings.Join(in.Workers, ","), store.Now())
+		if err != nil {
+			return err
+		}
+		if in.Dept != "" {
+			_, err = tx.ExecContext(ctx, `UPDATE departments SET leader = ?, updated_at = ? WHERE id = ?`, id, store.Now(), in.Dept)
+			if err == nil && actor != "" && oldLeader != "" {
+				err = RetireOrphanLeader(ctx, tx, oldLeader)
+			}
+		}
 		return err
 	})
 	if err != nil {
 		return Identity{}, err
 	}
 	return GetIdentity(ctx, db, id)
+}
+
+// RetireOrphanLeader 在同一事务里清理已不负责部门的身份和备忘；未确认事件先处理。
+func RetireOrphanLeader(ctx context.Context, tx *sql.Tx, id string) error {
+	var count int
+	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM departments WHERE leader = ?`, id).Scan(&count); err != nil {
+		return err
+	}
+	if count > 0 {
+		return nil
+	}
+	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM events WHERE target = ? AND acked_at IS NULL`, id).Scan(&count); err != nil {
+		return err
+	}
+	if count > 0 {
+		return api.Conflict("负责人 %s 还有 %d 条未确认事件：先处理并确认，再撤换", id, count)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM memos WHERE identity = ?`, id); err != nil {
+		return err
+	}
+	_, err := tx.ExecContext(ctx, `DELETE FROM identities WHERE id = ? AND kind = 'leader'`, id)
+	return err
 }
 
 func EditLeader(ctx context.Context, db *store.DB, id string, p LeaderPatch) (Identity, error) {

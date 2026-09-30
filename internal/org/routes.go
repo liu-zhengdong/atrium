@@ -36,7 +36,7 @@ func Routes(r *api.Router, env *app.Env) {
 		if err := q.Decode(&in); err != nil {
 			return nil, err
 		}
-		return Add(q.Context(), db, in)
+		return Add(q.Context(), db, in, structuralActor(q))
 	})
 	r.Handle("GET /api/org/{id}", func(q *api.Req) (any, error) {
 		id, err := q.Ref("id", "o")
@@ -100,9 +100,9 @@ func Routes(r *api.Router, env *app.Env) {
 			return nil, err
 		}
 		if p.Delete {
-			return DeleteDept(q.Context(), db, id, p)
+			return DeleteDept(q.Context(), db, id, p, structuralActor(q))
 		}
-		return Edit(q.Context(), db, id, p)
+		return Edit(q.Context(), db, id, p, structuralActor(q))
 	})
 	r.Handle("POST /api/org/{id}/points", func(q *api.Req) (any, error) {
 		id, err := q.Ref("id", "o")
@@ -127,6 +127,13 @@ func Routes(r *api.Router, env *app.Env) {
 		return EditPoint(q.Context(), db, id, p, q.Actor.ID)
 	})
 	identityRoutes(r, db)
+}
+
+func structuralActor(q *api.Req) string {
+	if q.Actor.Kind == "leader" {
+		return q.Actor.ID
+	}
+	return ""
 }
 
 func find(nodes []*Node, id string) *Node {

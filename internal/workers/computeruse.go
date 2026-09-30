@@ -15,8 +15,12 @@ import (
 	"github.com/pelletier/go-toml/v2"
 )
 
-// 执行者工具由 Atrium 显式给出，不继承用户个人 MCP：
+// claude、codex 执行者工具由 Atrium 显式给出，不继承用户个人 MCP：
 // codex 带本机 computer use，关闭 ChatGPT apps；claude 仅带显式的 MCP。
+// opencode、cursor、grok、kimi、agy 尚无保留子进程用户环境与登录、
+// 且只加载给定 MCP 的已验证入口；仍读个人 MCP。
+// opencode 1.18.32 的 CONFIG_DIR/CONFIG_CONTENT 追加或合并配置，不能隔离全局 MCP；
+// 不改 XDG_CONFIG_HOME，以免 shell 子进程丢失 gh 配置与 git 凭据入口。
 // 两者在 Chrome 资料目录存在 DevToolsActivePort 时带 chrome-devtools MCP，
 // 用 --browser-url 连接已开的 Chrome，不启动浏览器。没开远程调试就不带。
 // computer use 操作本机应用；chrome-devtools 操作用户已开远程调试的 Chrome；

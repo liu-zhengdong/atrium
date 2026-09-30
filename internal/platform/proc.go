@@ -22,8 +22,6 @@ type Spec struct {
 	Stderr io.Writer
 	// Detached：放进独立会话/进程组，父进程退出或重启不影响它，结束时按整棵树结束。
 	Detached bool
-	// Session：退出后回收继承会话标记的子进程；必须同时 Detached。
-	Session bool
 }
 
 // EnvMap 把 os.Environ() 形式转成 map（Windows 上变量名按大写）。
@@ -43,16 +41,6 @@ func SelfOnPath(env map[string]string) {
 func Start(s Spec) (*exec.Cmd, error) {
 	if s.Env == nil {
 		return nil, errors.New("platform.Start：必须显式给 Env（白名单环境）")
-	}
-	if s.Session {
-		if !s.Detached {
-			return nil, errors.New("Session 必须 Detached")
-		}
-		var err error
-		s.Env, err = sessionEnv(s.Env)
-		if err != nil {
-			return nil, err
-		}
 	}
 	cmd, cmdLine := exec.Command(s.Path, s.Args...), ""
 	if IsBatch(runtime.GOOS, s.Path) {
@@ -76,9 +64,6 @@ func Start(s Spec) (*exec.Cmd, error) {
 			cmd.Wait()
 			return nil, err
 		}
-	}
-	if s.Session {
-		rememberSession(cmd.Process.Pid, s.Env[sessionKey])
 	}
 	return cmd, nil
 }
@@ -158,8 +143,7 @@ func KillTree(pid int) error {
 		}
 		return nil
 	}
-	cleanup := killSession(pid)
-	return errors.Join(cleanup, killGroup(pid))
+	return killGroup(pid)
 }
 
 // Alive 判断进程是否还在。

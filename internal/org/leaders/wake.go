@@ -23,6 +23,7 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/pause"
 	"github.com/liu-zhengdong/atrium/internal/platform"
 	"github.com/liu-zhengdong/atrium/internal/store"
+	"github.com/liu-zhengdong/atrium/internal/worktree"
 )
 
 // Launch 是一次唤醒要起的进程：用哪个执行者档案、提示词、工作目录、环境（已含负责人令牌）。
@@ -270,13 +271,21 @@ func (h *hub) launch(ctx context.Context, env *app.Env, p Pending) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
+	// 会话临时目录：同一负责人同时只有一次唤醒，每次先清空；退出后按它回收残留进程。
+	tmp := filepath.Join(dir, "tmp")
+	if err := worktree.RemoveTemp(tmp); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(tmp, 0o700); err != nil {
+		return err
+	}
 	token, err := h.issue(who.ID)
 	if err != nil {
 		return err
 	}
 	defer h.revoke(token)
 	spec, err := l(ctx, Launch{Leader: who.ID, Profile: profile, Prompt: prompt, Dir: dir,
-		Env: leaderEnv(platform.EnvMap(os.Environ()), token, env.Paths.Data)})
+		Env: leaderEnv(platform.EnvMap(os.Environ()), token, env.Paths.Data, tmp)})
 	if err != nil {
 		return err
 	}
@@ -286,7 +295,7 @@ func (h *hub) launch(ctx context.Context, env *app.Env, p Pending) error {
 	}
 	defer logf.Close()
 	fmt.Fprintf(logf, "\n=== %s 唤醒 %s（%s），事件 %v\n", time.Now().Format(time.RFC3339), who.ID, profile, p.IDs)
-	spec.Stdout, spec.Stderr, spec.Detached, spec.Session = logf, logf, true, true
+	spec.Stdout, spec.Stderr, spec.Detached = logf, logf, true
 	if spec.Dir == "" {
 		spec.Dir = dir
 	}
@@ -294,13 +303,13 @@ func (h *hub) launch(ctx context.Context, env *app.Env, p Pending) error {
 	if err != nil {
 		return err
 	}
-	return waitLimited(ctx, cmd, h.timeout)
+	return waitLimited(ctx, cmd, tmp, h.timeout)
 }
 
-// waitLimited 等进程退出；超时或服务停下就结束整棵进程树。
-func waitLimited(ctx context.Context, cmd *exec.Cmd, limit time.Duration) error {
+// waitLimited 等进程退出并回收会话残留；超时或服务停下就结束整棵进程树。
+func waitLimited(ctx context.Context, cmd *exec.Cmd, tmp string, limit time.Duration) error {
 	done := make(chan error, 1)
-	go func() { done <- platform.WaitSession(cmd) }()
+	go func() { done <- platform.WaitSession(cmd, tmp) }()
 	timer := time.NewTimer(limit)
 	defer timer.Stop()
 	select {
@@ -317,10 +326,10 @@ func waitLimited(ctx context.Context, cmd *exec.Cmd, limit time.Duration) error 
 	}
 }
 
-// leaderEnv：执行者白名单环境，去掉 ATRIUM_WORKER（负责人不是执行者），加本次令牌与数据目录；
+// leaderEnv：执行者白名单环境（临时目录是这位负责人的会话临时目录），去掉 ATRIUM_WORKER（负责人不是执行者），加本次令牌与数据目录；
 // 服务所在目录排进 PATH 最前，atrium 命令就是这个服务的同一个二进制。
-func leaderEnv(base map[string]string, token, data string) map[string]string {
-	env := platform.WorkerEnv(runtime.GOOS, base)
+func leaderEnv(base map[string]string, token, data, tmp string) map[string]string {
+	env := platform.WorkerEnv(runtime.GOOS, base, tmp)
 	delete(env, "ATRIUM_WORKER")
 	env["ATRIUM_LEADER_TOKEN"] = token
 	env["ATRIUM_DATA"] = data

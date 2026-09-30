@@ -138,7 +138,7 @@ func (d *dispatcher) launch(ctx context.Context, t ledger.Task, o launchOpts) er
 		run.PID, run.RemoteRun, run.Dir = pid, rr, rdir
 		wait = d.remoteWaiter(p, rr)
 	} else {
-		cmdWait, pid, stdin, err := startLocal(o.W.Spec.Tool, req, extra, conn{fmt.Sprintf("http://127.0.0.1:%d", d.env.Port), token}, run.Log, prompt, n)
+		cmdWait, pid, stdin, err := startLocal(o.W.Spec.Tool, req, extra, conn{fmt.Sprintf("http://127.0.0.1:%d", d.env.Port), token}, run.Log, TempDir(data, t.ID), prompt, n)
 		if err != nil {
 			return fmt.Errorf("本机执行者拉起失败：%w", err)
 		}
@@ -159,7 +159,7 @@ type conn struct{ server, token string }
 
 // startLocal 在本机拉起：白名单环境（带 ATRIUM_WORKER=1）+ 工具要的变量 + 凭据 + 连回服务的地址与令牌；
 // 服务所在目录排进 PATH 最前（atrium 就是服务这个二进制）；日志直接写文件（服务重启不影响执行者）。
-func startLocal(tool string, req workers.Request, extra map[string]string, c conn, log, prompt string, n int) (wait func() int, pid int, stdin *os.File, err error) {
+func startLocal(tool string, req workers.Request, extra map[string]string, c conn, log, tempDir, prompt string, n int) (wait func() int, pid int, stdin *os.File, err error) {
 	req, err = workers.LocalTools(tool, req)
 	if err != nil {
 		return nil, 0, nil, err
@@ -168,7 +168,6 @@ func startLocal(tool string, req workers.Request, extra map[string]string, c con
 	if err != nil {
 		return nil, 0, nil, err
 	}
-	tempDir := filepath.Join(filepath.Dir(log), "tmp")
 	if err := os.MkdirAll(tempDir, 0o700); err != nil {
 		return nil, 0, nil, err
 	}
@@ -217,7 +216,7 @@ func startLocal(tool string, req workers.Request, extra map[string]string, c con
 		defer f.Close()
 		in = f
 	}
-	spec := platform.Spec{Path: exe, Args: l.Args, Dir: l.Dir, Env: env, Stdout: logf, Stderr: logf, Detached: true, Session: true}
+	spec := platform.Spec{Path: exe, Args: l.Args, Dir: l.Dir, Env: env, Stdout: logf, Stderr: logf, Detached: true}
 	if in != nil {
 		spec.Stdin = in
 	}
@@ -229,7 +228,7 @@ func startLocal(tool string, req workers.Request, extra map[string]string, c con
 		return nil, 0, nil, err
 	}
 	return func() int {
-		if err := platform.WaitSession(cmd); err != nil {
+		if err := platform.WaitSession(cmd, tempDir); err != nil {
 			var exit *exec.ExitError
 			if cmd.ProcessState == nil || !errors.As(err, &exit) {
 				return workers.ExitUnknown

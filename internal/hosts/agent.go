@@ -166,6 +166,9 @@ func (a *Agent) runFile(task string) string { return filepath.Join(a.Dir, "runs"
 
 func (a *Agent) save(r runRecord) error { return writeSecret(a.runFile(r.Task), r) }
 
+// tempDir 是这台上任务的临时目录，也是执行者的会话临时目录：代理重启后 recover 照样算得出。
+func (a *Agent) tempDir(task string) string { return filepath.Join(a.Dir, "tasks", task, "tmp") }
+
 // Run 跑到 ctx 取消或令牌失效。断线就按退避重连，执行者照跑。
 func (a *Agent) Run(ctx context.Context) error {
 	a.ctx = ctx
@@ -233,6 +236,9 @@ func (a *Agent) recover() error {
 						return
 					case <-time.After(time.Second):
 					}
+				}
+				if err := platform.EndSession(r.PID, a.tempDir(r.Task)); err != nil {
+					a.Log.Warn("回收执行者会话残留失败", "task", r.Task, "err", err)
 				}
 				a.markExit(st, nil)
 			}()
@@ -375,7 +381,7 @@ func (a *Agent) launch(ctx context.Context, as Assignment) (int, string, error) 
 		cwd = wt
 	}
 	adapter, _ := AdapterFor(as.Tool)
-	tempDir := filepath.Join(taskDir, "tmp")
+	tempDir := a.tempDir(as.Task)
 	if err := os.MkdirAll(tempDir, 0o700); err != nil {
 		return 0, "", err
 	}
@@ -403,7 +409,7 @@ func (a *Agent) launch(ctx context.Context, as Assignment) (int, string, error) 
 		return 0, "", err
 	}
 	defer f.Close()
-	spec.Stdout, spec.Stderr, spec.Detached, spec.Session = f, f, true, true
+	spec.Stdout, spec.Stderr, spec.Detached = f, f, true
 	if spec.Dir == "" {
 		spec.Dir = cwd
 	}
@@ -417,23 +423,26 @@ func (a *Agent) launch(ctx context.Context, as Assignment) (int, string, error) 
 	st := &runState{rec: runRecord{RunRef: RunRef{as.Task, as.Run}, PID: cmd.Process.Pid, Log: logPath}, done: make(chan struct{})}
 	if err := a.save(st.rec); err != nil {
 		platform.KillTree(cmd.Process.Pid)
-		platform.WaitSession(cmd)
+		platform.WaitSession(cmd, tempDir)
 		return 0, "", err
 	}
 	a.mu.Lock()
 	a.runs[as.Task] = st
 	a.mu.Unlock()
 	go func() {
-		err := platform.WaitSession(cmd)
+		err := cmd.Wait()
+		if a.ctx.Err() != nil {
+			return // 代理已停下：交给下次启动按 pid 接着看、回收残留
+		}
+		if err := platform.EndSession(cmd.Process.Pid, tempDir); err != nil {
+			a.Log.Warn("回收执行者会话残留失败", "task", as.Task, "err", err)
+		}
 		code := 0
 		var exit *exec.ExitError
 		if errors.As(err, &exit) {
 			code = exit.ExitCode()
 		} else if err != nil {
 			code = -1
-		}
-		if a.ctx.Err() != nil {
-			return // 代理已停下：交给下次启动按 pid 接着看
 		}
 		a.markExit(st, &code)
 	}()

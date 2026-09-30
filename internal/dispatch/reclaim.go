@@ -91,7 +91,7 @@ func (d *dispatcher) reclaim(ctx context.Context) error {
 		} else {
 			return fmt.Errorf("%s 登记目录不是本实例的任务仓库工作树，保留目录", it.task)
 		}
-		if err := worktree.RemoveTemp(filepath.Join(TaskDir(d.env.Paths.Data, it.task), "tmp")); err != nil {
+		if err := worktree.RemoveTemp(TempDir(d.env.Paths.Data, it.task)); err != nil {
 			return err
 		}
 		if err := ledger.Record(ctx, d.env.DB, it.task, reclaimedKind, actor, strconv.FormatInt(it.id, 10)); err != nil {

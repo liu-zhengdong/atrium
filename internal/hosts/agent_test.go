@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -50,6 +51,18 @@ func TestMain(m *testing.M) {
 		}
 		fmt.Println(strings.Repeat("x", 300_000)) // 超过一段的日志，要分段续传
 		os.Exit(3)
+	case "spawn": // 另开会话留下一个子进程再照 sleep 走：代理重启后要按会话临时目录把它收掉
+		env := platform.EnvMap(os.Environ())
+		env["HOSTS_FAKE_WORKER"] = "linger"
+		exe, _ := os.Executable()
+		child, err := platform.Start(platform.Spec{Path: exe, Env: env, Detached: true})
+		if err != nil {
+			os.Exit(2)
+		}
+		if err := os.WriteFile(filepath.Join(os.Getenv("TMPDIR"), "linger.pid"), []byte(strconv.Itoa(child.Process.Pid)), 0o600); err != nil {
+			os.Exit(2)
+		}
+		fallthrough
 	case "sleep":
 		fmt.Println("睡")
 		time.Sleep(3 * time.Second)
@@ -66,7 +79,7 @@ func TestMain(m *testing.M) {
 			time.Sleep(20 * time.Millisecond)
 		}
 		os.Exit(1)
-	case "forever":
+	case "forever", "linger":
 		fmt.Println("不停")
 		time.Sleep(time.Minute)
 	case "probe": // 自检的假工具：按自己的文件名表现
@@ -101,7 +114,7 @@ func (f fakeAdapter) Spec(req workers.Request, env map[string]string) (platform.
 func init() {
 	AdapterFor = func(tool string) (workers.Adapter, bool) {
 		switch tool {
-		case "echo", "sleep", "forever", "gate":
+		case "echo", "sleep", "spawn", "forever", "gate":
 			return fakeAdapter{tool}, true
 		}
 		return nil, false
@@ -341,9 +354,9 @@ func TestAgentStopAndRestart(t *testing.T) {
 	if e := waitExit(t, g.env, "t1", 1); e.Code == nil || *e.Code == 0 {
 		t.Fatalf("结束后应非 0 退出：%+v", e)
 	}
-	// 代理停下期间执行者照跑；重启代理后按 pid 接着看，补传日志、补报退出（退出码不可得）。
+	// 代理停下期间执行者照跑；重启代理后按 pid 接着看，补传日志、补报退出（退出码不可得），并收掉它另开会话留下的子进程。
 	log2 := filepath.Join(g.env.Paths.Data, "t2.log")
-	_, pid, _, err := Launch(context.Background(), g.env, host, Assignment{Task: "t2", Tool: "sleep", Request: workers.Request{Prompt: "x"}, Log: log2})
+	_, pid, _, err := Launch(context.Background(), g.env, host, Assignment{Task: "t2", Tool: "spawn", Request: workers.Request{Prompt: "x"}, Log: log2})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -361,6 +374,19 @@ func TestAgentStopAndRestart(t *testing.T) {
 	got, _ := os.ReadFile(log2)
 	if !strings.Contains(string(got), "睡") || !strings.Contains(string(got), "醒") {
 		t.Fatalf("日志：%q", got)
+	}
+	raw, _ := os.ReadFile(filepath.Join(dir, "tasks", "t2", "tmp", "linger.pid"))
+	linger, _ := strconv.Atoi(string(raw))
+	if linger == 0 {
+		t.Fatal("没拿到残留子进程的 pid")
+	}
+	defer platform.KillTree(linger)
+	deadline := time.Now().Add(5 * time.Second)
+	for platform.Alive(linger) && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if platform.Alive(linger) {
+		t.Fatal("代理重启后没收掉执行者另开会话留下的子进程")
 	}
 }
 

@@ -161,10 +161,13 @@ func TestBuildPrompt(t *testing.T) {
 		Skill: "/data/skills/fix/SKILL.md", Profile: "先跑相关测试", Tells: []string{"改用 A 方案"}, Bounces: []string{"没有 PR"},
 		Repo: "a/b", Branch: "task-t3", Guide: "不要用 git stash"})
 	for _, want := range []string{"# 任务 t3：修登录", "- k1（o1）简洁——整体更简单", "/data/skills/fix/SKILL.md", "先跑相关测试", "atrium material ls mN 取全文",
-		"- 改用 A 方案", "- 没有 PR", "分支 task-t3", "端到端验证", "隔离实例", "凭据不打印", "## 这个仓库的约定", "不要用 git stash"} {
+		"- 改用 A 方案", "- 没有 PR", "分支 task-t3", "端到端验证", "隔离实例", "凭据不打印", "## 这个仓库的约定", "不要用 git stash", "<任务号>-show/"} {
 		if !strings.Contains(p, want) {
 			t.Errorf("提示词缺 %q：\n%s", want, p)
 		}
+	}
+	if !strings.HasPrefix(p, "# 任务 t3：修登录\n\n"+langRule+"\n") {
+		t.Errorf("语言要求要紧跟标题：\n%s", p)
 	}
 	if strings.Contains(p, "4310") || strings.Contains(p, "碰到哪些已有能力") {
 		t.Errorf("通用约束不该写死某个仓库：\n%s", p)
@@ -172,6 +175,9 @@ func TestBuildPrompt(t *testing.T) {
 	p = BuildPrompt(PromptInput{Task: "t4", Title: "调研"})
 	if strings.Contains(p, "只交 PR") || !strings.Contains(p, "没有仓库") || strings.Contains(p, "部门要点") || strings.Contains(p, "仓库的约定") {
 		t.Errorf("没有仓库的提示词：\n%s", p)
+	}
+	if r := ResumePrompt([]string{"改用 B"}); !strings.Contains(r, "- 改用 B") || !strings.Contains(r, langRule) {
+		t.Errorf("续上的补充：\n%s", r)
 	}
 }
 

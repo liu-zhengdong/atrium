@@ -61,7 +61,6 @@ var (
 	deliverLocal = Delivery{Name: "local",
 		Rules: []string{
 			"本机交付：在分支 %s 上提交；不要推送、不要合入主分支，验收过后由运行时合进本机主分支。不用改代码的活不提交，结论写在最后的回复里。",
-			"给人看的产物（页面、视频）把成品截图或关键帧放进工作树根的 preview/ 目录一并提交；交付说明写在最后的回复里。",
 		},
 		check: (*Gate).checkLocal, land: (*Gate).landLocal}
 	// dir：在工作地点（本机文件夹）原地干，东西已经在原地；关卡只看执行者正常收尾；没有落地。

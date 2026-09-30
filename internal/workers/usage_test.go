@@ -156,3 +156,13 @@ func TestBillingProfile(t *testing.T) {
 		}
 	}
 }
+
+func TestExitText(t *testing.T) {
+	if _, err := ExitText(`{"n":`); err == nil {
+		t.Fatal("损坏记录须报错")
+	}
+	text, err := ExitText(`{"n":1,"outcome":"ok","usage":{"input":null,"output":null,"cache_read":null,"cache_write":null,"cost":null}}`)
+	if err != nil || strings.Count(text, "读不到") != 4 {
+		t.Fatal(text, err)
+	}
+}

@@ -72,14 +72,14 @@ func ExitUsage(ctx context.Context, q store.Querier, task string, n int) (Usage,
 }
 
 // ExitText 给 task show 的退出经历用完整一行，避免正文截断把用量藏掉。
-func ExitText(body string) string {
+func ExitText(body string) (string, error) {
 	var x Exit
-	if json.Unmarshal([]byte(body), &x) != nil {
-		return body
+	if err := json.Unmarshal([]byte(body), &x); err != nil {
+		return "", fmt.Errorf("退出记录坏了：%w", err)
 	}
 	out := OutText(x.Outcome)
 	if out == "" {
 		out = "结束"
 	}
-	return fmt.Sprintf("第 %d 次拉起 %s · %s", x.N, out, x.Usage.String())
+	return fmt.Sprintf("第 %d 次拉起 %s · %s", x.N, out, x.Usage.String()), nil
 }

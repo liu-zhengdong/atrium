@@ -99,6 +99,9 @@ func Routes(r *api.Router, env *app.Env) {
 		if err := q.Decode(&p); err != nil {
 			return nil, err
 		}
+		if p.Delete {
+			return DeleteDept(q.Context(), db, id, p)
+		}
 		return Edit(q.Context(), db, id, p)
 	})
 	r.Handle("POST /api/org/{id}/points", func(q *api.Req) (any, error) {

@@ -130,7 +130,9 @@ func Commands(t *cli.Table) {
 			{Name: "parent", Value: "oN", Help: "挪到别的上级下（给 - 挪到顶层）"},
 			{Name: "repo-add", Value: "仓库", Multi: true, Help: "加仓库"},
 			{Name: "repo-rm", Value: "仓库", Multi: true, Help: "去掉仓库"},
-			{Name: "delete", Bool: true, Help: "删掉这个部门（连同要点与仓库清单）；还有下属、任务、资料等引用时拒绝并列出"},
+			{Name: "delete", Bool: true, Help: "删掉这个部门（连同要点、仓库清单、验收人与暂停）；还有下属、任务、资料等引用时拒绝并列出"},
+			{Name: "into", Value: "oM", Help: "和 --delete 一起：先把下属部门、任务、周期任务、已拍板的选项单、资料（总览改作细节）并入 oM（常用上级）再删；" +
+				"进行中的任务、待拍板的选项单、凭据、没确认的事件仍要先处理"},
 		}, introFlags...),
 		Run: func(c *cli.Ctx) error {
 			id, err := c.Arg(0, "<oN>")
@@ -139,13 +141,17 @@ func Commands(t *cli.Table) {
 			}
 			p := DeptPatch{Name: c.Opt("name"), Parent: c.Opt("parent"), What: c.Opt("what"), Uses: c.Opt("uses"),
 				Now: c.Opt("now"), Next: c.Opt("next"), Leader: c.Opt("leader"), Accept: c.Opt("accept"),
-				RepoAdd: c.List("repo-add"), RepoDrop: c.List("repo-rm"), Delete: c.Bool("delete")}
+				RepoAdd: c.List("repo-add"), RepoDrop: c.List("repo-rm"), Delete: c.Bool("delete"), Into: c.Opt("into")}
+			if p.Delete {
+				var r Removed
+				if err := c.Call("PATCH", "/api/org/"+url.PathEscape(id), p, &r); err != nil {
+					return err
+				}
+				return c.Done(r, removedLine(r), "atrium org tree")
+			}
 			var d Dept
 			if err := c.Call("PATCH", "/api/org/"+url.PathEscape(id), p, &d); err != nil {
 				return err
-			}
-			if p.Delete {
-				return c.Done(d, fmt.Sprintf("已删部门 %s %s（连同要点与仓库清单）", d.ID, d.Name), "atrium org tree")
 			}
 			return c.Done(d, fmt.Sprintf("已改部门 %s %s", d.ID, d.Name), "atrium org show "+d.ID)
 		}})

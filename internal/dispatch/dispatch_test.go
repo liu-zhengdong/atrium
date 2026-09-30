@@ -159,9 +159,9 @@ func TestTries(t *testing.T) {
 
 func TestBuildPrompt(t *testing.T) {
 	p := BuildPrompt(PromptInput{Task: "t3", Org: "o2", Title: "修登录", Detail: "详述", Global: "## 用户的全局原则\n\n先给结论\n", Points: []string{"k1（o1）简洁——整体更简单"},
-		Skill: "/data/skills/fix/SKILL.md", Skills: "## 技能索引（Atrium 全部技能）\n\n- web：网页\n", Profile: "先跑相关测试", Tells: []string{"改用 A 方案"}, Bounces: []string{"没有 PR"},
+		Skill: "fix", Skills: "## 技能索引（Atrium 全部技能）\n\n- web：网页\n", Profile: "先跑相关测试", Tells: []string{"改用 A 方案"}, Bounces: []string{"没有 PR"},
 		Repo: "a/b", Branch: "task-t3", Guide: "不要用 git stash"})
-	for _, want := range []string{"# 任务 t3：修登录", "- k1（o1）简洁——整体更简单", "/data/skills/fix/SKILL.md", "先跑相关测试", "atrium material ls mN 取正文",
+	for _, want := range []string{"# 任务 t3：修登录", "- k1（o1）简洁——整体更简单", "先跑相关测试", "atrium material ls mN 取正文",
 		"- 改用 A 方案", "- 没有 PR", "分支 task-t3", "端到端验证", "隔离实例", "凭据不打印", "## 这个仓库的约定", "不要用 git stash", "atrium material add o2 <目录>", "`交付结论：完成`"} {
 		if !strings.Contains(p, want) {
 			t.Errorf("提示词缺 %q：\n%s", want, p)
@@ -173,7 +173,7 @@ func TestBuildPrompt(t *testing.T) {
 	if !strings.Contains(p, "详述\n\n## 用户的全局原则\n\n先给结论\n\n## 部门要点") {
 		t.Errorf("全局原则要在详述之后、部门要点之前：\n%s", p)
 	}
-	if !strings.Contains(p, "按这份做法干：/data/skills/fix/SKILL.md（附属文件在同一目录）\n\n## 技能索引（Atrium 全部技能）\n\n- web：网页\n\n## 给这个执行者的叮嘱") {
+	if !strings.Contains(p, "按这份做法干：atrium skill ls fix 取做法与附属文件\n\n## 技能索引（Atrium 全部技能）\n\n- web：网页\n\n## 给这个执行者的叮嘱") {
 		t.Errorf("技能索引要紧跟挂上的技能、在执行者叮嘱之前：\n%s", p)
 	}
 	if strings.Contains(p, "4310") || strings.Contains(p, "碰到哪些已有能力") {

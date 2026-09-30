@@ -76,7 +76,7 @@ func Routes(r *api.Router, env *app.Env) {
 		if err := q.Decode(&in); err != nil {
 			return nil, err
 		}
-		return AddSchedule(q.Context(), db, env.Paths.Data, in, q.Actor.ID, time.Now().UnixMilli(), time.Local)
+		return AddSchedule(q.Context(), db, in, q.Actor.ID, time.Now().UnixMilli(), time.Local)
 	})
 	r.Handle("DELETE /api/schedules/{id}", func(q *api.Req) (any, error) {
 		id, err := q.Ref("id", "s")

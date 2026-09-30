@@ -338,11 +338,11 @@ func TestScheduleTick(t *testing.T) {
 	t.Cleanup(func() { Enqueue = nil })
 	loc := time.UTC
 	start := ms(time.Date(2026, 9, 1, 8, 0, 0, 0, loc))
-	x, err := AddSchedule(ctx, env.DB, "", NewSchedule{Org: dept, Title: "巡检", Kind: "research", Every: "1d", At: "09:00"}, "u1", start, loc)
+	x, err := AddSchedule(ctx, env.DB, NewSchedule{Org: dept, Title: "巡检", Kind: "research", Every: "1d", At: "09:00"}, "u1", start, loc)
 	if err != nil || x.ID != "s1" || x.NextAt != start+hour {
 		t.Fatalf("%+v %v", x, err)
 	}
-	if _, err := AddSchedule(ctx, env.DB, "", NewSchedule{Org: dept, Title: "x", Every: "1d", Skill: "nope"}, "u1", start, loc); code(err) != "not_found" {
+	if _, err := AddSchedule(ctx, env.DB, NewSchedule{Org: dept, Title: "x", Every: "1d", Skill: "nope"}, "u1", start, loc); code(err) != "not_found" {
 		t.Fatal("没有的技能应拒绝")
 	}
 	// 没到点。
@@ -420,7 +420,7 @@ func TestLocalOnly(t *testing.T) {
 	Enqueue = func(context.Context, *app.Env, string, string) error { return nil }
 	t.Cleanup(func() { Enqueue = nil })
 	for kind, local := range map[string]bool{"patrol": true, "task": false, "research": false} {
-		x, err := AddSchedule(ctx, env.DB, "", NewSchedule{Org: dept, Title: kind, Kind: kind, Every: "1d"}, "u1", store.Now(), time.UTC)
+		x, err := AddSchedule(ctx, env.DB, NewSchedule{Org: dept, Title: kind, Kind: kind, Every: "1d"}, "u1", store.Now(), time.UTC)
 		if err != nil {
 			t.Fatal(err)
 		}

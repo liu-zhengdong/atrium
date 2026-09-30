@@ -294,7 +294,7 @@ func (g *Gate) skillChecks(ctx context.Context, t ledger.Task) (checked, error) 
 	if t.Skill == "" {
 		return checked{}, nil
 	}
-	s, err := org.GetSkill(ctx, g.DB, g.Data, t.Skill)
+	s, err := org.GetSkill(ctx, g.DB, t.Skill)
 	if err != nil || len(s.Checks) == 0 {
 		return checked{}, err
 	}

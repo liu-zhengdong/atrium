@@ -557,7 +557,7 @@ func (d *dispatcher) launch(ctx context.Context, t ledger.Task, o launchOpts) er
 		if err != nil {
 			return err
 		}
-		in.Skill, secrets = s.Path, union(secrets, s.Secrets)
+		in.Skill, secrets = t.Skill, union(secrets, s.Secrets)
 	}
 	if in.Skills, err = skillIndex(ctx, d.env, t.Skill); err != nil {
 		return err

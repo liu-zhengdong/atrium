@@ -1,7 +1,6 @@
 package org
 
 import (
-	"bytes"
 	"context"
 	"database/sql"
 	"errors"
@@ -24,8 +23,8 @@ import (
 )
 
 // 技能：一类活怎么干——SKILL.md（做法）、附属文件（文本或截图等二进制）、优先执行者、交付要查什么、要的凭据。
-// 每次修改追加一版，文件在 skills/<名字>/r<rev>/，同时写成 skills-current/<名字>/ 下的当前版；
-// 派活只在提示词里附当前版 SKILL.md 的路径（Skill.Path）。
+// 每次修改追加一版，文件在 skills/<名字>/r<rev>/。执行者、负责人、秘书在哪台机器上都用 atrium skill ls 取（SkillHowTo），
+// 提示词里只给技能名，不给服务机上的路径。
 // 大小与每层项数的上限（单个文件 MaxSkillFile、合计 MaxSkillTotal、每层 MaxSkillLayer）在上限表；文件总数不设限。
 const (
 	maxSkillDepth = 3
@@ -45,7 +44,6 @@ type Skill struct {
 	Secrets   []string `json:"secrets"`
 	CreatedBy string   `json:"created_by"`
 	CreatedAt int64    `json:"created_at"`
-	Path      string   `json:"path"`           // 当前版 SKILL.md 的绝对路径
 	Body      string   `json:"body,omitempty"` // 只在看单个技能时给
 	Others    []string `json:"others,omitempty"`
 }
@@ -185,7 +183,10 @@ func SkillSummary(body string) string {
 	return ""
 }
 
-// SkillIndex 纯函数：全部技能的索引拼成提示词里的一节（名字、一句话、当前版 SKILL.md 路径），由读的人按手上的活自取。
+// SkillHowTo 是提示词里取技能的入口，索引与挂上的技能共用；附属文件和技能之间的相对链接怎么取在 skill ls 的回执里。
+const SkillHowTo = "atrium skill ls <名字> 取做法与附属文件"
+
+// SkillIndex 纯函数：全部技能的索引拼成提示词里的一节（名字、一句话），由读的人按手上的活用 SkillHowTo 自取。
 // 执行者、负责人、秘书的提示词都从这里取（同 Principles）；except 是这件活已挂上的技能，另有「按这份做法干」，索引里不重复。没有技能为空。
 // 技能总数有上限（MaxSkills），一行约两百字节，整节量级在 10KB 以内。
 func SkillIndex(skills []Skill, except string) string {
@@ -198,12 +199,12 @@ func SkillIndex(skills []Skill, except string) string {
 		if summary == "" {
 			summary = "（没有说明）"
 		}
-		fmt.Fprintf(&b, "- %s：%s——%s\n", k.Name, summary, k.Path)
+		fmt.Fprintf(&b, "- %s：%s\n", k.Name, summary)
 	}
 	if b.Len() == 0 {
 		return ""
 	}
-	return "## 技能索引（Atrium 全部技能）\n\n跟这件活相关的先读再动手（附属文件在同一目录）：\n\n" + b.String()
+	return "## 技能索引（Atrium 全部技能）\n\n跟这件活相关的先读再动手，" + SkillHowTo + "：\n\n" + b.String()
 }
 
 func clip(s string, n int) string {
@@ -225,18 +226,17 @@ func splitCSV(s string) []string {
 
 const skillCols = `name, rev, summary, files, workers, checks, secrets, created_by, created_at`
 
-func scanSkill(s interface{ Scan(...any) error }, data string) (Skill, error) {
+func scanSkill(s interface{ Scan(...any) error }) (Skill, error) {
 	var k Skill
 	var workers, checks, secrets string
 	err := s.Scan(&k.Name, &k.Rev, &k.Summary, &k.Files, &workers, &checks, &secrets, &k.CreatedBy, &k.CreatedAt)
 	k.Workers, k.Checks, k.Secrets = splitCSV(workers), splitCSV(checks), splitCSV(secrets)
-	k.Path = filepath.Join(currentSkillDir(data, k.Name), "SKILL.md")
 	return k, err
 }
 
 // GetSkill 取技能的最新版（不含正文）。dispatch、gates 读优先执行者、交付要查什么、要的凭据用它。
-func GetSkill(ctx context.Context, q store.Querier, data, name string) (Skill, error) {
-	k, err := scanSkill(q.QueryRowContext(ctx, `SELECT `+skillCols+` FROM skills WHERE name = ? ORDER BY rev DESC LIMIT 1`, name), data)
+func GetSkill(ctx context.Context, q store.Querier, name string) (Skill, error) {
+	k, err := scanSkill(q.QueryRowContext(ctx, `SELECT `+skillCols+` FROM skills WHERE name = ? ORDER BY rev DESC LIMIT 1`, name))
 	if store.IsNotFound(err) {
 		return Skill{}, api.NotFound("技能 %s 不存在", name).WithNext("atrium skill ls")
 	}
@@ -244,7 +244,7 @@ func GetSkill(ctx context.Context, q store.Querier, data, name string) (Skill, e
 }
 
 // Skills 列全部技能的最新版（按名字）。
-func Skills(ctx context.Context, q store.Querier, data string) ([]Skill, error) {
+func Skills(ctx context.Context, q store.Querier) ([]Skill, error) {
 	rows, err := q.QueryContext(ctx, `SELECT `+skillCols+` FROM skills s WHERE rev = (SELECT max(rev) FROM skills WHERE name = s.name)
 		ORDER BY name LIMIT ?`, ReadCap+1)
 	if err != nil {
@@ -253,7 +253,7 @@ func Skills(ctx context.Context, q store.Querier, data string) ([]Skill, error) 
 	defer rows.Close()
 	out := []Skill{}
 	for rows.Next() {
-		k, err := scanSkill(rows, data)
+		k, err := scanSkill(rows)
 		if err != nil {
 			return nil, err
 		}
@@ -283,53 +283,6 @@ func ReadSkillFiles(dir string) (map[string][]byte, error) {
 	return files, err
 }
 
-// publishSkill 把一版的文件写成技能的当前版：内容变了的才覆盖写，删掉这版没有的文件。
-// 原地改而不是整个目录换掉——执行者可能正开着里面的文件。
-func publishSkill(data, name string, files map[string][]byte) error {
-	dir := currentSkillDir(data, name)
-	old, err := ReadSkillFiles(dir)
-	if err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return err
-	}
-	for p, c := range files {
-		if was, ok := old[p]; ok && bytes.Equal(was, c) {
-			continue
-		}
-		if err := writeFile(filepath.Join(dir, filepath.FromSlash(p)), c, 0o600); err != nil {
-			return err
-		}
-	}
-	for p := range old {
-		if _, ok := files[p]; !ok {
-			f := filepath.Join(dir, filepath.FromSlash(p))
-			if err := os.Remove(f); err != nil {
-				return err
-			}
-			for d := filepath.Dir(f); d != dir && os.Remove(d) == nil; d = filepath.Dir(d) { // 空了的子目录一并删
-			}
-		}
-	}
-	return nil
-}
-
-// publishSkills 按库里各技能的最新版写一遍当前版（服务启动时）：当前版目录是从库和版本目录推出来的。
-func publishSkills(ctx context.Context, q store.Querier, data string) error {
-	list, err := Skills(ctx, q, data)
-	if err != nil {
-		return err
-	}
-	for _, k := range list {
-		files, err := ReadSkillFiles(skillDir(data, k.Name, k.Rev))
-		if err != nil {
-			return err
-		}
-		if err := publishSkill(data, k.Name, files); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 // SaveSkill 建技能或追加一版。
 func SaveSkill(ctx context.Context, db *store.DB, data string, in SkillInput, actor string) (Skill, error) {
 	if err := CheckSkillName(in.Name); err != nil {
@@ -352,7 +305,7 @@ func SaveSkill(ctx context.Context, db *store.DB, data string, in SkillInput, ac
 		}
 	}
 	err := db.Tx(ctx, func(tx *sql.Tx) error {
-		prev, err := GetSkill(ctx, tx, data, in.Name)
+		prev, err := GetSkill(ctx, tx, in.Name)
 		isNew := false
 		if isCode(err, "not_found") {
 			isNew, err = true, nil
@@ -406,9 +359,6 @@ func SaveSkill(ctx context.Context, db *store.DB, data string, in SkillInput, ac
 				return err
 			}
 		}
-		if err := publishSkill(data, in.Name, files); err != nil {
-			return err
-		}
 		for r := old; r >= 1; r-- {
 			d := skillDir(data, in.Name, r)
 			if _, err := os.Stat(d); err != nil {
@@ -423,16 +373,16 @@ func SaveSkill(ctx context.Context, db *store.DB, data string, in SkillInput, ac
 	if err != nil {
 		return Skill{}, err
 	}
-	return GetSkill(ctx, db, data, in.Name)
+	return GetSkill(ctx, db, in.Name)
 }
 
 // ShowSkill 取最新版并带上 SKILL.md 正文与附属文件清单。
 func ShowSkill(ctx context.Context, q store.Querier, data, name string) (Skill, error) {
-	k, err := GetSkill(ctx, q, data, name)
+	k, err := GetSkill(ctx, q, name)
 	if err != nil {
 		return Skill{}, err
 	}
-	files, err := ReadSkillFiles(filepath.Dir(k.Path))
+	files, err := ReadSkillFiles(skillDir(data, k.Name, k.Rev))
 	if err != nil {
 		return Skill{}, err
 	}
@@ -446,13 +396,38 @@ func ShowSkill(ctx context.Context, q store.Querier, data, name string) (Skill, 
 	return k, nil
 }
 
+// SkillFile 是 skill ls <名字>/<相对路径> 的结果：最新版里的一个文件。
+type SkillFile struct {
+	Skill   string `json:"skill"`
+	Rev     int    `json:"rev"`
+	Path    string `json:"path"`
+	Binary  bool   `json:"binary"`
+	Content []byte `json:"content"`
+}
+
+// GetSkillFile 取技能最新版里的一个文件（相对技能目录）。
+func GetSkillFile(ctx context.Context, q store.Querier, data, name, rel string) (SkillFile, error) {
+	if err := CheckRelPath("file", rel, maxSkillDepth); err != nil {
+		return SkillFile{}, err
+	}
+	k, err := GetSkill(ctx, q, name)
+	if err != nil {
+		return SkillFile{}, err
+	}
+	raw, err := os.ReadFile(filepath.Join(skillDir(data, k.Name, k.Rev), filepath.FromSlash(rel)))
+	if errors.Is(err, fs.ErrNotExist) {
+		return SkillFile{}, api.NotFound("技能 %s 第 %d 版没有 %s", k.Name, k.Rev, rel).WithNext("atrium skill ls " + k.Name)
+	}
+	return SkillFile{Skill: k.Name, Rev: k.Rev, Path: rel, Binary: !IsText(raw), Content: raw}, err
+}
+
 func skillRoutes(r *api.Router, env *app.Env) {
 	db, data := env.DB, env.Paths.Data
-	if err := publishSkills(context.Background(), db, data); err != nil {
-		env.Log.Error("写技能当前版失败", "err", err)
-	}
-	r.Handle("GET /api/skills", func(q *api.Req) (any, error) { return Skills(q.Context(), db, data) })
+	r.Handle("GET /api/skills", func(q *api.Req) (any, error) { return Skills(q.Context(), db) })
 	r.Handle("GET /api/skills/{name}", func(q *api.Req) (any, error) {
+		if rel := q.URL.Query().Get("file"); rel != "" {
+			return GetSkillFile(q.Context(), db, data, q.PathValue("name"), rel)
+		}
 		return ShowSkill(q.Context(), db, data, q.PathValue("name"))
 	})
 	r.Handle("POST /api/skills", func(q *api.Req) (any, error) {
@@ -558,21 +533,25 @@ func skillCommands(t *cli.Table) {
 			if err := c.Call("POST", "/api/skills", in, &k); err != nil {
 				return err
 			}
-			return c.Done(k, fmt.Sprintf("技能 %s 第 %d 版：%s\n路径：%s", k.Name, k.Rev, k.Summary, k.Path),
+			return c.Done(k, fmt.Sprintf("技能 %s 第 %d 版：%s", k.Name, k.Rev, k.Summary),
 				"atrium task add <标题> --skill "+k.Name)
 		}})
-	t.Add(cli.Command{Path: "skill ls", Args: "[名字]", Summary: "列技能；给名字看这一个的做法与附属文件",
+	t.Add(cli.Command{Path: "skill ls", Args: "[名字[/相对路径]]", Summary: "列技能；给名字看这一个的做法与附属文件清单，名字/<相对路径> 取附属文件",
+		Flags: []cli.Flag{{Name: "out", Value: "文件", Help: "取附属文件时写到文件（二进制文件必须给）"}},
 		Run: func(c *cli.Ctx) error {
 			if err := c.MaxArgs(1); err != nil {
 				return err
 			}
 			if len(c.Args) == 1 {
+				if name, rel, ok := strings.Cut(c.Args[0], "/"); ok {
+					return getSkillFile(c, name, rel)
+				}
 				var k Skill
 				if err := c.Call("GET", "/api/skills/"+url.PathEscape(c.Args[0]), nil, &k); err != nil {
 					return err
 				}
 				var b strings.Builder
-				fmt.Fprintf(&b, "%s 第 %d 版（%s）\n路径：%s\n", k.Name, k.Rev, k.CreatedBy, k.Path)
+				fmt.Fprintf(&b, "%s 第 %d 版（%s）\n", k.Name, k.Rev, k.CreatedBy)
 				for _, kv := range [][2]string{{"优先执行者", strings.Join(k.Workers, "、")}, {"交付要查", strings.Join(k.Checks, "、")},
 					{"要的凭据", strings.Join(k.Secrets, "、")}, {"附属文件", strings.Join(k.Others, "、")}} {
 					if kv[1] != "" {
@@ -583,7 +562,7 @@ func skillCommands(t *cli.Table) {
 					fmt.Fprintf(&b, "SKILL.md %s B：%s\n", o, LimitOf("skill_body").Fix)
 				}
 				b.WriteString("\n" + k.Body)
-				return c.Done(k, b.String(), "atrium skill add "+k.Name+" <新的 SKILL.md 或目录>")
+				return c.Done(k, b.String(), skillFileHowTo(k.Name))
 			}
 			var list []Skill
 			if err := c.Call("GET", "/api/skills", nil, &list); err != nil {
@@ -599,4 +578,27 @@ func skillCommands(t *cli.Table) {
 			}
 			return c.Done(list, b.String(), "atrium skill ls "+list[0].Name)
 		}})
+}
+
+// skillFileHowTo 是 skill ls <名字> 回执的下一步：附属文件和做法里的相对链接都按技能目录取，在哪台机器上都一样。
+func skillFileHowTo(name string) string {
+	return "atrium skill ls " + name + "/<相对路径> 取附属文件（二进制加 --out 文件）；做法里链到 ../<别的技能>/<路径> 的，用 atrium skill ls <别的技能>/<路径>"
+}
+
+// getSkillFile 是 skill ls <名字>/<相对路径>：文本直接输出原文，二进制要 --out。
+func getSkillFile(c *cli.Ctx, name, rel string) error {
+	var f SkillFile
+	if err := c.Call("GET", "/api/skills/"+url.PathEscape(name)+"?"+url.Values{"file": {rel}}.Encode(), nil, &f); err != nil {
+		return err
+	}
+	if out := c.Str("out"); out != "" {
+		if err := os.WriteFile(out, f.Content, 0o600); err != nil {
+			return err
+		}
+		return c.Done(f, fmt.Sprintf("已写到 %s（技能 %s 第 %d 版的 %s，%d 字节）", out, f.Skill, f.Rev, f.Path, len(f.Content)), "")
+	}
+	if f.Binary && !c.JSON {
+		return api.Usage("%s/%s 是二进制文件：用 --out <文件> 写到文件", name, rel)
+	}
+	return c.Done(f, string(f.Content), "")
 }

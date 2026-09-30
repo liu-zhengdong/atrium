@@ -163,10 +163,10 @@ func TestSkillPure(t *testing.T) {
 			t.Errorf("%q → %q，想要 %q", body, got, want)
 		}
 	}
-	ks := []Skill{{Name: "fix", Summary: "修 bug", Path: "/d/fix/SKILL.md"}, {Name: "web", Path: "/d/web/SKILL.md"}}
+	ks := []Skill{{Name: "fix", Summary: "修 bug"}, {Name: "web"}}
 	for _, c := range []struct{ except, want string }{
-		{"", "## 技能索引（Atrium 全部技能）\n\n跟这件活相关的先读再动手（附属文件在同一目录）：\n\n- fix：修 bug——/d/fix/SKILL.md\n- web：（没有说明）——/d/web/SKILL.md\n"},
-		{"fix", "## 技能索引（Atrium 全部技能）\n\n跟这件活相关的先读再动手（附属文件在同一目录）：\n\n- web：（没有说明）——/d/web/SKILL.md\n"},
+		{"", "## 技能索引（Atrium 全部技能）\n\n跟这件活相关的先读再动手，atrium skill ls <名字> 取做法与附属文件：\n\n- fix：修 bug\n- web：（没有说明）\n"},
+		{"fix", "## 技能索引（Atrium 全部技能）\n\n跟这件活相关的先读再动手，atrium skill ls <名字> 取做法与附属文件：\n\n- web：（没有说明）\n"},
 	} {
 		if got := SkillIndex(ks, c.except); got != c.want {
 			t.Errorf("除去 %q：\n%s\n想要：\n%s", c.except, got, c.want)
@@ -233,58 +233,51 @@ func openDB(t *testing.T) (*store.DB, string) {
 	return db, dir
 }
 
-// 技能之间的相对链接：派活给的是当前版 SKILL.md 的路径，拼上 ../<另一技能>/… 按真实文件系统读到对方的当前版。
-func TestSkillLinksResolve(t *testing.T) {
+// 技能文件按名字和相对路径取（skill ls <名字>/<相对路径>），在哪台机器上都一样：
+// 做法里的 ../<另一技能>/<路径> 就是 <另一技能>/<路径>，取到对方的最新版；路径出不了技能目录。
+func TestSkillFile(t *testing.T) {
 	db, data := openDB(t)
 	ctx := context.Background()
-	save := func(name string, files map[string]string) Skill {
+	save := func(name string, files map[string]string) {
 		t.Helper()
 		in := SkillInput{Name: name, Files: map[string][]byte{}}
 		for p, c := range files {
 			in.Files[p] = []byte(c)
 		}
-		k, err := SaveSkill(ctx, db, data, in, "u1")
-		if err != nil {
+		if _, err := SaveSkill(ctx, db, data, in, "u1"); err != nil {
 			t.Fatal(err)
 		}
-		return k
 	}
-	a := save("a", map[string]string{"SKILL.md": "写作本身按 [b](../b/SKILL.md)，口味见 [x](../b/refs/x.md)"})
-	save("b", map[string]string{"SKILL.md": "b 第一版", "refs/x.md": "口味一"})
-	// 不经 filepath.Join（它按字面消掉 ..），把相对路径原样接在 SKILL.md 所在目录后面交给文件系统。
-	read := func(rel string) string {
+	save("a", map[string]string{"SKILL.md": "写作本身按 [b](../b/SKILL.md)，口味见 [x](../b/refs/x.md)"})
+	save("b", map[string]string{"SKILL.md": "b 第一版", "refs/x.md": "口味一", "shot.png": "\x89PNG\x00"})
+	get := func(name, rel string) (SkillFile, string) {
 		t.Helper()
-		raw, err := os.ReadFile(filepath.Dir(a.Path) + string(filepath.Separator) + filepath.FromSlash(rel))
-		if err != nil {
-			t.Fatal(err)
-		}
-		return string(raw)
+		f, err := GetSkillFile(ctx, db, data, name, rel)
+		return f, code(err)
 	}
-	if got := read("../b/SKILL.md"); got != "b 第一版" {
-		t.Fatalf("../b/SKILL.md：%q", got)
+	if f, c := get("b", "refs/x.md"); c != "" || string(f.Content) != "口味一" || f.Binary || f.Rev != 1 {
+		t.Fatalf("附属文件：%+v %s", f, c)
 	}
-	if got := read("../b/refs/x.md"); got != "口味一" {
-		t.Fatalf("../b/refs/x.md：%q", got)
+	if f, _ := get("b", "shot.png"); !f.Binary {
+		t.Fatal("图片应标成二进制")
+	}
+	if k, err := ShowSkill(ctx, db, data, "b"); err != nil || k.Body != "b 第一版" || !reflect.DeepEqual(k.Others, []string{"refs/x.md", "shot.png"}) {
+		t.Fatalf("做法与附属文件清单：%+v %v", k, err)
 	}
 	save("b", map[string]string{"SKILL.md": "b 第二版"})
-	if got := read("../b/SKILL.md"); got != "b 第二版" {
-		t.Fatalf("b 改版后应读到新版：%q", got)
+	if f, _ := get("b", "SKILL.md"); string(f.Content) != "b 第二版" || f.Rev != 2 {
+		t.Fatalf("改版后取到最新版：%+v", f)
 	}
-	if _, err := os.Stat(filepath.Join(currentSkillDir(data, "b"), "refs")); !os.IsNotExist(err) {
-		t.Fatal("新版没有的附属文件应从当前版删掉")
+	if _, c := get("b", "refs/x.md"); c != "not_found" {
+		t.Fatal("新版没有的附属文件应取不到")
 	}
-	if k, _ := GetSkill(ctx, db, data, "a"); k.Path != a.Path {
-		t.Fatalf("派活路径不随版本变：%s → %s", a.Path, k.Path)
+	for _, rel := range []string{"../a/SKILL.md", "/etc/passwd", ".hidden", "refs/../../a/SKILL.md", `refs\x.md`} {
+		if _, c := get("b", rel); c != "usage" {
+			t.Errorf("%q 应拒绝，得到 %q", rel, c)
+		}
 	}
-	// 服务启动时按库里的最新版写当前版（导入的、这次改动之前存的技能都只有版本目录）。
-	if err := os.RemoveAll(filepath.Join(data, "skills-current")); err != nil {
-		t.Fatal(err)
-	}
-	if err := publishSkills(ctx, db, data); err != nil {
-		t.Fatal(err)
-	}
-	if got := read("../b/SKILL.md"); got != "b 第二版" {
-		t.Fatalf("启动时重写当前版：%q", got)
+	if _, c := get("nope", "SKILL.md"); c != "not_found" {
+		t.Fatal("没有的技能")
 	}
 }
 
@@ -362,8 +355,8 @@ func TestResourcesStore(t *testing.T) {
 	if err != nil || k.Rev != 2 || !reflect.DeepEqual(k.Workers, w) {
 		t.Fatalf("%+v %v", k, err)
 	}
-	if raw, err := os.ReadFile(filepath.Join(filepath.Dir(k.Path), "refs", "x.md")); err != nil || string(raw) != "附" {
-		t.Fatalf("附属文件沿用：%q %v", raw, err)
+	if f, err := GetSkillFile(ctx, db, data, "fix-bug", "refs/x.md"); err != nil || string(f.Content) != "附" || f.Rev != 2 {
+		t.Fatalf("附属文件沿用：%+v %v", f, err)
 	}
 	if code(func() error { _, err := SaveSkill(ctx, db, data, SkillInput{Name: "fix-bug"}, "u1"); return err }()) != "usage" {
 		t.Fatal("没有要改的应拒绝")
@@ -376,7 +369,7 @@ func TestResourcesStore(t *testing.T) {
 	if _, err := os.Stat(skillDir(data, "fix-bug", 2)); !os.IsNotExist(err) {
 		t.Fatal("超过保留版数的旧目录应删掉")
 	}
-	if _, err := GetSkill(ctx, db, data, "nope"); code(err) != "not_found" {
+	if _, err := GetSkill(ctx, db, "nope"); code(err) != "not_found" {
 		t.Fatal("没有的技能派活应报错")
 	}
 

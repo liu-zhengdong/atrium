@@ -16,16 +16,11 @@ import (
 // 技能、资料、凭据的内容都在数据目录里（库里只记元数据）：
 //
 //	skills/<名字>/r<rev>/SKILL.md 与附属文件（每一版）
-//	skills-current/<名字>/SKILL.md 与附属文件（当前版；派活给的路径）
 //	materials/<mN>/r<rev>/<相对路径>（一条资料的正文与附属文件）
 //	secrets/<oN>/<名称>（0600）
 func skillDir(data, name string, rev int) string {
 	return filepath.Join(data, "skills", name, "r"+strconv.Itoa(rev))
 }
-
-// currentSkillDir 是技能当前版的目录。各技能在这里是兄弟目录，SKILL.md 里的 ../<另一技能>/SKILL.md
-// 按真实文件系统就能打开对方的当前版。是真文件不是符号链接：符号链接目录里的 .. 按物理路径解析，会落回 skills/<名字>/ 下。
-func currentSkillDir(data, name string) string { return filepath.Join(data, "skills-current", name) }
 
 func materialFile(data, id string, rev int, rel string) string {
 	return filepath.Join(data, "materials", id, "r"+strconv.Itoa(rev), filepath.FromSlash(rel))

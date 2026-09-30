@@ -68,14 +68,14 @@ var (
 	}
 	// isolated：隔离实例（数据目录不是缺省的那个）自动挑人不挑内置工具，测试、开发不会拉起本机真实执行者；写死 --worker 不拦。
 	isolated = func(env *app.Env) bool { return env.Paths.Isolated() }
-	// skillOf 是任务挂的技能：SKILL.md 路径、优先执行者、要的凭据。
+	// skillOf 是任务挂的技能：优先执行者、要的凭据。
 	skillOf = func(ctx context.Context, env *app.Env, name string) (Skill, error) {
-		k, err := org.GetSkill(ctx, env.DB, env.Paths.Data, name)
-		return Skill{Path: k.Path, Workers: k.Workers, Secrets: k.Secrets}, err
+		k, err := org.GetSkill(ctx, env.DB, name)
+		return Skill{Workers: k.Workers, Secrets: k.Secrets}, err
 	}
 	// skillIndex 是提示词里的技能索引（除去这件活挂上的 except）。
 	skillIndex = func(ctx context.Context, env *app.Env, except string) (string, error) {
-		ks, err := org.Skills(ctx, env.DB, env.Paths.Data)
+		ks, err := org.Skills(ctx, env.DB)
 		return org.SkillIndex(ks, except), err
 	}
 	// secretEnv 按名称从任务部门往上取凭据的值（记下使用时间）。
@@ -86,7 +86,6 @@ var (
 
 // Skill 是派活要的技能信息。
 type Skill struct {
-	Path    string
 	Workers []string
 	Secrets []string
 }

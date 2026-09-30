@@ -19,6 +19,33 @@ func TestTraceGrokLog(t *testing.T) {
 	}
 }
 
+// t677 原始压缩边界：grok 与 Claude 共用处理，不显示、不改变会话或收尾。
+func TestTraceCompactBoundary(t *testing.T) {
+	log, err := os.ReadFile("testdata/grok-t677-compact.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tool := range []string{"grok", "claude"} {
+		t.Run(tool, func(t *testing.T) {
+			p := NewParser(tool)
+			p.Feed(`{"type":"system","subtype":"init","session_id":"original","model":"model"}
+{"type":"assistant","message":{"content":[{"type":"text","text":"完成"}]}}
+{"type":"result","result":"完成","duration_ms":42}`)
+			want := p.Trace()
+			p.Feed(string(log))
+			if got := p.Trace(); !reflect.DeepEqual(got, want) {
+				t.Fatalf("压缩边界改变经过：得到 %+v，期望 %+v", got, want)
+			}
+			if tool == "grok" {
+				p.Feed(strings.ReplaceAll(string(log), "compact_boundary", "compact_boundary_new"))
+				if got := p.Trace(); got.Unknown != 1 || len(got.UnknownHead) != 1 || len(got.Lines) != 1 {
+					t.Fatalf("未知系统事件应报告：%+v", got)
+				}
+			}
+		})
+	}
+}
+
 func TestTraceGrokEvents(t *testing.T) {
 	p := NewParser("grok")
 	p.Feed(`{"type":"assistant","message":{"content":[{"type":"text","text":"执行命令"},{"type":"tool_use","id":"a","name":"run_terminal_command","input":{"command":"rg absent"}}]}}
@@ -357,11 +384,16 @@ func TestTraceEveryJSONTool(t *testing.T) {
 		if d.read == nil || len(samples) == 0 {
 			t.Errorf("%s 输出 JSON 事件：要在 Driver.read 带解析（tracers.go），并放一份真实日志 testdata/%s-*.jsonl", tool, tool)
 		}
+		segments := 0
 		for _, f := range samples {
 			tr, err := ReadTrace(tool, f)
-			if err != nil || tr.Unknown != 0 || len(tr.Segments) == 0 {
+			segments += len(tr.Segments)
+			if err != nil || tr.Unknown != 0 {
 				t.Errorf("%s：%v，%d 行没认出，%d 段", f, err, tr.Unknown, len(tr.Segments))
 			}
+		}
+		if segments == 0 {
+			t.Errorf("%s 的日志样本缺少可显示的经过", tool)
 		}
 	}
 }

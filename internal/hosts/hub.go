@@ -44,11 +44,12 @@ type Query struct {
 
 // Command 是服务下发给代理的指令：launch 拉起、stop 结束、query 查询。
 type Command struct {
-	ID     string      `json:"id"`
-	Kind   string      `json:"kind"`
-	Launch *Assignment `json:"launch,omitempty"`
-	Stop   *RunRef     `json:"stop,omitempty"`
-	Query  *Query      `json:"query,omitempty"`
+	ID      string          `json:"id"`
+	Kind    string          `json:"kind"`
+	Launch  *Assignment     `json:"launch,omitempty"`
+	Stop    *RunRef         `json:"stop,omitempty"`
+	Query   *Query          `json:"query,omitempty"`
+	Reclaim *ReclaimRequest `json:"reclaim,omitempty"`
 }
 
 // Ack 是代理对指令的回执。拉起回 PID 与工作目录；查询回输出（读文件时 Missing 表示没有这个文件）。

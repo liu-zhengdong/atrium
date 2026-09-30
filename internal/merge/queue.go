@@ -228,9 +228,6 @@ func (q *Queue) Merge(ctx context.Context, t ledger.Task) error {
 }
 
 func (q *Queue) merged(ctx context.Context, t ledger.Task, repo, url, commit, note string) error {
-	if err := q.cleanupWorktree(ctx, t); err != nil {
-		return err
-	}
 	raw, _ := json.Marshal(map[string]string{"pr": url, "commit": commit})
 	if err := ledger.Record(ctx, q.DB, t.ID, gates.KindMergeCommit, Actor, string(raw)); err != nil {
 		return err
@@ -241,45 +238,6 @@ func (q *Queue) merged(ctx context.Context, t ledger.Task, repo, url, commit, no
 	}
 	_, err := ledger.Apply(ctx, q.DB, t.ID, ledger.Event{Kind: ledger.Land, Land: ledger.StageMerged, Final: !need}, Actor, note+"（"+short(commit)+"）")
 	return err
-}
-
-// CleanupWorktree 判登记的目录是否为这件任务在本机数据目录下的仓库工作树。
-// 远程代理的（登记的机器不是本机）和手工登记的其他目录不由本机合入队列清理。
-func CleanupWorktree(data, task, recorded string) bool {
-	return recorded != "" && filepath.IsAbs(recorded) &&
-		filepath.Clean(recorded) == filepath.Join(data, "tasks", task, "repo")
-}
-
-func (q *Queue) cleanupWorktree(ctx context.Context, t ledger.Task) error {
-	w, found, err := gates.Workspace(ctx, q.DB, t.ID)
-	if err != nil || !found || w.Remote() {
-		return err
-	}
-	dir := w.Dir
-	if !CleanupWorktree(filepath.Dir(q.Dir), t.ID, dir) {
-		return nil
-	}
-	if _, err := os.Stat(dir); errors.Is(err, os.ErrNotExist) {
-		return nil
-	} else if err != nil {
-		return err
-	}
-	common, err := q.R.Run(ctx, dir, "git", "rev-parse", "--git-common-dir")
-	if err != nil {
-		return err
-	}
-	common = strings.TrimSpace(common)
-	if !filepath.IsAbs(common) {
-		common = filepath.Join(dir, common)
-	}
-	// 在工作树外执行：Windows 上删不掉进程当前所在的目录。
-	if _, err := q.R.Run(ctx, "", "git", "--git-dir", common, "worktree", "remove", dir); err != nil {
-		return err
-	}
-	if _, err := q.R.Run(ctx, "", "git", "--git-dir", common, "branch", "-D", "task-"+t.ID); err != nil {
-		return err
-	}
-	return nil
 }
 
 func short(sha string) string {

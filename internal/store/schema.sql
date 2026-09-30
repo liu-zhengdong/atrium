@@ -148,6 +148,9 @@ CREATE TABLE IF NOT EXISTS task_events (
   body  TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS task_events_task ON task_events (task, id);
+CREATE INDEX IF NOT EXISTS task_worktrees ON task_events (id) WHERE kind = 'worktree';
+CREATE INDEX IF NOT EXISTS task_worktrees_reclaimed ON task_events (task, body) WHERE kind = 'worktree_reclaimed';
+CREATE INDEX IF NOT EXISTS task_worker_lifecycle ON task_events (task, kind, id) WHERE kind = 'launch' OR kind = 'exit';
 
 -- 派活队列：task run 的入队选项（opts：执行者、风险、机器、凭据名，JSON）。队列本身是状态 queued 的任务，
 -- 按任务优先级（tasks.priority）、入队先后取；没有这一行（交回）时沿用上次拉起的执行者。

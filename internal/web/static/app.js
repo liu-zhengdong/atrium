@@ -485,7 +485,10 @@ const kindOf = m => !m.entry ? "set" : extKind(m.entry) || (m.files.find(f => f.
 const baseName = p => p.split("/").pop();
 const matAmount = m => [m.files.length > 1 ? m.files.length + " 个文件" : "", size(m.size)].filter(Boolean).join(" · ");
 // 以文件路径结尾的地址：html 里的相对路径由浏览器落到同一条资料里；新窗口打开、另存也带着文件名
-const namedURL = (m, p = m.entry) => `/ui/material/${m.id}/${p.split("/").map(encodeURIComponent).join("/")}`;
+const pathURL = p => p.split("/").map(encodeURIComponent).join("/");
+const namedURL = (m, p = m.entry) => `/ui/material/${m.id}/${pathURL(p)}`;
+// html 正文另走带键的沙箱地址（m.frame）：页面里的模块脚本、fetch 要跨域放行才读得到同一条资料里的文件
+const frameURL = m => m.frame + pathURL(m.entry);
 const matURL = (m, p = m.entry) => namedURL(m, p) + `?rev=${m.rev}`;
 async function fetchMat(m, as) {
   const r = await fetch(matURL(m));
@@ -543,7 +546,7 @@ const viewers = {
     const [text] = await Promise.all([fetchMat(m, "text"), lib("marked")]);
     return `<article class="doc">${mdDoc(text, m)}</article>`;
   },
-  html: (el, m) => `<iframe class="frame" sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox" src="${esc(namedURL(m))}" title="${esc(m.title)}"></iframe>`,
+  html: (el, m) => `<iframe class="frame" sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox" src="${esc(frameURL(m))}" title="${esc(m.title)}"></iframe>`,
   pdf: (el, m) => `<iframe class="frame" src="${esc(matURL(m))}" title="${esc(m.title)}"></iframe>`,
   img: (el, m) => `<img class="pic" src="${esc(matURL(m))}" alt="${esc(m.title)}">`,
   text: async (el, m) => `<pre class="plain">${esc(await fetchMat(m, "text"))}</pre>`,
@@ -578,7 +581,7 @@ function renderMaterial(deptPage, id) {
   const tip = label => `aria-label="${label}" title="${label}"`;
   const tools = `<button class="tool" data-wide ${tip(wide ? "收窄" : "放宽")}>${wide ? icon.narrow : icon.wide}</button>`
     + (["file", "docx", "xlsx", "set"].includes(kind) ? "" // 浏览器自己打不开的，新窗口只会变成下载
-      : `<a class="tool" href="${esc(namedURL(m))}" target="_blank" rel="noopener" ${tip("新窗口打开")}>${icon.out}</a>`)
+      : `<a class="tool" href="${esc(kind === "html" ? frameURL(m) : namedURL(m))}" target="_blank" rel="noopener" ${tip("新窗口打开")}>${icon.out}</a>`)
     + (kind === "set" ? "" : `<a class="tool" href="${esc(matURL(m))}" download="${esc(baseName(m.entry))}" ${tip("下载正文")}>${icon.down}</a>`);
   const meta = [m.kind === "overview" ? "总览" : "", "v" + m.rev, matAmount(m), date(m.created_at), m.note !== m.title && m.note].filter(Boolean);
   // 有正文的目录资料：正文下面折起全部文件（图源、没被正文引用的图也找得到）

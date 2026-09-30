@@ -460,19 +460,25 @@ func getTasks(ctx context.Context, q store.Querier, ids []string) ([]ledger.Task
 
 // DeptPage 是部门页。
 type DeptPage struct {
-	Dept      org.Dept       `json:"dept"`
-	Leader    *Leader        `json:"leader"`
-	Subs      []DeptBrief    `json:"subs"`
-	Tasks     []Row          `json:"tasks"`
-	Rules     []Rule         `json:"rules"`
-	Inherited []Rule         `json:"inherited"`
-	RuleMax   int            `json:"rule_max"`
-	MemoMax   int            `json:"memo_max"` // 负责人备忘上限（字），抽屉里写「用量/上限」
-	Accept    *Accept        `json:"accept"`   // 验收人（沿树继承）；缺省 auto 为空
-	Materials []org.Material `json:"materials"`
-	MatMax    int            `json:"material_max"` // 资料文本总量上限（字），用量由页面按 units 合计
-	Schedules []Sched        `json:"schedules"`
-	SchedMax  int            `json:"schedule_max"`
+	Dept      org.Dept    `json:"dept"`
+	Leader    *Leader     `json:"leader"`
+	Subs      []DeptBrief `json:"subs"`
+	Tasks     []Row       `json:"tasks"`
+	Rules     []Rule      `json:"rules"`
+	Inherited []Rule      `json:"inherited"`
+	RuleMax   int         `json:"rule_max"`
+	MemoMax   int         `json:"memo_max"` // 负责人备忘上限（字），抽屉里写「用量/上限」
+	Accept    *Accept     `json:"accept"`   // 验收人（沿树继承）；缺省 auto 为空
+	Materials []Material  `json:"materials"`
+	MatMax    int         `json:"material_max"` // 资料文本总量上限（字），用量由页面按 units 合计
+	Schedules []Sched     `json:"schedules"`
+	SchedMax  int         `json:"schedule_max"`
+}
+
+// Material 是部门页里的一条资料；Frame 是 html 正文沙箱页面的地址前缀（/ui/frame/mN-<键>/，见 material.go）。
+type Material struct {
+	org.Material
+	Frame string `json:"frame"`
 }
 
 // Leader 是部门负责人：自己没有就是往上最近一级的（Inherited），和事件投递同一个判定（org.Recipient）。
@@ -559,8 +565,13 @@ func loadDept(ctx context.Context, q store.Querier, data, id string) (DeptPage, 
 	if page.Rules, err = ownRules(ctx, q, id, ix.name(id)); err != nil {
 		return DeptPage{}, err
 	}
-	if page.Materials, err = org.Materials(ctx, q, data, org.MaterialFilter{Org: id}); err != nil {
+	mats, err := org.Materials(ctx, q, data, org.MaterialFilter{Org: id})
+	if err != nil {
 		return DeptPage{}, err
+	}
+	page.Materials = make([]Material, len(mats))
+	for i, m := range mats {
+		page.Materials[i] = Material{Material: m}
 	}
 	scheds, err := agenda.Schedules(ctx, q, id)
 	if err != nil {

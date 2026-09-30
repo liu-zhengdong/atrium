@@ -279,7 +279,7 @@ const (
 	BlockIt  Action = "block"     // 结束进程、转受阻交负责人
 	KillIt   Action = "kill"      // 结束检查进程（结果由合入队列判）
 	Notify   Action = "notify"    // 发 overdue 给当前等待对象（负责人一轮）
-	Escalate Action = "escalate"  // 发 overdue 给上一层
+	Escalate Action = "escalate"  // 发 overdue 给上一层（处理人是秘书时再发给秘书）
 )
 
 // Decide 是巡检的判定：纯函数。

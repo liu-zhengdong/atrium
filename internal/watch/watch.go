@@ -186,7 +186,8 @@ func childEnded(ctx context.Context, q store.Querier, id string) (int64, error) 
 	return at, nil
 }
 
-// upOf 是任务所属部门的负责人的上一层（部门往上跳过这位负责人的下一位）；没有更上一层返回空。
+// upOf 是任务所属部门的负责人的上一层（部门往上跳过这位负责人的下一位，到顶是秘书）；
+// 处理人已是秘书时没有更上一层，仍是秘书自己：60 分钟那一轮再提醒一次。
 func upOf(ctx context.Context, q store.Querier, dept string) (string, error) {
 	ps, err := org.Parents(ctx, q)
 	if err != nil {
@@ -197,8 +198,6 @@ func upOf(ctx context.Context, q store.Querier, dept string) (string, error) {
 		return "", err
 	}
 	owner, _ := org.Nearest(ps, lm, dept, "")
-	if up, _ := org.Nearest(ps, lm, dept, owner); up != owner {
-		return up, nil
-	}
-	return "", nil
+	up, _ := org.Nearest(ps, lm, dept, owner)
+	return up, nil
 }

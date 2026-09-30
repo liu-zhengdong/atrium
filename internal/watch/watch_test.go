@@ -401,6 +401,41 @@ func TestTickPausedAndEscalates(t *testing.T) {
 	}
 }
 
+// 没有部门的任务处理人是秘书，60 分钟没有更上一层：再提醒秘书，30 分钟、60 分钟各一次。
+func TestTickSecretaryRemindedAgainAt60(t *testing.T) {
+	env, ctx := setup(t)
+	task, _ := ledger.Add(ctx, env.DB, ledger.NewTask{Title: "没部门"}, "u1")
+	ledger.Apply(ctx, env.DB, task.ID, ledger.Event{Kind: ledger.Block}, "u1", "")
+	env.DB.Exec(`UPDATE events SET acked_at = 1`)
+	since := store.Now() - 31*minute
+	env.DB.Exec(`UPDATE tasks SET updated_at = ? WHERE id = ?`, since, task.ID)
+	count := func() int {
+		rows, _ := events.Pending(ctx, env.DB, org.Secretary, false, 10)
+		n := 0
+		for _, r := range rows {
+			if r.Kind == events.Overdue && r.Task == task.ID {
+				n++
+			}
+		}
+		return n
+	}
+	if err := Tick(ctx, env); err != nil {
+		t.Fatal(err)
+	}
+	if n := count(); n != 1 {
+		t.Fatalf("30 分钟应提醒秘书一次，得 %d", n)
+	}
+	env.DB.Exec(`UPDATE tasks SET updated_at = ? WHERE id = ?`, since-30*minute, task.ID)
+	for i := 0; i < 2; i++ { // 第二轮不重发
+		if err := Tick(ctx, env); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := count(); n != 2 {
+		t.Fatalf("60 分钟没有更上一层，应再提醒秘书一次（共 2 条），得 %d", n)
+	}
+}
+
 // 等你验收超过一天：经秘书提醒一次，不投负责人、不向上级上报。
 func TestTickRemindsUserToAccept(t *testing.T) {
 	env, ctx := setup(t)

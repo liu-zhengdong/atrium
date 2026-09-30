@@ -2,7 +2,7 @@
 
 ## 目标
 
-Atrium 是 AI 组织的运行底座（方向见讨论 [#260](https://github.com/liu-zhengdong/atrium/discussions/260)，规格见 [#496](https://github.com/liu-zhengdong/atrium/discussions/496)）。用户只提目标；固定身份的秘书补成简报，按组织树拆成任务，派给一次性的执行者（编码 CLI + 模型）完成；Atrium 负责任务账本与全局视图、执行者适配、验收交付检查、合入与上线、额度调度、事件投递和服务自身的生命周期。
+Atrium 是 AI 组织的运行底座（方向见讨论 [#260](https://github.com/liu-zhengdong/atrium/discussions/260)，规格见 [#496](https://github.com/liu-zhengdong/atrium/discussions/496)）。用户只提目标；固定身份的秘书补成简报，按组织树拆成任务，派给一次性的执行者（编码 CLI + 模型）完成；Atrium 负责任务账本与全局视图、执行者适配、交付检查与验收、合入与上线、额度调度、事件投递和服务自身的生命周期。
 
 要达成的三个目标（像你一样判断、自己找事、越做越好）和各自怎么检验，见 README「目标」一节；取舍时先问它对哪个目标有用。
 
@@ -20,7 +20,7 @@ Atrium 是 AI 组织的运行底座（方向见讨论 [#260](https://github.com/
 | 组织     | `org`、`org/leaders`、`org/agenda`                  | 部门、要点、身份、备忘、技能、资料、凭据、上限；负责人唤醒与权限；选项单、周期任务 |
 | 事件     | `events`、`secretary`                               | 事件落库与投递、`events wait/ack`；注入 Claude Code 秘书会话、状态栏 |
 | 执行     | `dispatch`、`workers`、`hosts`、`quota`             | 分派任务队列、挑执行者与机器、适配器与档案、远程代理、额度               |
-| 交付     | `gates`、`merge`、`release`、`watch`                | 查事实判交付检查与审阅、合入队列、自升级上线、等待对象与处理时限、长时间没进展继续跟进       |
+| 交付     | `gates`、`merge`、`release`、`watch`                | 查事实做交付检查与审阅、合入队列、自升级上线、等待对象与处理时限、检测无进展任务、重启后继续跟进       |
 | 视图     | `web`                                               | 只读网页与接口（`map`）                                              |
 | 导入     | `importer`                                          | 从旧版库一次性只读导入                                               |
 

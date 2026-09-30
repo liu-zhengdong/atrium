@@ -128,14 +128,14 @@ func (d *dispatcher) launch(ctx context.Context, t ledger.Task, o launchOpts) er
 		rr, pid, rdir, err := launchRemote(ctx, d.env, o.Host, Remote{Task: t.ID, Tool: o.W.Spec.Tool, Request: req, Repo: clone,
 			Branch: branch, Base: "main", Env: extra, Token: token, Log: run.Log})
 		if err != nil {
-			return err
+			return api.Conflict("远程执行者拉起失败：%v", err)
 		}
 		run.PID, run.RemoteRun, run.Dir = pid, rr, rdir
 		wait = d.remoteWaiter(p, rr)
 	} else {
 		cmdWait, pid, stdin, err := startLocal(o.W.Spec.Tool, req, extra, conn{fmt.Sprintf("http://127.0.0.1:%d", d.env.Port), token}, run.Log, prompt, n)
 		if err != nil {
-			return err
+			return api.Conflict("本机执行者拉起失败：%v", err)
 		}
 		run.PID, p.stdin, wait = pid, stdin, cmdWait
 	}

@@ -20,6 +20,9 @@ trap 'where="第 $LINENO 行：$BASH_COMMAND"' ERR
 cleanup() {
   local rc=$?
   if [ "$rc" = 0 ]; then rm -rf "$work"; return; fi   # 通过时起过的进程各步已自己停掉
+  # 最近一条输出是某个任务的：服务还在时先打出它的经历，失败原因多半在里面。
+  local t; t=$(jq -r '[.result.task.id, .result.id, .next, .error.next] | map(strings) | join(" ")' <<<"${out:-}" 2>/dev/null | grep -oE '\bt[0-9]+\b' | head -1 || true)   # 等到超时的回执只在 next 里带任务号
+  if [[ "$t" =~ ^t[0-9]+$ ]]; then echo "--- 任务 $t 的经历" >&2; "$bin" task show "$t" --json 2>&1 | jq -r '.result.history[] | "\(.kind)  \(.body // "")"' >&2 || true; fi   # 经历正文不截断
   # 只结束自己起的进程（服务新旧 pid 都记着）。
   for p in $pid; do killpid "$p"; done
   for p in $jobs; do kill "$p" 2>/dev/null || true; done
@@ -499,9 +502,10 @@ out=$(json skill add article "$work/skill" --checks article); has '.result.check
 out=$(json skill add video "$work/skill" --checks video); has '.result.checks == ["video"]'
 # 文章小样：假执行者写 post.md，pnpm run build 把它变成 dist/post.html；运行时截明暗两张
 mkdir -p "$work/art"; art=$(cd "$work/art" && pwd)
-# 构建脚本用 node 写：pnpm 在 Windows 上经 cmd.exe 跑 scripts，sh 语法在那里不成立
+# 构建脚本用 node 写：pnpm 在 Windows 上经 cmd.exe 跑 scripts，sh 语法在那里不成立。
+# 页面带英文标题：没装中文字体的机器（GitHub 的 Ubuntu 镜像）上只有「正文」两个字会渲染成细线方框，整页被判空白。
 echo '{"scripts":{"build":"node build.js"}}' >"$art/package.json"
-echo 'const fs = require("fs"); fs.mkdirSync("dist", {recursive: true}); fs.writeFileSync("dist/post.html", "<meta charset=utf-8><h1>" + fs.readFileSync("post.md"))' >"$art/build.js"
+echo 'const fs = require("fs"); fs.mkdirSync("dist", {recursive: true}); fs.writeFileSync("dist/post.html", "<meta charset=utf-8><h1>Smoke article</h1><p>" + fs.readFileSync("post.md"))' >"$art/build.js"
 out=$(json task add 文章 --dir "$art" --skill article); a=$(jq -r .result.id <<<"$out")
 json task run "$a" --worker fakewrite >/dev/null
 out=$(json task wait "$a" --timeout 120); has '.result.task.status == "done"'

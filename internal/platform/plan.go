@@ -254,8 +254,10 @@ func set(names ...string) map[string]bool {
 }
 
 // Browsers 是找无头浏览器的顺序：先 PATH 里的名字（专做截图的 chrome-headless-shell 在前），再各平台的固定安装位置。
+// 正式发行的 Chrome 排在 Chromium 前：PATH 里的 chromium 常是开发快照（GitHub 的 Ubuntu 镜像里那份无头截图一直不出图），
+// 同机的 google-chrome 能截。
 func Browsers(goos string) []string {
-	names := []string{"chrome-headless-shell", "chromium", "chromium-browser", "google-chrome", "google-chrome-stable", "chrome", "msedge"}
+	names := []string{"chrome-headless-shell", "google-chrome", "google-chrome-stable", "chrome", "chromium", "chromium-browser", "msedge"}
 	switch goos {
 	case "darwin":
 		return append(names, "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",

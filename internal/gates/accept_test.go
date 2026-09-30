@@ -180,7 +180,7 @@ func TestAcceptNoRepo(t *testing.T) {
 	}
 }
 
-// 有工作地点的活（dir）：关卡看执行者正常收尾，东西已在原地、没有落地，验收人是用户也不等验收，直接完成；
+// 有工作地点的活（dir）：关卡看执行者的交付结论，东西已在原地、没有落地，验收人是用户也不等验收，直接完成；
 // 文件夹里的 choice.json 是用户自己的文件，不当选项单登记。
 func TestAcceptDir(t *testing.T) {
 	e := setup(t)

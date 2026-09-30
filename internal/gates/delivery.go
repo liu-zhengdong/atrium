@@ -13,10 +13,11 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/org"
 	"github.com/liu-zhengdong/atrium/internal/org/agenda"
 	"github.com/liu-zhengdong/atrium/internal/store"
+	"github.com/liu-zhengdong/atrium/internal/workers"
 )
 
 // Delivery 是一种交付方式：执行者交什么（Rules，附进提示词）、关卡查什么事实（check）、验收后怎么落地（land）。
-// 不存库，按任务已有的事实选（pick）：有仓库但工作树没改动 → message；本机仓库没有 GitHub 远程 → local；其余有仓库 → pr；
+// 不存库，按任务已有的事实选（pick）：有仓库但工作树没改动 → message（按执行者的交付结论判）；本机仓库没有 GitHub 远程 → local；其余有仓库 → pr；
 // 只有工作地点（本机文件夹）→ dir；都没有 → message，工作目录根有 choice.json → choice。
 // 核心（ledger）只认关卡、审阅、验收过没过与落地的步骤名；要新的交付方式在这里加一项。
 type Delivery struct {
@@ -32,7 +33,8 @@ type Delivery struct {
 
 // checked 是关卡查完的结论。
 type checked struct {
-	reasons []string // 不过的原因；空为过
+	reasons []string // 不过的原因，交回执行者照着改；空为过
+	block   string   // 非空：交回执行者也没用（它自称没做成、停下等人定，或没写交付结论），转受阻交处理人
 	note    string   // 过了记进经历的话
 	review  string   // 非空：落地前要另一个模型审阅，写明为什么
 }
@@ -45,6 +47,9 @@ type landed struct {
 }
 
 var noRepoRules = []string{"这件活没有仓库：在当前目录干，交付物是最后一条消息里的结论（写清调查结果与依据）。"}
+
+// endRule 每件活都附：没有改动可查时（message、dir），关卡只凭最后一行判（ParseEnding）。派活时分不出会不会有改动，所以一律附。
+const endRule = "最后一行单独写 `交付结论：完成`；没做成、或停在动手前等人定，写 `交付结论：没做成`，原因写在它上面（任务详述另定了最后一行的照详述）。"
 
 var (
 	// pr：在分支上开 PR；关卡查提交、推送、改动规模与 PR 正文；落地是合入队列（merge）加可选的发版（release）。
@@ -63,22 +68,14 @@ var (
 			"本机交付：在分支 %s 上提交；不要推送、不要合入主分支，验收过后由运行时合进本机主分支。不用改代码的活不提交，结论写在最后的回复里。",
 		},
 		check: (*Gate).checkLocal, land: (*Gate).landLocal}
-	// dir：在工作地点（本机文件夹）原地干，东西已经在原地；关卡只看执行者正常收尾；没有落地。
+	// dir：在工作地点（本机文件夹）原地干，东西已经在原地；关卡看执行者的交付结论；没有落地。
 	// 同一文件夹的几件活会不会互相踩由负责人派活时安排，运行时不隔离、不留回退。
 	deliverDir = Delivery{Name: "dir",
 		Rules: []string{"这件活在工作地点原地干：当前目录就是用户的文件夹，直接在这里改，不复制、不另建目录或 git 仓库；" +
 			"交付说明写在最后的回复里（改了哪些文件、结果与依据）。"},
-		check: func(*Gate, context.Context, ledger.Task) (checked, error) {
-			return checked{note: "在工作地点原地干，交付说明在最后的回复里"}, nil
-		}}
-	// message：结论写在最后的回复里（没有仓库，或有仓库但没改动）；关卡只看执行者正常收尾；没有落地。
-	deliverMessage = Delivery{Name: "message", Rules: noRepoRules,
-		check: func(_ *Gate, _ context.Context, t ledger.Task) (checked, error) {
-			if t.Repo != "" {
-				return checked{note: "工作树相对基线没有改动，不要 PR，结论在最后的回复里"}, nil
-			}
-			return checked{note: "没有仓库，结论在最后的回复里"}, nil
-		}}
+		check: (*Gate).checkEnding}
+	// message：结论写在最后的回复里（没有仓库，或有仓库但没改动）；关卡看执行者的交付结论；没有落地。
+	deliverMessage = Delivery{Name: "message", Rules: noRepoRules, check: (*Gate).checkEnding}
 	// choice：调研任务在工作目录根写 choice.json；关卡核对格式；落地是登记成选项单（agenda.Settle）。
 	deliverChoice = Delivery{Name: "choice", Rules: noRepoRules, check: (*Gate).checkChoice, land: (*Gate).landChoice}
 )
@@ -110,11 +107,11 @@ func localRepo(repo, origin string) bool {
 // （规则里说了不用改代码时怎么交）；choice 与 message 派活时分不出来，提示词相同，要不要写 choice.json 由任务详述（调研周期任务）说。
 func PromptRules(repo, dir, origin, branch string) []string {
 	d := pick(repo, dir, origin, true, false)
-	out := make([]string, len(d.Rules))
+	out := make([]string, len(d.Rules), len(d.Rules)+1)
 	for i, r := range d.Rules {
 		out[i] = strings.ReplaceAll(r, "%s", branch)
 	}
-	return out
+	return append(out, endRule)
 }
 
 // Origin 读本机仓库（绝对路径）origin 的地址；没有 origin 或 repo 不是本机路径为空。
@@ -173,6 +170,53 @@ func (g *Gate) choiceFile(ctx context.Context, t ledger.Task) ([]byte, error) {
 		return nil, err
 	}
 	return ReadFile(ctx, w, agenda.ChoiceFile)
+}
+
+// checkEnding 是没有改动可查的交付（message、dir）的关卡：按执行者这一轮最后的回复里的交付结论判（ParseEnding）。
+// 没做成、没写都转受阻交处理人读回复定（补说明重派或收尾），不交回执行者重跑同一份提示词。
+// 审阅任务的结论由原任务读（最后一行是「审阅结论」），这里不看。
+func (g *Gate) checkEnding(ctx context.Context, t ledger.Task) (checked, error) {
+	if _, review, err := Last(ctx, g.DB, t.ID, KindReviewOf); err != nil || review {
+		return checked{note: "审阅结论在最后的回复里"}, err
+	}
+	where := "没有仓库"
+	switch {
+	case t.Repo != "":
+		where = "工作树相对基线没有改动，不要 PR"
+	case t.Dir != "":
+		where = "在工作地点原地干"
+	}
+	reply, err := roundResult(ctx, g.DB, t.ID)
+	if err != nil {
+		return checked{}, err
+	}
+	next := fmt.Sprintf("；读执行者的回复（atrium task log %s）后补说明重派，或收尾 atrium task set %s --status done", t.ID, t.ID)
+	done, why, ok := ParseEnding(reply)
+	switch {
+	case !ok:
+		return checked{block: where + "，执行者最后一行没写「交付结论：完成/没做成」" + next}, nil
+	case !done:
+		if why = strings.Join(strings.Fields(why), " "); why == "" {
+			why = "没写原因"
+		}
+		return checked{block: where + "，执行者交付结论：没做成（" + why + "）" + next}, nil
+	}
+	return checked{note: where + "，交付结论：完成，结论在最后的回复里"}, nil
+}
+
+// roundResult 取执行者这一轮（最近一次拉起之后）最后的回复；这一轮没回复为空，不拿上一轮的充数。
+func roundResult(ctx context.Context, q store.Querier, id string) (string, error) {
+	launched, err := lastID(ctx, q, id, workers.RunKind)
+	if err != nil {
+		return "", err
+	}
+	var body string
+	err = q.QueryRowContext(ctx, `SELECT body FROM task_events WHERE task = ? AND kind = ? AND id > ? ORDER BY id DESC LIMIT 1`,
+		id, KindResult, launched).Scan(&body)
+	if store.IsNotFound(err) {
+		return "", nil
+	}
+	return body, err
 }
 
 func (g *Gate) checkChoice(ctx context.Context, t ledger.Task) (checked, error) {

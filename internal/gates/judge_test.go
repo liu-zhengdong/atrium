@@ -135,6 +135,29 @@ func TestParseReview(t *testing.T) {
 	}
 }
 
+func TestParseEnding(t *testing.T) {
+	cases := []struct {
+		text string
+		done bool
+		why  string
+		ok   bool
+	}{
+		{"调研结论……\n交付结论：完成\n", true, "调研结论……", true},
+		{"h3 上读不到设计稿，没改代码\n\n**交付结论：没做成**", false, "h3 上读不到设计稿，没改代码", true},
+		{"方案 A、B 等负责人定\n交付结论: 没做成", false, "方案 A、B 等负责人定", true},
+		{"交付结论：完成\n补一句", false, "", false},   // 结论不在最后一行
+		{"没做成，没改代码也没开 PR", false, "", false}, // 自然语言不猜
+		{"", false, "", false},
+		{"审阅结论：通过", false, "", false},
+	}
+	for _, c := range cases {
+		done, why, ok := ParseEnding(c.text)
+		if done != c.done || why != c.why || ok != c.ok {
+			t.Errorf("%q：%v %q %v", c.text, done, why, ok)
+		}
+	}
+}
+
 func TestParseSlug(t *testing.T) {
 	for _, c := range []struct {
 		in, want string

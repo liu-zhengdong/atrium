@@ -265,6 +265,10 @@ func (g *Gate) gate(ctx context.Context, t ledger.Task) error {
 		_, err := Bounce(ctx, g.DB, t.ID, Actor, "关卡没过："+strings.Join(c.reasons, "；"))
 		return err
 	}
+	if c.block != "" {
+		_, err := Block(ctx, g.DB, t.ID, "关卡没过："+c.block)
+		return err
+	}
 
 	sc, err := g.skillChecks(ctx, t)
 	if err != nil {

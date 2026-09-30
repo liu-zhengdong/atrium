@@ -148,7 +148,7 @@ func judgeOne(check string, f Facts) Result {
 	return r
 }
 
-// Changed：工作树相对基线有改动（新提交或未提交的文件）。没有改动的有仓库任务按没有仓库交（结论在最后的回复里）。
+// Changed：工作树相对基线有改动（新提交或未提交的文件）。没有改动的有仓库任务按没有仓库交（按交付结论判）。
 func (f Facts) Changed() bool { return len(f.Dirty) > 0 || f.Ahead > 0 }
 
 // uncommitted 是没提交完的证据：未提交的文件、分支比 base 没有新提交。
@@ -282,22 +282,36 @@ func (r Requirement) Refusal(p Profile) string {
 	return ""
 }
 
-var verdictLine = regexp.MustCompile(`审阅结论\s*[:：]\s*\**\s*(通过|打回)`)
+var (
+	verdictLine = regexp.MustCompile(`审阅结论\s*[:：]\s*\**\s*(通过|打回)`)
+	endingLine  = regexp.MustCompile(`交付结论\s*[:：]\s*\**\s*(完成|没做成)`)
+)
 
-// ParseReview 从审阅者的收尾文字读结论：取最后一行非空文字，必须是「审阅结论：通过/打回」；
-// 之前的文字作意见。读不出返回 ok=false，不猜。
-func ParseReview(text string) (pass bool, notes string, ok bool) {
+// lastLine 按最后一行非空文字读结论：last 匹配 re 时返回第一个分组，之前的文字留末尾 n 个字作说明；匹配不上 ok=false，不猜。
+func lastLine(text string, re *regexp.Regexp, n int) (got, before string, ok bool) {
 	lines := strings.Split(strings.TrimRight(strings.ReplaceAll(text, "\r\n", "\n"), " \n\t"), "\n")
-	last := strings.TrimSpace(lines[len(lines)-1])
-	m := verdictLine.FindStringSubmatch(last)
+	m := re.FindStringSubmatch(strings.TrimSpace(lines[len(lines)-1]))
 	if m == nil {
-		return false, "", false
+		return "", "", false
 	}
-	notes = strings.TrimSpace(strings.Join(lines[:len(lines)-1], "\n"))
-	if r := []rune(notes); len(r) > 1500 {
-		notes = "…" + string(r[len(r)-1500:])
+	before = strings.TrimSpace(strings.Join(lines[:len(lines)-1], "\n"))
+	if r := []rune(before); len(r) > n {
+		before = "…" + string(r[len(r)-n:])
 	}
-	return m[1] == "通过", notes, true
+	return m[1], before, true
+}
+
+// ParseReview 从审阅者的收尾文字读结论：最后一行必须是「审阅结论：通过/打回」，之前的文字作意见。
+func ParseReview(text string) (pass bool, notes string, ok bool) {
+	got, notes, ok := lastLine(text, verdictLine, 1500)
+	return got == "通过", notes, ok
+}
+
+// ParseEnding 从执行者最后的回复读交付结论：最后一行必须是「交付结论：完成/没做成」，之前的文字留末尾作原因。
+// 没有改动可查的交付（message、dir）只凭这一行判：执行者自称没做成是安全的一侧，照信；读不出不猜。
+func ParseEnding(text string) (done bool, why string, ok bool) {
+	got, why, ok := lastLine(text, endingLine, 300)
+	return got == "完成", why, ok
 }
 
 // ReviewBrief 是派给审阅者的任务详述：只读、按清单审、最后一行给结论。dir 是本机工作树；原工作树在远程机器上时为空，只看 PR。

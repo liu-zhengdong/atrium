@@ -289,7 +289,7 @@ cat >"$work/fakesh.md" <<'MD'
 ---
 protocol: cli
 command: sh
-args: ["-c", "echo worker=$ATRIUM_WORKER task=$ATRIUM_TASK; echo DONE", "{prompt}"]
+args: ["-c", "echo worker=$ATRIUM_WORKER task=$ATRIUM_TASK; echo DONE; echo 交付结论：完成", "{prompt}"]
 done_match: "^DONE$"
 ---
 只回 DONE。
@@ -372,6 +372,23 @@ out=$(json task add 装工具 --repo "$site"); nochg=$(jq -r .result.id <<<"$out
 json task run "$nochg" --worker fakesh >/dev/null
 out=$(json task wait "$nochg" --timeout 30); has '.result.task.status == "done"'
 out=$(json task show "$nochg"); has '(.result.history|map(select(.kind == "gate_pass"))[0].body|contains("没有改动")) and (.result.history|map(.kind)|index("bounce")) == null'
+grep -q "交付结论：没做成" "$ATRIUM_DATA/tasks/$nochg/prompt-1.md" || fail "提示词应要求最后一行写交付结论"
+
+step "没改动且执行者自称没做成（停下等人定）：按交付结论转受阻交处理人，不判完成、不交回重跑"
+cat >"$work/fakestop.md" <<'MD'
+---
+protocol: cli
+command: sh
+args: ["-c", "echo 读不到设计稿，没改代码; echo DONE; echo 交付结论：没做成", "{prompt}"]
+done_match: "^DONE$"
+---
+只回没做成。
+MD
+out=$(json workers edit harness/fakestop --file "$work/fakestop.md"); has '.ok'
+out=$(json task add 改页面 --repo "$site"); stop=$(jq -r .result.id <<<"$out")
+json task run "$stop" --worker fakestop >/dev/null
+out=$(json task wait "$stop" --timeout 30); has '.result.task.status == "blocked"'
+out=$(json task show "$stop"); has '(.result.history|map(select(.kind == "block"))[0].body|contains("交付结论：没做成")) and (.result.history|map(.kind)|index("bounce")) == null'
 
 step "工作地点：普通文件夹（不是 git 仓库）→ 假执行者原地写文件 → 关卡 → 完成；不建工作树"
 mkdir -p "$work/notes"; place=$(cd "$work/notes" && pwd)   # 规范路径：TMPDIR 可能带尾部斜杠
@@ -379,7 +396,7 @@ cat >"$work/fakewrite.md" <<'MD'
 ---
 protocol: cli
 command: sh
-args: ["-c", "echo 正文 >post.md && echo DONE", "{prompt}"]
+args: ["-c", "echo 正文 >post.md && echo DONE && echo 交付结论：完成", "{prompt}"]
 done_match: "^DONE$"
 ---
 只回 DONE。

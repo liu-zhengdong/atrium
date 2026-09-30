@@ -452,7 +452,8 @@ type Filter struct {
 	Status []Status
 	Org    string
 	Parent string
-	Top    bool // 只列没有父任务的
+	Top    bool   // 只列没有父任务的
+	Class  string // 只列归在这一类的（发现的类）
 	Limit  int
 }
 
@@ -477,6 +478,9 @@ func List(ctx context.Context, q store.Querier, f Filter) ([]Task, error) {
 	}
 	if f.Top {
 		where = append(where, "parent IS NULL")
+	}
+	if f.Class != "" {
+		where, args = append(where, "id IN (SELECT task FROM task_findings WHERE class = ?)"), append(args, f.Class)
 	}
 	if f.Limit <= 0 || f.Limit > 500 {
 		f.Limit = 50

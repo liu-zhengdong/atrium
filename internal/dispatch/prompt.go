@@ -20,7 +20,6 @@ type PromptInput struct {
 	Skill   string   // 挂上的技能名
 	Skills  string   // 其余技能的索引（org.SkillIndex 拼好的一节）；没有为空
 	Profile string   // 执行者档案正文
-	Tells   []string // 运行中捎话（时间正序）
 	Bounces []string // 交回原因（最近的在后）
 	Repo    string   // 仓库；空表示没有仓库
 	Dir     string   // 工作地点（本机文件夹，原地干）；与 Repo 只有一个
@@ -52,7 +51,7 @@ func showRule(dept string) string {
 		"网页资料预览只认相对路径：站点按相对路径构建（如 base 设成 ./），做不到就交截图。"
 }
 
-// BuildPrompt 拼提示词（纯函数）：标题 + 语言要求 + 详述 + 用户全局原则 + 部门要点链 + 挂上的技能 + 技能索引 + 执行者档案正文 + 仓库约定 + 捎话与交回原因 + 通用约束。
+// BuildPrompt 拼提示词（纯函数）：标题 + 语言要求 + 详述 + 用户全局原则 + 部门要点链 + 挂上的技能 + 技能索引 + 执行者档案正文 + 仓库约定 + 交回原因 + 通用约束。
 func BuildPrompt(in PromptInput) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# 任务 %s：%s\n\n%s\n", in.Task, in.Title, langRule)
@@ -85,7 +84,6 @@ func BuildPrompt(in PromptInput) string {
 		fmt.Fprintf(&b, "\n## 这个仓库的约定（.agents/README.md）\n\n%s\n", g)
 	}
 	section("上次交付被交回的原因（先解决这些）", in.Bounces)
-	section("运行中的补充（后说的优先）", in.Tells)
 	section("通用约束", append(append(gates.PromptRules(in.Repo, in.Dir, in.Origin, in.Branch), commonRules...), showRule(in.Org)))
 	return b.String()
 }

@@ -347,6 +347,14 @@ func TestReview(t *testing.T) {
 			e.gh.Branch(dir, "t1-work", map[string]string{"a.go": "package a\n"})
 			e.gh.Open("t1-work", goodBody)
 			task := e.delivered("做事", "claude+haiku", dir)
+			detail := "分批写内容，保留后续批次表"
+			if _, err := e.db.ExecContext(e.ctx, `UPDATE tasks SET detail = ? WHERE id = ?`, detail, task.ID); err != nil {
+				t.Fatal(err)
+			}
+			const tell = "内容一次写全、写设计理念、删后续批次表"
+			if err := ledger.Record(e.ctx, e.db, task.ID, "tell", "a7", tell); err != nil {
+				t.Fatal(err)
+			}
 			e.sweep()
 			if got := e.get(task.ID); got.Stage != ledger.StageReview {
 				t.Fatalf("低信任应先审阅：%+v", got)
@@ -355,6 +363,9 @@ func TestReview(t *testing.T) {
 			rt := e.get(ref)
 			if !ok || rt.Status != ledger.Queued || rt.Parent != task.ID || !strings.Contains(rt.Detail, "审阅结论：通过") {
 				t.Fatalf("审阅任务不对：%+v", rt)
+			}
+			if !strings.Contains(rt.Detail, "## 原任务详述\n\n"+detail) || !strings.Contains(rt.Detail, tell) || !strings.Contains(rt.Detail, "以后面为准") {
+				t.Fatalf("审阅任务遗漏原说明、捎话或优先级：%s", rt.Detail)
 			}
 			req, _, _ := gates.Last(e.ctx, e.db, rt.ID, gates.KindRequire)
 			if !strings.Contains(req, `"not_tool":"claude"`) || !strings.Contains(req, `"min_trust":"medium"`) {

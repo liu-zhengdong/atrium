@@ -22,5 +22,5 @@ func TryFileLock(path string) (*os.File, error) {
 	return f, nil
 }
 
-// Windows Chrome 使用命名互斥量，手动登录后须先关闭专用 Chrome。
+// Windows 不使用 Unix 的 SingletonLock 检测；手动登录后须先关闭专用 Chrome。
 func ChromeProfileBusy(string) (bool, error) { return false, nil }

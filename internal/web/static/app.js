@@ -120,7 +120,7 @@ function schedRow(s, where) {
     ${where === "today" ? `<div class="dept">${esc(s.dept_name)}</div>` : ""}<div class="who">${warn ? `<span class="warn">上一轮分派任务失败</span>` : esc(tag)}</div><div class="time num">${esc(schedWhen(s))}</div></div>`;
   if (where !== "dept" || !s.last) return head;
   const who = s.trouble ? `<span class="warn">分派任务失败</span>` : esc(s.last.who) + (s.skips ? ` · <span class="warn">跳过 ${s.skips} 轮</span>` : "");
-  return head + taskRow({ ...s.last, title: "上一轮" }, ago, 1).replace(/<div class="who">.*?<\/div>/, `<div class="who">${who}</div>`);
+  return head + taskRow({ ...s.last, title: ended(s.last) ? "上一轮" : "这一轮" }, ago, 1).replace(/<div class="who">.*?<\/div>/, `<div class="who">${who}</div>`);
 }
 
 /* 任务树：没结束的子任务都摆出来（卡在哪一件一眼可见）；结束的两件以上折成一行，点开再看。展开状态跨刷新保留。 */
@@ -188,17 +188,19 @@ function renderToday(d) {
     <section class="section"><h2>在做${count(d.running.length)}${d.running.length > 1 ? `<button class="sort" id="sort">按${sortMode}${icon.sort}</button>` : ""}</h2>
       ${live.length ? `<div class="rows">${live.map(r => taskRow(r, ago, 0, r.who, deptName(r.dept))).join("")}</div>` : `<div class="empty">没有在做的</div>`}</section>
     <section class="section"><h2>接下来 7 天${count(d.soon.rows.length)}</h2>${soonHTML(d.soon)}</section>
-    ${d.shipped.length ? `<section class="section"><h2>今天完成${count(d.shipped.length)}</h2><div class="rows">${shippedRows(d.shipped)}</div></section>` : ""}
+    ${d.shipped.length ? `<section class="section"><h2>今天完成${count(d.shipped.length + d.shipped_more)}</h2><div class="rows">${shippedRows(d.shipped, d.shipped_more)}</div></section>` : ""}
     <section class="section"><h2>三个目标</h2><dl class="facts"><dt>近 7 天</dt><dd>${esc(d.goals.week.text)}</dd><dt>累计</dt><dd>${esc(d.goals.all.text)}</dd></dl></section>
     </div>`;
 }
 
-/* 今天完成（含完成未上线的）：先摆最近 5 件，其余折成一行（与任务树里「已结束 N 件」同一种折法）；对勾已说明做完，行尾不写状态字 */
+/* 今天完成（含完成未上线的）：先摆最近 5 件，其余折成一行（与任务树里「已结束 N 件」同一种折法）；对勾已说明做完，行尾不写状态字。
+   接口只列最近一批，more 是超出上限没列出的件数：折起时算进「还有 N 件」，展开后在末尾写明 */
 const shipFold = 5;
-function shippedRows(rows) {
+function shippedRows(rows, more) {
   const open = openKids.has("shipped"), rest = rows.length - shipFold;
   return rows.slice(0, rest > 1 && !open ? shipFold : rows.length).map(r => taskRow(r, clock, 0, "", deptName(r.dept))).join("")
-    + (rest > 1 ? `<button class="row kfold" data-kids="shipped" aria-expanded="${open}">${icon.chev}<div class="title">${open ? "收起" : `还有 ${rest} 件`}</div></button>` : "");
+    + (open && more ? `<div class="more">另有 ${more} 件更早完成的没列出</div>` : "")
+    + (rest > 1 ? `<button class="row kfold" data-kids="shipped" aria-expanded="${open}">${icon.chev}<div class="title">${open ? "收起" : `还有 ${rest + more} 件`}</div></button>` : "");
 }
 
 /* 接下来 7 天：按下一轮先后 */
@@ -436,7 +438,7 @@ function renderChoice(c) {
           <div><div class="t">${esc(o.title)}${rec.has(o.pos) ? '<span class="rec">推荐</span>' : ""}${o.task ? `<span class="pick">已选 · ${esc(o.task)}</span>` : ""}</div>
           <div class="g">${esc(o.gain)}</div>
           <div class="cost">${esc(o.cost)}</div>
-          ${o.why_now || o.if_not ? `<details><summary>为什么现在</summary><div class="whyt">${esc(o.why_now)}${o.if_not ? `<br>不做：${esc(o.if_not)}` : ""}</div></details>` : ""}</div></div>`).join("")}</div>
+          ${o.why_now || o.if_not ? `<details><summary>${icon.chev}为什么现在</summary><div class="whyt">${esc(o.why_now)}${o.if_not ? `<br>不做：${esc(o.if_not)}` : ""}</div></details>` : ""}</div></div>`).join("")}</div>
       ${c.note ? `<p class="status-line">${esc(c.note)}</p>` : ""}
       ${c.status === "open" ? `<p class="status-line">选哪几个，在终端里告诉秘书。</p>` : ""}`);
 }
@@ -455,7 +457,7 @@ function renderSchedule(s) {
       ${s.once ? `<div class="quiet-line">到点生成一件任务并派发，之后这条自动删除</div>` : `<div class="jh"><b>最近几轮</b>${s.skips ? `<span>跳过过 ${s.skips} 轮</span>` : ""}</div>
       ${s.rounds.length ? `<div class="rows">${s.rounds.map(r => taskRow({ ...r, title: day(r) ? day(r) + " 这一轮" : r.title })).join("")}</div>` : `<div class="quiet-line">还没跑过</div>`}`}
       ${s.note ? `<p class="status-line${s.trouble ? " warn" : ""}">${esc(s.note)}</p>` : ""}
-      ${s.detail ? `<details class="full"><summary>详述</summary><div class="result">${md(s.detail.trim())}</div></details>` : ""}`);
+      ${s.detail ? `<details class="full"><summary>${icon.chev}详述</summary><div class="result">${md(s.detail.trim())}</div></details>` : ""}`);
 }
 /* 负责人抽屉：执行者组合、负责哪些部门，备忘一行一段，行首「话题：」加重，两千字也能扫着找 */
 const memoHTML = s => s.trim().split(/\n\s*/).map(p => {
@@ -581,7 +583,7 @@ function renderMaterial(deptPage, id) {
   const meta = [m.kind === "overview" ? "总览" : "", "v" + m.rev, matAmount(m), date(m.created_at), m.note !== m.title && m.note].filter(Boolean);
   // 有正文的目录资料：正文下面折起全部文件（图源、没被正文引用的图也找得到）
   const all = kind !== "set" && m.files.length > 1
-    ? `<details class="full"><summary>这条资料里的 ${m.files.length} 个文件</summary>${fileList(m)}</details>` : "";
+    ? `<details class="full"><summary>${icon.chev}这条资料里的 ${m.files.length} 个文件</summary>${fileList(m)}</details>` : "";
   drawer(id, deptPage.dept.name, `<h3>${esc(m.title)}</h3><p class="sub-t">${esc(meta.join(" · "))}</p>
     <div class="viewer ${kind}" id="viewer"><div class="quiet-line">正在打开…</div></div>${all}`, tools);
   const el = $("#viewer"), still = () => drawerId === id && shownMat === key;

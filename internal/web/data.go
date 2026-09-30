@@ -322,14 +322,15 @@ func lastReason(ctx context.Context, q store.Querier, id string) (string, error)
 
 // Today 是今天页。
 type Today struct {
-	Asks    []Ask        `json:"asks"`
-	Running []Row        `json:"running"`
-	Queued  int          `json:"queued"`
-	Drafts  int          `json:"drafts"` // 草稿只给数，点开到根部门的任务页
-	Goals   ledger.Goals `json:"goals"`  // 三个目标的数（与 top 同一份）
-	Shipped []Row        `json:"shipped"`
-	Paused  []string     `json:"paused"` // 暂停范围（all、oN、hN）；空表示没暂停
-	Soon    Soon         `json:"soon"`
+	Asks        []Ask        `json:"asks"`
+	Running     []Row        `json:"running"`
+	Queued      int          `json:"queued"`
+	Drafts      int          `json:"drafts"` // 草稿只给数，点开到根部门的任务页
+	Goals       ledger.Goals `json:"goals"`  // 三个目标的数（与 top 同一份）
+	Shipped     []Row        `json:"shipped"`
+	ShippedMore int          `json:"shipped_more"` // 今天完成但超出列表上限、没列出的件数
+	Paused      []string     `json:"paused"`       // 暂停范围（all、oN、hN）；空表示没暂停
+	Soon        Soon         `json:"soon"`
 }
 
 // Soon 是今天页「接下来 7 天」：7 天内到点的定时任务（按下一轮先后），更远的只给条数。
@@ -371,6 +372,10 @@ func loadToday(ctx context.Context, q store.Querier, now time.Time) (Today, erro
 	if err != nil {
 		return Today{}, err
 	}
+	var doneAll int
+	if err := q.QueryRowContext(ctx, `SELECT count(*) FROM tasks WHERE status = 'done' AND finished_at >= ?`, startOfDay(now)).Scan(&doneAll); err != nil {
+		return Today{}, err
+	}
 	paused, err := pause.Active(ctx, q)
 	if err != nil {
 		return Today{}, err
@@ -379,7 +384,7 @@ func loadToday(ctx context.Context, q store.Querier, now time.Time) (Today, erro
 	if err != nil {
 		return Today{}, err
 	}
-	out := Today{Asks: nonNil(asks), Queued: queued, Drafts: drafts, Goals: goals, Running: []Row{}, Shipped: []Row{}, Paused: paused}
+	out := Today{Asks: nonNil(asks), Queued: queued, Drafts: drafts, Goals: goals, Running: []Row{}, Shipped: []Row{}, ShippedMore: doneAll - len(done), Paused: paused}
 	// 在做的、完成的不看依赖和子任务，等待对象只凭任务自己就判得出。
 	for _, t := range running {
 		out.Running = append(out.Running, toRow(t, ix.parents, watch.HolderOf(watch.Facts{Task: t})))

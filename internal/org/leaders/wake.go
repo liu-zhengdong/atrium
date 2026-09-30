@@ -275,7 +275,7 @@ func (h *hub) launch(ctx context.Context, env *app.Env, p Pending) error {
 	if err != nil {
 		return err
 	}
-	logf, err := os.OpenFile(filepath.Join(dir, "wake.log"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	logf, err := platform.OpenLog(filepath.Join(dir, "wake.log"))
 	if err != nil {
 		return err
 	}

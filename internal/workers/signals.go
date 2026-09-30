@@ -334,7 +334,7 @@ type Ending struct {
 // Ended 按工具的日志结构判结局：stream-json 看最后的 result 事件（codex 看 turn.completed／turn.failed）；通用命令行按 done_match / error_match。
 func (a *Driver) Ended(tail string) Ending {
 	if a.cli != nil {
-		lines := strings.Split(tail, "\n")
+		lines := strings.Split(strings.ReplaceAll(tail, "\r\n", "\n"), "\n") // Windows 原生工具的行尾是 CRLF
 		if a.cli.ErrorMatch != "" {
 			re := regexp.MustCompile(a.cli.ErrorMatch)
 			for i := len(lines) - 1; i >= 0; i-- {

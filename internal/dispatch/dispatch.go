@@ -668,7 +668,7 @@ func startLocal(tool string, req workers.Request, extra map[string]string, c con
 	if err != nil {
 		return nil, 0, nil, api.Conflict("没装 %s：%v", l.Exe, err)
 	}
-	logf, err := os.OpenFile(log, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	logf, err := platform.OpenLog(log)
 	if err != nil {
 		return nil, 0, nil, err
 	}

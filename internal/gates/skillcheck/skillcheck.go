@@ -1,4 +1,4 @@
-// Package skillcheck 是技能声明的交付检查：技能的 checks 写检查名，关卡在本机的工作目录里按名字查表、
+// Package skillcheck 是技能声明的交付检查：技能的 checks 写检查名，交付检查在本机的工作目录里按名字查表、
 // 由运行时自己跑（不采信执行者交来的结果），截图、联系表等产物放进任务目录供负责人审。
 // 每项的判定是纯函数（本包 *_test.go 表驱动）；跑命令经调用方给的 Runner，测试换成假的。
 package skillcheck
@@ -47,7 +47,7 @@ func (r Result) String() string {
 }
 
 // check 跑一项检查：命令跑了但没过（非零退出、超时）写进 Result；跑不起来（缺工具、读写出错）返回错误，
-// 那不是执行者能改的，由关卡转受阻。
+// 那不是执行者能改的，由交付检查转受阻。
 type check func(ctx context.Context, e Env) (Result, error)
 
 // table 是检查名 → 实现。加一类产物就加一行。
@@ -56,7 +56,7 @@ var table = map[string]check{
 	"video":   video,
 }
 
-// Timeout 是每项检查的时限：关卡一件一件推进，一项卡住不能堵住别的任务。
+// Timeout 是每项检查的时限：交付检查一件一件推进，一项卡住不能堵住别的任务。
 var Timeout = 5 * time.Minute
 
 // Known 是全部检查名（排好序）。
@@ -69,7 +69,7 @@ func Known() []string {
 	return names
 }
 
-// Validate 判一个检查名认不认识（技能保存时与关卡跑之前都用它）。
+// Validate 判一个检查名认不认识（技能保存时与交付检查跑之前都用它）。
 func Validate(name string) error {
 	if _, ok := table[name]; !ok {
 		return fmt.Errorf("不认识的检查 %q（可用 %s）", name, strings.Join(Known(), "、"))

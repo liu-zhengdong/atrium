@@ -20,7 +20,7 @@ import (
 )
 
 // 凭据：按「部门 + 名称」存，名称就是注入执行者时的环境变量名。值只在数据目录 secrets/<oN>/<名称>（0600），
-// 不回显、不进日志与提示词；派活时按名称从任务部门往上找（SecretEnv），是执行者白名单环境之外的唯一例外。
+// 不回显、不进日志与提示词；分派任务时按名称从任务部门往上找（SecretEnv），是执行者白名单环境之外的唯一例外。
 const maxSecretValue = 16 << 10
 
 var (
@@ -174,8 +174,8 @@ func listSecrets(ctx context.Context, q store.Querier, query string, args ...any
 	return out, capErr("凭据", len(out))
 }
 
-// SecretEnv 是派活时注入执行者的凭据：每个名称从任务部门往上找最近的一份，记下使用时间。
-// 找不到就报错（带补上的命令），派活应停下而不是缺着凭据跑。
+// SecretEnv 是分派任务时注入执行者的凭据：每个名称从任务部门往上找最近的一份，记下使用时间。
+// 找不到就报错（带补上的命令），分派任务应停下而不是缺着凭据跑。
 func SecretEnv(ctx context.Context, db *store.DB, data, dept string, names []string) (map[string]string, error) {
 	if len(names) == 0 {
 		return map[string]string{}, nil

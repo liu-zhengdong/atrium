@@ -189,7 +189,7 @@ func (p *Parser) result(id string, code int, out string) {
 	c.State, c.Out = CmdState(c.Cmd, code), tailLines(out, outLines)
 }
 
-// resume：收尾之后又有动作（捎话后接着干），前一次收尾作废。
+// resume：收尾之后又有动作（补充说明后接着干），前一次收尾作废。
 func (p *Parser) resume() {
 	p.t.Ended, p.t.Result, p.t.Ms = false, "", 0
 }

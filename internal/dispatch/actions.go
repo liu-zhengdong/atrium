@@ -34,8 +34,8 @@ type TellResult struct {
 
 const maxTell = 4000
 
-// Tell 给任务捎话，是捎话与改说明（ledger.Tell）唯一的送达入口：先记进经历；交给负责人拆着的同一事务里投给它；
-// 在跑的按工具送到（即时写标准输入、本轮后续上、停掉带着补充重派），没在跑的下次拉起写进提示词。
+// Tell 给任务补充说明，是补充说明与改说明（ledger.Tell）唯一的送达入口：先记进经历；交给负责人拆着的同一事务里发给它；
+// 在跑的按工具送到（即时写标准输入、本轮后继续、停掉带着补充重派），没在跑的下次拉起写进提示词。
 func Tell(ctx context.Context, env *app.Env, id, text, by string) (TellResult, error) {
 	text = strings.TrimSpace(text)
 	if text == "" {
@@ -50,7 +50,7 @@ func Tell(ctx context.Context, env *app.Env, id, text, by string) (TellResult, e
 		return TellResult{}, err
 	}
 	if t.Status.Finished() {
-		return TellResult{}, api.Conflict("%s 已%s，捎话没人收", id, t.Status).WithNext("atrium task add <标题> --parent " + id)
+		return TellResult{}, api.Conflict("%s 已%s，任务已结束，无法再补充说明", id, t.Status).WithNext("atrium task add <标题> --parent " + id)
 	}
 	var tid int64
 	var leader string
@@ -62,7 +62,7 @@ func Tell(ctx context.Context, env *app.Env, id, text, by string) (TellResult, e
 		return TellResult{}, err
 	}
 	if leader != "" {
-		return TellResult{Task: id, ID: tid, Via: "leader", Note: "已投给拆它的负责人 " + leader + "（要处理），它醒来时读到"}, nil
+		return TellResult{Task: id, ID: tid, Via: "leader", Note: "已发给拆它的负责人 " + leader + "（要处理），它醒来时读到"}, nil
 	}
 	r := TellResult{Task: id, ID: tid, Via: "next", Note: "下次拉起时写进提示词"}
 	p := d.procOf(id)
@@ -75,9 +75,9 @@ func Tell(ctx context.Context, env *app.Env, id, text, by string) (TellResult, e
 			r.Via, r.Note = "stdin", "已写进执行者的标准输入，下一个工具调用边界读入"
 			return r, nil
 		}
-		r.Via, r.Note = "resume", "本轮已收尾，退出后带着补充续上会话"
+		r.Via, r.Note = "resume", "本轮已收尾，退出后带着补充继续会话"
 	case workers.TellResume:
-		r.Via, r.Note = "resume", "本轮结束后带着补充续上会话"
+		r.Via, r.Note = "resume", "本轮结束后带着补充继续会话"
 	default:
 		p.setStop("restart")
 		d.kill(ctx, p)
@@ -131,7 +131,7 @@ func ReadLog(ctx context.Context, env *app.Env, id string, offset int64, wait ti
 	}
 }
 
-// hook 接上 watch 的重新入队、周期任务与审阅任务的派活、改说明的捎话（服务进程里，Routes 装配时调）。
+// hook 接上 watch 的重新入队、周期任务与审阅任务的分派任务、改说明的补充说明（服务进程里，Routes 装配时调）。
 func hook(env *app.Env) {
 	watch.Use(watch.Hooks{Requeue: func(ctx context.Context, task string, why watch.Why) error {
 		return Requeue(ctx, env, task, why)

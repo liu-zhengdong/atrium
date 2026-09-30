@@ -26,7 +26,7 @@ func (e *env) dept(accept string) string {
 	return d.ID
 }
 
-// inDept 造一件挂在部门 dept 下、执行者刚交付停在关卡的任务；repo 为空是没有仓库的活。
+// inDept 造一件挂在部门 dept 下、执行者刚交付停在交付检查的任务；repo 为空是没有仓库的活。
 func (e *env) inDept(dept, repo, worker, dir string) ledger.Task {
 	e.t.Helper()
 	t, err := ledger.Add(e.ctx, e.db, ledger.NewTask{Title: "做事", Org: dept, Repo: repo}, "u1")
@@ -52,7 +52,7 @@ func code(err error) string {
 	return ""
 }
 
-// 验收人是用户：关卡过了停在等验收并投秘书；负责人不能代验；打回交回原执行者，第 3 次转受阻；验收通过进合入队列。
+// 验收人是用户：交付检查通过后停在等验收并投秘书；负责人不能代验；打回交回原执行者，第 3 次转受阻；验收通过进合入队列。
 func TestUserAcceptsPR(t *testing.T) {
 	e := setup(t)
 	o := e.dept(org.AcceptUser)
@@ -69,9 +69,9 @@ func TestUserAcceptsPR(t *testing.T) {
 		Scan(&target, &level, &body); err != nil || target != "secretary" || level != "act" || !strings.Contains(body, `"accept_by":"user"`) {
 		t.Fatalf("等验收应要处理地投秘书：%s %s %s %v", target, level, body, err)
 	}
-	e.sweep() // 等验收不归关卡循环推进
+	e.sweep() // 等验收不归交付检查循环推进
 	if got := e.state(task.ID); got != "running/accept" {
-		t.Fatalf("关卡循环动了等验收的任务：%s", got)
+		t.Fatalf("交付检查循环动了等验收的任务：%s", got)
 	}
 	if _, err := e.g.Accept(e.ctx, task.ID, "a1"); code(err) != "forbidden" {
 		t.Fatalf("负责人不能代用户验收：%v", err)
@@ -146,14 +146,14 @@ func TestLeaderAcceptsAfterReview(t *testing.T) {
 	}
 }
 
-// 没有仓库的活：message 没有落地，验收人是用户也过了关卡就完成；choice 验收通过才登记选项单；choice.json 不合法关卡就交回。
+// 没有仓库的活：message 没有应用，验收人是用户也过了交付检查就完成；choice 验收通过才登记选项单；choice.json 不合法交付检查就交回。
 func TestAcceptNoRepo(t *testing.T) {
 	e := setup(t)
 	o := e.dept(org.AcceptUser)
 	msg := e.inDept(o, "", "claude+opus", t.TempDir())
 	e.sweep()
 	if got := e.state(msg.ID); got != "done/gate" {
-		t.Fatalf("message 没有落地，不等验收，应直接完成：%s %s", got, e.lastNote(msg.ID))
+		t.Fatalf("message 没有应用，不等验收，应直接完成：%s %s", got, e.lastNote(msg.ID))
 	}
 
 	choiceDir := t.TempDir()
@@ -176,11 +176,11 @@ func TestAcceptNoRepo(t *testing.T) {
 	bad := e.inDept(o, "", "claude+opus", badDir)
 	e.sweep()
 	if got := e.state(bad.ID); got != "queued/" {
-		t.Fatalf("choice.json 不合法应在关卡交回：%s %s", got, e.lastNote(bad.ID))
+		t.Fatalf("choice.json 不合法应在交付检查交回：%s %s", got, e.lastNote(bad.ID))
 	}
 }
 
-// 有工作地点的活（dir）：关卡看执行者的交付结论，东西已在原地、没有落地，验收人是用户也不等验收，直接完成；
+// 有工作地点的活（dir）：交付检查看执行者的交付结论，东西已在原地、没有应用，验收人是用户也不等验收，直接完成；
 // 文件夹里的 choice.json 是用户自己的文件，不当选项单登记。
 func TestAcceptDir(t *testing.T) {
 	e := setup(t)
@@ -195,7 +195,7 @@ func TestAcceptDir(t *testing.T) {
 	e.exit(task.ID)
 	e.sweep()
 	if got := e.state(task.ID); got != "done/gate" || !strings.Contains(e.lastNote(task.ID), "工作地点") {
-		t.Fatalf("dir 没有落地，不等验收，应过了关卡直接完成：%s %s", got, e.lastNote(task.ID))
+		t.Fatalf("dir 没有应用，不等验收，应过了交付检查直接完成：%s %s", got, e.lastNote(task.ID))
 	}
 	if open, _ := agenda.Choices(e.ctx, e.db, "", false); len(open) != 0 {
 		t.Fatalf("dir 不该登记选项单：%+v", open)

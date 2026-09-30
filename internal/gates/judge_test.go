@@ -18,7 +18,7 @@ func TestJudge(t *testing.T) {
 		name   string
 		checks []string
 		edit   func(*Facts)
-		fail   []string // 没过的关卡
+		fail   []string // 没过的交付检查
 	}{
 		{"全过", all, func(*Facts) {}, nil},
 		{"没写 checks 什么都不查", nil, func(f *Facts) { f.PR = nil }, nil},
@@ -32,7 +32,7 @@ func TestJudge(t *testing.T) {
 		{"单文件新增超限", all, func(f *Facts) { f.Numstat = append(f.Numstat, FileStat{"big.go", MaxFileAdded + 1, 0}) }, []string{CheckGrowth}},
 		{"刚好到上限不算超", all, func(f *Facts) { f.Numstat = []FileStat{{"big.go", MaxFileAdded, 0}} }, nil},
 		{"没有端到端验证", all, func(f *Facts) { f.E2E = "  " }, []string{CheckClaims}},
-		{"未知关卡判不过", []string{"screenshot"}, func(*Facts) {}, []string{"screenshot"}},
+		{"未知交付检查判不过", []string{"screenshot"}, func(*Facts) {}, []string{"screenshot"}},
 	}
 	for _, c := range cases {
 		f := goodFacts()

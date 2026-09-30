@@ -221,7 +221,7 @@ func TestChoiceFlow(t *testing.T) {
 	var n int
 	env.DB.QueryRow(`SELECT count(*) FROM events WHERE kind = 'choice.open' AND target = 'secretary'`).Scan(&n)
 	if n != 1 {
-		t.Fatal("登记选项单要投给秘书")
+		t.Fatal("登记选项单要发给秘书")
 	}
 	c, err = Decide(ctx, env.DB, c.ID, []int{1, 3}, "先快后稳", "u1")
 	if err != nil || c.Status != "picked" || c.Options[0].Task == "" || c.Options[1].Task != "" || c.Note != "先快后稳" {
@@ -305,7 +305,7 @@ func TestSettle(t *testing.T) {
 	}
 }
 
-// choice add 与关卡同样严格解析：写错的字段（如 options[].orgs）在调服务前就报错并写明字段名，不静默丢掉；--help 给出格式。
+// choice add 与交付检查同样严格解析：写错的字段（如 options[].orgs）在调服务前就报错并写明字段名，不静默丢掉；--help 给出格式。
 func TestChoiceAddStrict(t *testing.T) {
 	tbl := cli.NewTable("atrium", "测试")
 	Commands(tbl)
@@ -393,11 +393,11 @@ func TestScheduleTick(t *testing.T) {
 	if _, err := RunNow(ctx, env, "s1", loc); code(err) != "conflict" {
 		t.Fatal("上一轮没结束，手动 run 应拒绝")
 	}
-	// 派活没接上：任务生成但报错。
+	// 分派任务没接上：任务生成但报错。
 	Enqueue = nil
 	ledger.Apply(ctx, env.DB, queued[2], ledger.Event{Kind: ledger.Cancel}, "u1", "")
 	if tk, err := RunNow(ctx, env, "s1", loc); err == nil || tk.ID == "" {
-		t.Fatal("派活未接入应报错")
+		t.Fatal("分派任务未接入应报错")
 	}
 	// 最近几轮：到点生成的和手动生成的都算，新的在前。
 	x, _ = GetSchedule(ctx, env.DB, "s1")

@@ -51,7 +51,7 @@ func Commands(t *cli.Table) {
 		},
 		Run: bridgeCommand})
 	// statusline 由 Claude Code 状态栏调用（settings.json 的 statusLine），不是人敲的：不列在帮助里。
-	t.Add(cli.Command{Path: "statusline", Summary: "一行状态给 Claude Code 状态栏：等你拍板、未结束任务各在谁手里、秘书在不在听", Hidden: true,
+	t.Add(cli.Command{Path: "statusline", Summary: "一行状态给 Claude Code 状态栏：等你拍板、未结束任务在等谁、秘书在不在听", Hidden: true,
 		Run: func(c *cli.Ctx) error {
 			var v watch.View
 			err := c.Call("GET", "/api/top", nil, &v)
@@ -365,7 +365,7 @@ func detach(c *cli.Ctx, p config.Paths, endpoint string, batch int) error {
 }
 
 // WorkStyle 是秘书会话开头的工作方式：秘书要随时能被用户插话，不在前台干等。
-const WorkStyle = "超过半分钟的命令（构建、渲染、部署、等外部结果）一律放后台跑，完成通知回来再核对；派活、合入后直接回来，结果会作为事件送来。"
+const WorkStyle = "超过半分钟的命令（构建、渲染、部署、等外部结果）一律放后台跑，完成通知回来再核对；分派任务、合入后直重新跟进来，结果会作为事件送来。"
 
 // sessionBrief 取用户全局原则（bridge 与服务在同一台机器，现读本机的 ~/AGENTS.md）、技能索引、根部门要点、全景与秘书备忘，拼成会话开头的一段（SessionStart hook 的输出进会话上下文）。
 // 只取顶层部门自己的要点（秘书在组织树之上，下属部门的规矩管的是负责人与执行者）。

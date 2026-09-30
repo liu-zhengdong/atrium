@@ -1,6 +1,6 @@
-// Package watch：持球与期限。一张表（rules.go 的 Rules）、一个巡检循环（一分钟一轮，全局暂停时不做），
+// Package watch：等待对象与处理时限。一张表（rules.go 的 Rules）、一个巡检循环（一分钟一轮，全局暂停时不做），
 // 到期统一发 events.Overdue；每轮顺带数各部门与全局的上限用量，刚到或超了发 events.LimitFull。
-// 「球在谁手里」的判定 HolderOf 是纯函数，top、statusline、task show 共用。
+// 「在等谁」的判定 HolderOf 是纯函数，top、statusline、task show 共用。
 //
 // 接入（别的包调）：
 //   - dispatch、merge 拉起执行者或检查后，在同一事务里 watch.Track(ctx, tx, 任务, Proc{…}) 登记进程；
@@ -27,7 +27,7 @@ func Module() app.Module {
 	return app.Module{Name: "watch", Commands: Commands, Routes: Routes, Run: Run}
 }
 
-// Why 是交给派活重新入队的原因。
+// Why 是交给分派任务重新入队的原因。
 type Why struct {
 	Reason string `json:"reason"`
 	Signal Signal `json:"signal,omitempty"`
@@ -65,7 +65,7 @@ func current() Hooks {
 	return hooks.h
 }
 
-// Track 登记一个刚拉起的进程（记进任务经历，kind "proc"）；服务重启后 watch 据此接管。
+// Track 登记一个刚拉起的进程（记进任务经历，kind "proc"）；服务重启后 watch 据此继续跟进。
 func Track(ctx context.Context, q store.Querier, task string, p Proc) error {
 	if p.At == 0 {
 		p.At = store.Now()

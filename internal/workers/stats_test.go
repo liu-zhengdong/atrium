@@ -84,7 +84,7 @@ func TestStats(t *testing.T) {
 	apply(t1, ledger.Event{Kind: ledger.ExitOK})
 	apply(t1, ledger.Event{Kind: ledger.GatePass})
 
-	t2 := add("被关卡交回一次")
+	t2 := add("被交付检查交回一次")
 	launch(t2, 1, "claude+opus")
 	exit(t2, 1, OutOK)
 	apply(t2, ledger.Event{Kind: ledger.ExitOK})

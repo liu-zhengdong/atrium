@@ -23,7 +23,7 @@ func TestBrief(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	// 普通备注不是任务要求，也不能推进捎话的送达编号。
+	// 普通备注不是任务要求，也不能推进补充说明的送达编号。
 	if err := Record(ctx, db, task.ID, "note", "a7", "备注"); err != nil {
 		t.Fatal(err)
 	}

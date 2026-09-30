@@ -8,8 +8,8 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/store"
 )
 
-// Brief 为执行者和审阅者读取同一份任务说明，附最近 20 条捎话（时间正序）。
-// upto 是已带入说明的最后一条经历编号，供派活记录送达进度。
+// Brief 为执行者和审阅者读取同一份任务说明，附最近 20 条补充说明（时间正序）。
+// upto 是已带入说明的最后一条经历编号，供分派任务记录送达进度。
 func Brief(ctx context.Context, q store.Querier, t Task) (detail string, upto int64, err error) {
 	rows, err := q.QueryContext(ctx, `SELECT id, body FROM (SELECT id, body FROM task_events WHERE task = ? AND kind = 'tell' ORDER BY id DESC LIMIT 20) ORDER BY id`, t.ID)
 	if err != nil {

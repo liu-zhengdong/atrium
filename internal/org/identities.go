@@ -1,7 +1,7 @@
 package org
 
 // 身份：用户 u1、秘书 secretary、负责人 aN（名字、执行者组合）。备忘在 memos.go。
-// 投递对象（事件投给谁）与负责人的管辖范围也在这里：判定是纯函数（Nearest、Scope），IO 只取部门与负责人两张映射。
+// 投递对象（事件发给谁）与负责人的管辖范围也在这里：判定是纯函数（Nearest、Scope），IO 只取部门与负责人两张映射。
 
 import (
 	"context"
@@ -13,7 +13,7 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/store"
 )
 
-// Secretary 是秘书的固定身份；部门往上都没有负责人时事件投给它。
+// Secretary 是秘书的固定身份；部门往上都没有负责人时事件发给它。
 const Secretary = "secretary"
 
 type Identity struct {
@@ -309,7 +309,7 @@ func LeaderMap(ctx context.Context, q store.Querier) (map[string]string, error) 
 	return m, capErr("有负责人的部门", len(m))
 }
 
-// Nearest 纯判定：从 dept 往上找最近的负责人，跳过 skip（上交时跳过自己）；都没有返回秘书。
+// Nearest 纯判定：从 dept 往上找最近的负责人，跳过 skip（上报时跳过自己）；都没有返回秘书。
 // from 是登记这位负责人的部门（秘书时为空）。
 func Nearest(parents, leaders map[string]string, dept, skip string) (who, from string) {
 	for cur, n := dept, 0; cur != "" && n <= MaxDepth; cur, n = parents[cur], n+1 {

@@ -19,7 +19,7 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/workers"
 )
 
-// 用真实派活循环与假执行者验证：非法启动输入只影响本任务，下一件仍能执行。
+// 用真实分派任务循环与假执行者验证：非法启动输入只影响本任务，下一件仍能执行。
 func TestLaunchFailureKeepsDispatchRunning(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.Skip("验证 Windows .cmd 参数边界")
@@ -96,7 +96,7 @@ func TestLaunchFailureKeepsDispatchRunning(t *testing.T) {
 			defer func() {
 				cancel()
 				if err := <-done; err != nil {
-					t.Errorf("派活循环退出：%v", err)
+					t.Errorf("分派任务循环退出：%v", err)
 				}
 				get(env).wg.Wait()
 			}()
@@ -108,7 +108,7 @@ func TestLaunchFailureKeepsDispatchRunning(t *testing.T) {
 				t.Fatalf("任务错误使循环退出：%v", err)
 			default:
 			}
-			t.Log("非法输入任务受阻，后续任务进入关卡，派活循环仍运行")
+			t.Log("非法输入任务受阻，后续任务进入交付检查，分派任务循环仍运行")
 		})
 	}
 }

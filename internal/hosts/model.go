@@ -106,7 +106,7 @@ type Candidate struct {
 	Paused  bool
 	CLIs    map[string]CLI // 这台实测可用的工具（本机与远程相同）
 	Marks   []workers.Mark // 此刻有效的不可用标记（各台的都在，workers.Blocked 按机器筛）
-	Repos   []string       // 自动派活能接的仓库（owner/name，* 为全部）；指定 --host 不看
+	Repos   []string       // 自动分派任务能接的仓库（owner/name，* 为全部）；指定 --host 不看
 	Running int
 	Max     int    // 同时最多跑几个；0 不限
 	Busy    string // 代理报的太忙原因
@@ -469,7 +469,7 @@ func AssignmentRefusal(a Assignment, knownTool func(string) bool) string {
 	return ""
 }
 
-// readGit 是代理替服务跑的 git 子命令：只查不改（fetch 只更新远端跟踪分支，关卡要拿它比默认分支）。
+// readGit 是代理替服务跑的 git 子命令：只查不改（fetch 只更新远端跟踪分支，交付检查要拿它比默认分支）。
 var readGit = map[string]bool{"rev-parse": true, "status": true, "log": true, "diff": true, "rev-list": true,
 	"ls-remote": true, "fetch": true}
 

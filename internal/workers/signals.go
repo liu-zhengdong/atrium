@@ -31,7 +31,7 @@ type Signal struct {
 
 var timeNow = time.Now
 
-// ExitUnknown：接管的进程（服务重启后）拿不到退出码。
+// ExitUnknown：继续跟进的进程（服务重启后）拿不到退出码。
 const ExitUnknown = -1
 
 // TailBytes 是判信号时读的日志末尾长度。
@@ -54,7 +54,7 @@ func Tail(path string, n int64) (string, error) {
 	return string(buf), err
 }
 
-// LastProgress 是执行者最后一次有输出的时刻（日志修改时间）：有输出即活着。watch 用它判卡死。
+// LastProgress 是执行者最后一次有输出的时刻（日志修改时间）：有输出即活着。watch 用它判长时间没进展。
 func LastProgress(logPath string) (time.Time, error) {
 	st, err := os.Stat(logPath)
 	if err != nil {
@@ -185,7 +185,7 @@ func oneLine(s string) string {
 
 // Classify 判执行者退出时的信号（纯函数）：先额度用尽，再思考耗尽，再起不来（没登录、缺运行环境）、模型名无效，再供应商临时错误；
 // 报文都认不出、而这一轮一步没做的，按行为算零步骤出错退出（见 idle）。worker 是这一轮的执行者标识，数步骤要按它的工具解析日志。
-// 退出码 0 不判额度、起不来、模型名无效、临时错误与零步骤（跑完了就交关卡）；ExitUnknown 不判后四种。
+// 退出码 0 不判额度、起不来、模型名无效、临时错误与零步骤（跑完了就进入交付检查）；ExitUnknown 不判后四种。
 func Classify(exitCode int, worker, tail string, now time.Time) Signal {
 	report := errorReport(tail)
 	if exitCode != 0 && report != "" && (quotaMarkRE.MatchString(report) || http429RE.MatchString(report)) {

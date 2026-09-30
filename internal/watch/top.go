@@ -15,7 +15,7 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/store"
 )
 
-// TaskRow 是一件没结束的任务与它的持球人。
+// TaskRow 是一件没结束的任务与它的当前等待对象。
 type TaskRow struct {
 	ID      string `json:"id"`
 	Title   string `json:"title"`

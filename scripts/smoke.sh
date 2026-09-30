@@ -118,7 +118,7 @@ wait "$waiter" || fail "重启后 wait 失败：$(cat "$work/wait2.out")"
 out=$(cat "$work/wait2.out"); has '.result.reached and .result.task.status == "cancelled"'
 out=$(json task ls --status done,cancelled); has '(.result|length) == 2'   # 数据跨重启还在
 
-step "负责人、备忘、上交（org/leaders）"
+step "负责人、备忘、上报（org/leaders）"
 out=$(json leader add 运行时负责人 --workers claude,codex); has '.result.id == "a1" and .result.workers == ["claude","codex"] and .next == "atrium org edit <oN> --leader a1"'
 out=$(json leader add 没组合 || true); has '.error.code == "usage"'
 out=$(json org edit o2 --leader a1); has '.result.leader == "a1"'
@@ -130,7 +130,7 @@ out=$(json leader ls a1); has '.result.memo.body == "下次先看 t1"'
 out=$(json memo edit "秘书备忘"); has '.result.owner == "secretary"'
 out=$(json memo show); has '.result.body == "秘书备忘"'
 out=$(json memo edit "$(python3 -c 'print("字"*2001)')" || true); has '.error.code == "limit"'
-out=$(json leader escalate 卡住 --kind stuck || true); has '.error.code == "forbidden"'   # 只有负责人令牌能上交
+out=$(json leader escalate 卡住 --kind stuck || true); has '.error.code == "forbidden"'   # 只有负责人令牌能上报
 code=$(curl -s -o /dev/null -w '%{http_code}' -H 'Authorization: Bearer lt_fake' "http://127.0.0.1:$ATRIUM_PORT/api/org")
 [ "$code" = 401 ] || fail "没签发的负责人令牌应 401，得到 $code"
 
@@ -342,20 +342,20 @@ out=$(json workers edit harness/fakesh --set trust=super || true); has '.ok == f
 out=$(json workers edit harness/fakesh || true); has '.ok == false and .error.code == "usage"'
 out=$(json workers fakesh); has '.result.resolved.id == "fakesh" and .result.resolved.layers == ["harness/fakesh"]'
 out=$(json workers); has '(.result|map(.id)|index("fakesh")) != null'
-out=$(json task add 冒烟派活); run_id=$(jq -r .result.id <<<"$out")
+out=$(json task add 冒烟分派任务); run_id=$(jq -r .result.id <<<"$out")
 out=$(json task run "$run_id" --dry-run); has '(.result.pick.candidates|map(.id)|index("fakesh")) != null and .result.task.status == "todo"'
 out=$(json task run "$run_id" --worker fakesh --risk high || true); has '.ok == false and .error.code == "conflict"'
 out=$(json task run "$run_id" --worker fakesh); has '.result.queued and .result.position == 1 and .next == "atrium task log '"$run_id"' --follow"'
-out=$(json task wait "$run_id" --timeout 30); has '.result.task.status == "done"'   # 没有仓库：关卡过了直接完成
+out=$(json task wait "$run_id" --timeout 30); has '.result.task.status == "done"'   # 没有仓库：交付检查通过后直接完成
 out=$(json task log "$run_id"); has '(.result.text|contains("worker=1 task='"$run_id"'")) and (.result.text|contains("DONE")) and .result.running == false'
 out=$(json task show "$run_id"); has '.result.task.worker == "fakesh" and .result.task.host == "h1" and ((.result.history|map(.kind)) as $k | ["launch","worktree","result","exit_ok"] - $k == [])'
-out=$(json task tell "$run_id" "补一句" || true); has '.ok == false and .error.code == "conflict"'   # 已完成：捎话没人收
+out=$(json task tell "$run_id" "补一句" || true); has '.ok == false and .error.code == "conflict"'   # 已完成：任务已结束，无法再补充说明
 
 step "第三波接缝：负责人组合按执行者解析；帮助末尾点名不列出的命令"
 out=$(json leader add 坏组合 --workers nosuch+x || true); has '.ok == false and .error.code == "usage"'
 "$bin" --help | grep -q "不列出的.*statusline" || fail "帮助末尾没点名隐藏命令"
 
-step "验收人是用户：只交结论的活没有要落地的，过了关卡直接完成，不等验收（gates，假执行者 fakesh）"
+step "验收人是用户：只交结论的活没有要应用的，过了交付检查直接完成，不等验收（gates，假执行者 fakesh）"
 out=$(json org add 验收演练 --parent o1); acc_org=$(jq -r .result.id <<<"$out")
 out=$(json org edit o1 --accept user); has '.ok'
 out=$(json org show "$acc_org"); has '.result.accept == "user" and .result.accept_from == "o1"'
@@ -367,7 +367,7 @@ grep -q "开 PR" "$ATRIUM_DATA/tasks/$msg/prompt-1.md" && fail "没有仓库的�
 grep -qx -- "- fix-bug：修 bug 的做法" "$ATRIUM_DATA/tasks/$msg/prompt-1.md" || fail "没挂技能的活提示词里也该有技能索引（只写名字与一句话，不给服务机路径）"
 out=$(json org edit o1 --accept -); has '.ok'
 
-step "本机交付：本机仓库没有远程 → 假执行者提交 → 关卡 → 等你验收 → 打回交回原执行者、第 3 次转受阻 → 再派 → 验收通过合进本机 main → 删任务工作树与分支"
+step "本机交付：本机仓库没有远程 → 假执行者提交 → 交付检查 → 等你验收 → 打回交回原执行者、第 3 次转受阻 → 再派 → 验收通过合进本机 main → 删任务工作树与分支"
 site="$work/site"; git init -q -b main "$site"; echo hi >"$site/README.md"
 git -C "$site" add -A; git -C "$site" -c user.name=t -c user.email=t@t commit -qm init
 cat >"$work/fakecommit.md" <<'MD'
@@ -411,7 +411,7 @@ grep -q 正文 "$site/post.md" || fail "验收后 main 上应有执行者的提�
 [ -z "$(git -C "$site" branch --list "task-$loc")" ] || fail "任务分支应已删除"
 out=$(json org edit "$acc_org" --accept -); has '.ok'
 
-step "有仓库但没改代码（装工具、调研）：工作树相对基线没有改动 → 按只交结论判，过了关卡直接完成，不按缺提交交回"
+step "有仓库但没改代码（装工具、调研）：工作树相对基线没有改动 → 按只交结论判，过了交付检查直接完成，不按缺提交交回"
 out=$(json task add 装工具 --repo "$site"); nochg=$(jq -r .result.id <<<"$out")
 json task run "$nochg" --worker fakesh >/dev/null
 out=$(json task wait "$nochg" --timeout 30); has '.result.task.status == "done"'
@@ -434,7 +434,7 @@ json task run "$stop" --worker fakestop >/dev/null
 out=$(json task wait "$stop" --timeout 30); has '.result.task.status == "blocked"'
 out=$(json task show "$stop"); has '(.result.history|map(select(.kind == "block"))[0].body|contains("交付结论：没做成")) and (.result.history|map(.kind)|index("bounce")) == null'
 
-step "工作地点：普通文件夹（不是 git 仓库）→ 假执行者原地写文件 → 关卡 → 完成；不建工作树"
+step "工作地点：普通文件夹（不是 git 仓库）→ 假执行者原地写文件 → 交付检查 → 完成；不建工作树"
 mkdir -p "$work/notes"; place=$(cd "$work/notes" && pwd)   # 规范路径：TMPDIR 可能带尾部斜杠
 cat >"$work/fakewrite.md" <<'MD'
 ---
@@ -476,7 +476,7 @@ echo 'console.error("构建编译出错"); process.exit(1)' >"$artb/build.js"
 out=$(json task add 文章构建坏了 --dir "$artb" --skill article); ab=$(jq -r .result.id <<<"$out")
 json task run "$ab" --worker fakewrite >/dev/null
 out=$(json task wait "$ab" --timeout 120); has '.result.task.status == "blocked"'
-out=$(json task show "$ab"); has '.result.history as $h | ($h|map(select(.kind == "launch"))|last|.body|fromjson|.n) == 3 and ($h|map(select(.kind == "bounce"))|last|.body|fromjson|.to.status == "blocked" and (.note|startswith("关卡没过：article：构建失败：pnpm run build：exit status 1：")) and (.note|contains("构建编译出错")))'   # 经历只取最近 20 条：看第 3 次拉起后的那次打回；Windows 上 pnpm 还会先回显一行命令
+out=$(json task show "$ab"); has '.result.history as $h | ($h|map(select(.kind == "launch"))|last|.body|fromjson|.n) == 3 and ($h|map(select(.kind == "bounce"))|last|.body|fromjson|.to.status == "blocked" and (.note|startswith("交付检查未通过：article：构建失败：pnpm run build：exit status 1：")) and (.note|contains("构建编译出错")))'   # 经历只取最近 20 条：看第 3 次拉起后的那次打回；Windows 上 pnpm 还会先回显一行命令
 # 视频小样：out/ 里一段 2 秒带音轨的成片；故意破坏：第一帧纯黑
 mkdir -p "$work/vid/out" "$work/vid-bad/out"; vid=$(cd "$work/vid" && pwd); vidb=$(cd "$work/vid-bad" && pwd)
 ffmpeg -v error -y -f lavfi -i testsrc=duration=2:size=320x240:rate=10 -f lavfi -i sine=duration=2 -c:v libx264 -pix_fmt yuv420p -c:a aac "$vid/out/demo.mp4"
@@ -523,7 +523,7 @@ out=$(json workers edit harness/fakemodel --file "$work/fakemodel.md"); has '.ok
 out=$(json org add 可用性演练 --parent o1); av_org=$(jq -r .result.id <<<"$out")
 out=$(json task add 模型名无效 --org "$av_org"); av=$(jq -r .result.id <<<"$out")
 json task run "$av" --worker fakemodel >/dev/null
-# 主机实测异步更新；确认已拉起再暂停，避免新增档案还没探测就先挡住派活。
+# 主机实测异步更新；确认已拉起再暂停，避免新增档案还没探测就先挡住分派任务。
 for _ in $(seq 150); do out=$(json task show "$av"); jq -e '.result.task.status == "running"' >/dev/null <<<"$out" && break; sleep 0.2; done
 has '.result.task.status == "running"'
 out=$(json pause --org "$av_org"); has '.ok'   # 重新排队后不再拉起，好断言停在 queued

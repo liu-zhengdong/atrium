@@ -2,7 +2,7 @@
 // gh pr merge --squash --match-head-commit。冲突或检查没过交回原执行者，第三次转受阻。
 //
 // 命令：task merge（登记亲手做的 PR，或放行受阻的交付，都进合入队列）。
-// 快检查进程登记给 watch（Role check），10 分钟没输出由 watch 结束，这里判交回还是重跑（check.go）。结果经 ledger.Apply(Land / Bounce) 落账：合入、上线是 pr 交付方式的落地步骤。
+// 快检查进程登记给 watch（Role check），10 分钟没输出由 watch 结束，这里判交回还是重跑（check.go）。结果经 ledger.Apply(Land / Bounce) 记录结果：合入、上线是 pr 交付方式的应用步骤。
 package merge
 
 import (

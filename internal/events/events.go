@@ -2,9 +2,9 @@
 //
 // 分两级：act（要处理）与 info（知会）；wait 缺省只取要处理的，--all 连知会一起取。
 // 投递对象（target）留空时调 org.Recipient：部门往上最近的负责人，没有投 secretary。
-// 任务事件经 EmitTask 只投要动手的那一位（Route）：等验收投验收人，负责人自己引起的结果投派活人，其他结果投处理人或部门负责人，过程不投。
+// 任务事件经 EmitTask 只投要动手的那一位（Route）：等验收投验收人，负责人自己引起的结果投任务分派人，其他结果投处理人或部门负责人，过程不投。
 // 同一投递对象同一去重键、还没取走也没确认的事件合并成一条（count 加一，级别随最新一条），免得刷屏。
-// 一次操作引出的事件不投给做这次操作的身份本人（Event.By 与投递对象相同就不投）。
+// 一次操作引出的事件不发给做这次操作的身份本人（Event.By 与投递对象相同就不投）。
 // 事件是投递队列，不是任务经历：服务每小时删掉超过保留期的已确认事件与知会级事件（Prune），要处理且没确认的不删。
 // 判定（级别、去重键、投递对象）是纯函数，在 model.go；本文件是落库与等待。
 package events
@@ -27,8 +27,8 @@ import (
 // 事件种类。新增种类在这里加常量，别处不写字符串字面量。
 const (
 	TaskStatus   = "task.status"   // 任务状态变化（含转入已合入）；Body: {"from","to","stage","title","note"?}
-	TaskAssigned = "task.assigned" // 交给负责人去拆（建任务、改处理人、草稿转待派时 ledger 发，要处理；交出去之后的捎话、改说明也经它送到）；Body: {"title","tell"?}
-	Overdue      = "overdue"       // 持球人到期（watch 包发）；Body: {"holder","held_ms","next",…}
+	TaskAssigned = "task.assigned" // 交给负责人去拆（建任务、改处理人、草稿转待派时 ledger 发，要处理；交出去之后的补充说明、改说明也经它送到）；Body: {"title","tell"?}
+	Overdue      = "overdue"       // 当前等待对象到期（watch 包发）；Body: {"holder","held_ms","next",…}
 	ChoiceOpen   = "choice.open"   // 有选项单等用户拍板（org/agenda 发，投秘书）；Body: {"choice","title"}
 	OnlineFailed = "online.failed" // 自升级失败（服务的由 release 发，远程代理的由 hosts 发并带 "host"；投秘书；同一版本本进程只发一次）；Body: {"from","to","error"}
 	LimitFull    = "limit.full"    // 刚到或超了上限（watch 巡检发）；Body: {"key","what","used","max","unit","fix","next","text"}
@@ -127,7 +127,7 @@ func Emit(ctx context.Context, q store.Querier, e Event) error {
 	return err
 }
 
-// EmitTask 在调用方的事务里发一件任务的事件：按处理人 owner、派活人 assigner 与部门负责人定投给谁（见 Route）。
+// EmitTask 在调用方的事务里发一件任务的事件：按处理人 owner、任务分派人 assigner 与部门负责人定发给谁（见 Route）。
 func EmitTask(ctx context.Context, q store.Querier, owner, assigner string, e Event) error {
 	leader, err := org.Recipient(ctx, q, e.Dept)
 	if err != nil {
@@ -145,7 +145,7 @@ func EmitTask(ctx context.Context, q store.Querier, owner, assigner string, e Ev
 }
 
 // Seen 判断某投递对象是否收到过（含已确认的）这个去重键的事件：watch 用它保证同一次到期只发一回。
-// 已确认的留到保留期满才删，所以同一次到期（键带持球起点与级别）一周内不重发。
+// 已确认的留到保留期满才删，所以同一次到期（键带等待起点与级别）一周内不重发。
 func Seen(ctx context.Context, q store.Querier, target, key string) (bool, error) {
 	var one int
 	err := q.QueryRowContext(ctx, `SELECT 1 FROM events WHERE key = ? AND target = ? LIMIT 1`, key, target).Scan(&one)
@@ -280,7 +280,7 @@ type AckResult struct {
 	Missing []int64 `json:"missing,omitempty"`
 }
 
-// Ack 确认事件。onlyTarget 非空时只能确认投给它的（负责人只确认自己的）。
+// Ack 确认事件。onlyTarget 非空时只能确认发给它的（负责人只确认自己的）。
 func Ack(ctx context.Context, db *store.DB, ids []int64, onlyTarget, actor string) (AckResult, error) {
 	res := AckResult{Acked: []int64{}}
 	err := db.Tx(ctx, func(tx *sql.Tx) error {
@@ -427,7 +427,7 @@ var listeners = struct {
 	m map[string]Listener
 }{m: map[string]Listener{}}
 
-// Listen 记下（或续上）某订阅者在听；ttl 内没再报就算不在听。stop 表示不听了。
+// Listen 记下（或继续）某订阅者在听；ttl 内没再报就算不在听。stop 表示不听了。
 func Listen(as, via string, ttl time.Duration, stop bool) {
 	listeners.Lock()
 	defer listeners.Unlock()

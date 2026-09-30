@@ -53,25 +53,25 @@ func TestLevelAndKey(t *testing.T) {
 		{"受阻", TaskStatus, map[string]any{"to": "blocked", "by": "watch"}, Act},
 		{"用户标受阻", TaskStatus, map[string]any{"to": "blocked", "by": "u1"}, Act},
 		{"等用户验收", TaskStatus, map[string]any{"to": "running", "stage": "accept", "accept_by": "user", "by": "gates"}, Act},
-		{"用户放进落地·等负责人验收", TaskStatus, map[string]any{"to": "running", "stage": "accept", "accept_by": "leader", "by": "u1"}, Act},
-		{"关卡过了直接完成", TaskStatus, map[string]any{"to": "done", "stage": "gate", "event": "gate_pass", "by": "gates"}, Act},
+		{"用户放进应用·等负责人验收", TaskStatus, map[string]any{"to": "running", "stage": "accept", "accept_by": "leader", "by": "u1"}, Act},
+		{"交付检查通过后直接完成", TaskStatus, map[string]any{"to": "done", "stage": "gate", "event": "gate_pass", "by": "gates"}, Act},
 		{"已上线", TaskStatus, map[string]any{"to": "done", "stage": "released", "event": "land", "by": "release"}, Act},
 		{"负责人验收通过", TaskStatus, map[string]any{"to": "done", "stage": "accept", "event": "accept", "by": "a1"}, Act},
 		// 用户本人做的完成只知会：task set --status done、task accept。
 		{"用户标完成", TaskStatus, map[string]any{"to": "done", "event": "set", "by": "u1"}, Info},
 		{"用户验收通过", TaskStatus, map[string]any{"to": "done", "stage": "accept", "event": "accept", "by": "u1"}, Info},
-		// 落地的中间步骤与过程只知会。
+		// 应用的中间步骤与过程只知会。
 		{"已合入等发版", TaskStatus, map[string]any{"to": "running", "stage": "merged", "event": "land", "by": "merge"}, Info},
 		{"拉起", TaskStatus, map[string]any{"to": "running", "by": "dispatch"}, Info},
 		{"用户取消", TaskStatus, map[string]any{"to": "cancelled", "by": "u1"}, Info},
 		{"无正文", TaskStatus, nil, Info},
-		// 非任务事件：上线失败、到期、上限、上交
+		// 非任务事件：上线失败、到期、上限、上报
 		{"自升级上线失败", OnlineFailed, nil, Act},
-		{"持球到期", Overdue, nil, Act},
+		{"等待到期", Overdue, nil, Act},
 		{"上限满了", LimitFull, map[string]any{"key": "points"}, Act},
-		{"负责人上交·卡住", LeaderEscalate, map[string]any{"kind": "stuck"}, Act},
-		{"负责人上交·跨部门", LeaderEscalate, map[string]any{"kind": "cross"}, Act},
-		{"负责人上交·越权", LeaderEscalate, map[string]any{"kind": "beyond"}, Act},
+		{"负责人上报·卡住", LeaderEscalate, map[string]any{"kind": "stuck"}, Act},
+		{"负责人上报·跨部门", LeaderEscalate, map[string]any{"kind": "cross"}, Act},
+		{"负责人上报·越权", LeaderEscalate, map[string]any{"kind": "beyond"}, Act},
 		{"交给负责人去拆", TaskAssigned, map[string]any{"title": "任务"}, Act},
 		{"未知种类", "other", map[string]any{"to": "failed"}, Info},
 	}
@@ -84,7 +84,7 @@ func TestLevelAndKey(t *testing.T) {
 		t.Errorf("KeyOf = %q", k)
 	}
 	if k := KeyOf(Event{Kind: TaskAssigned, Task: "t3"}); k != "assigned:t3" {
-		t.Errorf("交给负责人去拆与之后的捎话合并，得到 %q", k)
+		t.Errorf("交给负责人去拆与之后的补充说明合并，得到 %q", k)
 	}
 	if k := KeyOf(Event{Kind: Overdue, Task: "t3"}); k != "" {
 		t.Errorf("overdue 缺省不合并，得到 %q", k)
@@ -116,14 +116,14 @@ func TestRoute(t *testing.T) {
 		{"负责人处理·完成·下属部门只投处理人", "a1", "a3", st("done", "gate"), Delivery{"a1", Act}, ""},
 		{"负责人处理·已合入·下属部门只知会处理人", "a1", "a3", map[string]any{"to": "running", "stage": "merged", "event": "land"}, Delivery{"a1", Info}, ""},
 		{"负责人处理·失败·无负责人", "a2", "", st("failed", ""), Delivery{"a2", Act}, ""},
-		// 负责人亲自收尾，结果回到派活人；同一人派给自己或没有派活人则不投。
-		{"负责人自己完成·秘书派活", "a1", "a1", map[string]any{"to": "done", "by": "a1"}, Delivery{Secretary, Act}, Secretary},
-		{"负责人自己完成·用户派活", "a1", "a1", map[string]any{"to": "done", "by": "a1"}, Delivery{Secretary, Act}, "u1"},
-		{"负责人自己完成·另一负责人派活", "a1", "a1", map[string]any{"to": "done", "by": "a1"}, Delivery{"a2", Act}, "a2"},
-		{"负责人自己失败·秘书派活", "a1", "a1", map[string]any{"to": "failed", "by": "a1"}, Delivery{Secretary, Act}, Secretary},
-		{"负责人自己受阻·另一负责人派活", "a1", "a1", map[string]any{"to": "blocked", "by": "a1"}, Delivery{"a2", Act}, "a2"},
-		{"负责人自己完成·自己派活", "a1", "a1", map[string]any{"to": "done", "by": "a1"}, none, "a1"},
-		{"负责人自己完成·没有派活人", "a1", "a1", map[string]any{"to": "done", "by": "a1"}, none, ""},
+		// 负责人亲自收尾，结果回到任务分派人；同一人派给自己或没有任务分派人则不投。
+		{"负责人自己完成·秘书分派任务", "a1", "a1", map[string]any{"to": "done", "by": "a1"}, Delivery{Secretary, Act}, Secretary},
+		{"负责人自己完成·用户分派任务", "a1", "a1", map[string]any{"to": "done", "by": "a1"}, Delivery{Secretary, Act}, "u1"},
+		{"负责人自己完成·另一负责人分派任务", "a1", "a1", map[string]any{"to": "done", "by": "a1"}, Delivery{"a2", Act}, "a2"},
+		{"负责人自己失败·秘书分派任务", "a1", "a1", map[string]any{"to": "failed", "by": "a1"}, Delivery{Secretary, Act}, Secretary},
+		{"负责人自己受阻·另一负责人分派任务", "a1", "a1", map[string]any{"to": "blocked", "by": "a1"}, Delivery{"a2", Act}, "a2"},
+		{"负责人自己完成·自己分派任务", "a1", "a1", map[string]any{"to": "done", "by": "a1"}, none, "a1"},
+		{"负责人自己完成·没有任务分派人", "a1", "a1", map[string]any{"to": "done", "by": "a1"}, none, ""},
 		{"执行者完成·仍投处理人", "a1", "a1", map[string]any{"to": "done", "by": "worker"}, Delivery{"a1", Act}, Secretary},
 		{"运行时完成·仍投处理人", "a1", "a1", map[string]any{"to": "done", "by": "merge"}, Delivery{"a1", Act}, Secretary},
 		// 等验收：投验收人，要处理。
@@ -185,7 +185,7 @@ func TestEmitTask(t *testing.T) {
 	}
 	Ack(ctx, db, []int64{lead[0].ID}, "", "u1")
 
-	// 一次操作引出的事件不投给做这次操作的身份本人：负责人自己停下的不收，别人让它的活失败的照收。
+	// 一次操作引出的事件不发给做这次操作的身份本人：负责人自己停下的不收，别人让它的活失败的照收。
 	emitTask("a1", "a1", "blocked", "a1")
 	if n, _ := Pending(ctx, db, "a1", true, 10); len(n) != 0 {
 		t.Fatalf("负责人自己停下的不该收到：%+v", n)
@@ -211,10 +211,10 @@ func TestLegacyShippedEvent(t *testing.T) {
 		Body: map[string]any{"from": "a1", "kind": "shipped", "label": "已上线（里程碑）", "note": "请转告用户"}})
 	rows, err := Pending(ctx, db, Secretary, true, 10)
 	if err != nil || len(rows) != 1 || rows[0].Level != Info {
-		t.Fatalf("旧上交应保留已存的级别：%+v %v", rows, err)
+		t.Fatalf("旧上报应保留已存的级别：%+v %v", rows, err)
 	}
-	if got := Summary(rows[0]); got != "a1 上交（已上线（里程碑））：请转告用户" {
-		t.Errorf("旧上交应使用已存的标签和说明：%q", got)
+	if got := Summary(rows[0]); got != "a1 上报（已上线（里程碑））：请转告用户" {
+		t.Errorf("旧上报应使用已存的标签和说明：%q", got)
 	}
 	if rows, err := Pending(ctx, db, Secretary, false, 10); err != nil || len(rows) != 0 {
 		t.Fatalf("旧知会事件不应变成要处理：%+v %v", rows, err)
@@ -222,8 +222,8 @@ func TestLegacyShippedEvent(t *testing.T) {
 }
 
 func TestSummary(t *testing.T) {
-	if s := Summary(Row{Kind: LeaderEscalate, Body: []byte(`{"from":"a1","label":"搞不定","note":"证书要用户签"}`)}); s != "a1 上交（搞不定）：证书要用户签" {
-		t.Errorf("上交 Summary = %q", s)
+	if s := Summary(Row{Kind: LeaderEscalate, Body: []byte(`{"from":"a1","label":"无法解决","note":"证书要用户签"}`)}); s != "a1 上报（无法解决）：证书要用户签" {
+		t.Errorf("上报 Summary = %q", s)
 	}
 	body, _ := json.Marshal(map[string]any{
 		"text": "部门 o2 的每部门要点已 8/7 条（满了找部门负责人）：先合并",
@@ -244,10 +244,10 @@ func TestSummary(t *testing.T) {
 	if s := Summary(Row{Kind: Overdue, Body: body}); s != "到期：卡住，等处理（已 31 分钟） · atrium task show t1" {
 		t.Errorf("Summary = %q", s)
 	}
-	if s := Summary(Row{Kind: TaskAssigned, Body: []byte(`{"title":"拆活派活"}`)}); s != "交给你去拆「拆活派活」：拆子任务、派活、收尾" {
+	if s := Summary(Row{Kind: TaskAssigned, Body: []byte(`{"title":"拆分任务分派任务"}`)}); s != "交给你去拆「拆分任务分派任务」：拆子任务、分派任务、收尾" {
 		t.Errorf("TaskAssigned Summary = %q", s)
 	}
-	if s := Summary(Row{Kind: TaskAssigned, Body: []byte(`{"title":"拆活派活","tell":"也要改网页"}`)}); s != "交给你拆的「拆活派活」有补充：也要改网页" {
+	if s := Summary(Row{Kind: TaskAssigned, Body: []byte(`{"title":"拆分任务分派任务","tell":"也要改网页"}`)}); s != "交给你拆的「拆分任务分派任务」有补充：也要改网页" {
 		t.Errorf("带补充的 TaskAssigned Summary = %q", s)
 	}
 	body, _ = json.Marshal(map[string]any{"target": "kimi@h3", "reason": "没登录", "next": "登录或装好运行环境后 atrium workers edit --clear kimi@h3"})

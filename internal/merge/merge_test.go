@@ -240,7 +240,7 @@ func TestThirdBounceBlocksAndMergeReleases(t *testing.T) {
 			if got.Status != ledger.Queued {
 				t.Fatalf("第 %d 次应交回：%+v", i+1, got)
 			}
-			// 模拟 dispatch 重派、执行者再次交付、关卡再过
+			// 模拟 dispatch 重派、执行者再次交付、交付检查再过
 			e.db.ExecContext(e.ctx, `DELETE FROM queue WHERE task = ?`, task.ID)
 			for _, k := range []ledger.EventKind{ledger.Start, ledger.ExitOK, ledger.GatePass} {
 				if _, err := ledger.Apply(e.ctx, e.db, task.ID, ledger.Event{Kind: k, Land: ledger.StageMerge}, "t", ""); err != nil {

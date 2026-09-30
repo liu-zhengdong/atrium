@@ -376,7 +376,7 @@ func TestResourcesStore(t *testing.T) {
 		t.Fatal("超过保留版数的旧目录应删掉")
 	}
 	if _, err := GetSkill(ctx, db, "nope"); code(err) != "not_found" {
-		t.Fatal("没有的技能派活应报错")
+		t.Fatal("没有的技能分派任务应报错")
 	}
 
 	// 资料：总览、细节、同名新建、给 mN 加一版、归档不算用量、撤销归档查上限。

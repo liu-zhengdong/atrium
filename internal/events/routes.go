@@ -186,7 +186,7 @@ func Commands(t *cli.Table) {
 				text += fmt.Sprintf("；%d 条早已确认", len(res.Already))
 			}
 			if len(res.Missing) > 0 {
-				text += fmt.Sprintf("；没有这些事件（或不是投给你的）：%v", res.Missing)
+				text += fmt.Sprintf("；没有这些事件（或不是发给你的）：%v", res.Missing)
 			}
 			text, next, err := AsyncNext(c, text, "atrium events wait")
 			if err != nil {

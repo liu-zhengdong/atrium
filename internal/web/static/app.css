@@ -23,7 +23,7 @@ a{color:inherit;text-decoration:none}
 .num{font-variant-numeric:tabular-nums} /* 数字、时间、计数用正文字体的等宽数字；等宽字体只留给编号、命令、代码 */
 
 /* 设计稿 ~/Atrium/design/atrium-ui.html 的只读版。 */
-/* 外壳：侧栏铺在底板上，主岛浮起 */
+/* 外壳：侧栏铺在底板上，主内容区浮起 */
 .app{display:flex;height:100%;padding:8px 8px 8px 0}
 .side{width:236px;flex:none;display:flex;flex-direction:column;padding:14px 10px 10px 14px;gap:18px;overflow-y:auto}
 .brand{display:flex;align-items:center;gap:10px;padding:2px 6px;font-size:15px;font-weight:600}
@@ -334,7 +334,7 @@ details.full .result{margin-top:8px;font-size:13px;color:var(--ink2)}
 .skel i.h{width:64px;height:10px;margin-bottom:20px}
 @keyframes fadein{to{opacity:1}}
 
-/* 资料：行首文件图标；抽屉比任务抽屉宽，能放宽到整个主岛，正文按格式渲染（app.js 的 viewers） */
+/* 资料：行首文件图标；抽屉比任务抽屉宽，能放宽到整个主内容区，正文按格式渲染（app.js 的 viewers） */
 .row .file{width:14px;height:14px;color:var(--ink3);justify-self:center}
 .row .title .note{margin-left:10px;color:var(--ink3);font-size:13px}
 /* 资料里的全部文件：图片出缩略图，其余一个文件图标；图片集打开就是它，有正文的折在正文下面 */

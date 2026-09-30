@@ -66,7 +66,7 @@ func TestLedgerLifecycle(t *testing.T) {
 	if deps, _ := Deps(ctx, db, b.ID); len(deps) != 0 {
 		t.Fatalf("回滚后 b 不该有依赖：%v", deps)
 	}
-	// 走一遍：派 → 起 → 交付 → 关卡不过交回 ×2 → 第三次转受阻。
+	// 走一遍：派 → 起 → 交付 → 交付检查未通过交回 ×2 → 第三次转受阻。
 	for _, ev := range []EventKind{Enqueue, Start, ExitOK, Bounce, Start, ExitOK, Bounce, Start, ExitOK} {
 		if _, err := Apply(ctx, db, b.ID, Event{Kind: ev}, "dispatch", ""); err != nil {
 			t.Fatalf("%s: %v", ev, err)
@@ -121,7 +121,7 @@ func TestLedgerLifecycle(t *testing.T) {
 	}
 }
 
-// 结果投处理人（缺省派活的人）：秘书派的失败要处理地投秘书，过程不投秘书；--owner 改投指定的人；周期任务记建周期任务的人。
+// 结果投处理人（缺省分派任务的人）：秘书派的失败要处理地投秘书，过程不投秘书；--owner 改投指定的人；周期任务记建周期任务的人。
 func TestResultGoesToOwner(t *testing.T) {
 	db, ctx := openDB(t), context.Background()
 	if _, err := db.Exec(`INSERT INTO identities (id, kind, name, created_at) VALUES ('a1', 'leader', '甲', 0), ('a2', 'leader', '乙', 0)`); err != nil {
@@ -289,12 +289,12 @@ func TestTaken(t *testing.T) {
 		actor string
 		want  bool
 	}{
-		"交给负责人拆着": {Task{Status: Todo}, Parties{"secretary", "a1"}, "secretary", true},
-		"负责人自己改":  {Task{Status: Todo}, Parties{"secretary", "a1"}, "a1", false},
-		"执行者在跑":   {Task{Status: Running, Repo: "o/r"}, Parties{"u1", "u1"}, "u1", true},
-		"已交付在关卡":  {Task{Status: Running, Stage: StageGate, Repo: "o/r"}, Parties{"u1", "u1"}, "u1", false},
-		"排着还没拉起":  {Task{Status: Queued, Repo: "o/r"}, Parties{"u1", "u1"}, "u1", false},
-		"待派没人接":   {Task{Status: Todo}, Parties{"u1", "u1"}, "u1", false},
+		"交给负责人拆着":  {Task{Status: Todo}, Parties{"secretary", "a1"}, "secretary", true},
+		"负责人自己改":   {Task{Status: Todo}, Parties{"secretary", "a1"}, "a1", false},
+		"执行者在跑":    {Task{Status: Running, Repo: "o/r"}, Parties{"u1", "u1"}, "u1", true},
+		"已交付在交付检查": {Task{Status: Running, Stage: StageGate, Repo: "o/r"}, Parties{"u1", "u1"}, "u1", false},
+		"排着还没拉起":   {Task{Status: Queued, Repo: "o/r"}, Parties{"u1", "u1"}, "u1", false},
+		"待派没人接":    {Task{Status: Todo}, Parties{"u1", "u1"}, "u1", false},
 	} {
 		if got := Taken(c.t, c.p, c.actor); got != c.want {
 			t.Errorf("%s：得到 %v，应为 %v", name, got, c.want)
@@ -327,7 +327,7 @@ func TestEditDetailTells(t *testing.T) {
 		return told
 	}
 
-	goal, _ := Add(ctx, db, NewTask{Title: "拆活", Owner: "a1"}, "secretary")
+	goal, _ := Add(ctx, db, NewTask{Title: "拆分任务", Owner: "a1"}, "secretary")
 	if got := edit(goal.ID, "也要改网页", "secretary"); len(got) != 1 || got[0] != goal.ID+" secretary 说明已改，以最新说明为准：\n也要改网页" {
 		t.Fatalf("交给负责人拆着的应捎过去：%q", got)
 	}
@@ -419,9 +419,9 @@ func TestSetOwner(t *testing.T) {
 	if _, err := Edit(ctx, db, y.ID, Patch{Owner: ptr("a2"), Org: &o2}, "secretary"); err != nil || !slices.Equal(assigned(y.ID), []string{"a1", "a2"}) {
 		t.Fatalf("改到 o2 交给乙：%v %v", assigned(y.ID), err)
 	}
-	// 结果改投新处理人；给空串回到派活人。
+	// 结果改投新处理人；给空串回到任务分派人。
 	if _, err := Edit(ctx, db, y.ID, owner(""), "secretary"); err != nil || owners(y.ID) != (Parties{"secretary", "secretary"}) {
-		t.Fatalf("空串回到派活人：%+v %v", owners(y.ID), err)
+		t.Fatalf("空串回到任务分派人：%+v %v", owners(y.ID), err)
 	}
 
 	// 草稿：改处理人不唤醒，转待派时才交出去。
@@ -516,7 +516,7 @@ func TestDeptRepo(t *testing.T) {
 	}
 }
 
-// 派活入口补部门的仓库：建任务时不补（运行时建的审阅、周期任务也不补），UseDeptRepo 才写上并记经历。
+// 分派任务入口补部门的仓库：建任务时不补（运行时建的审阅、周期任务也不补），UseDeptRepo 才写上并记经历。
 func TestUseDeptRepo(t *testing.T) {
 	db, ctx := openDB(t), context.Background()
 	if _, err := db.Exec(`INSERT INTO identities (id, kind, name, created_at) VALUES ('a1', 'leader', '甲', 0)`); err != nil {

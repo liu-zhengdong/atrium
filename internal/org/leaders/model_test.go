@@ -185,7 +185,7 @@ func TestInScope(t *testing.T) {
 			continue
 		}
 		if e := Forbid("x"); e.Status != 403 || !strings.Contains(e.Next, "leader escalate") {
-			t.Error("越权要 403 且提示上交")
+			t.Error("越权要 403 且提示上报")
 		}
 	}
 }
@@ -198,7 +198,7 @@ func TestCheckEscalate(t *testing.T) {
 		{EscalateIn{Kind: "stuck", Note: "卡住了"}, true},
 		{EscalateIn{Kind: "cross", Note: "要 o5 配合", Task: "t3"}, true},
 		{EscalateIn{Kind: "beyond", Note: "需要用户定"}, true},
-		{EscalateIn{Kind: "stuck", Note: "同意上交", Event: 7}, true}, // 转交下层的，任务取原事件
+		{EscalateIn{Kind: "stuck", Note: "同意上报", Event: 7}, true}, // 转交下层的，任务取原事件
 		{EscalateIn{Kind: "shipped", Note: "上线", Task: "t3"}, false},
 		{EscalateIn{Kind: "shipped", Note: "上线", Event: 7}, false},
 		{EscalateIn{Kind: "shipped", Note: "上线"}, false},
@@ -228,14 +228,14 @@ func TestPrompt(t *testing.T) {
 	}
 	p := Prompt(in)
 	for _, want := range []string{"负责人 a2（运行时）", "o3 服务（o1 / o2 / o3）", "是什么：单实例后台服务", "k1（o1）简洁优先——长期成本",
-		"总览正文", "也归你管的下属部门：o22 网页、o23 导入", "等 t5 合入", "#11", "t5（o3）", "atrium events ack 11 12", "投给 a1", "--kind cross", "--kind beyond", "--kind stuck", "完成结果自动投回派活人", "自己建、自己收的任务在网页今天页的完成列表查看", "权限边界", "material ls 按部门列全部资料", "说明里写 mN、不写本机路径",
-		"管辖派活部门（" + ProfileDept + "）的负责人还能改执行者档案、解除不可用标记"} {
+		"总览正文", "也归你管的下属部门：o22 网页、o23 导入", "等 t5 合入", "#11", "t5（o3）", "atrium events ack 11 12", "发给 a1", "--kind cross", "--kind beyond", "--kind stuck", "完成结果自动发回任务分派人", "自己建、自己收的任务在网页今天页的完成列表查看", "权限边界", "material ls 按部门列全部资料", "说明里写 mN、不写本机路径",
+		"管辖分派任务部门（" + ProfileDept + "）的负责人还能改执行者档案、解除不可用标记"} {
 		if !strings.Contains(p, want) {
 			t.Errorf("提示词缺 %q", want)
 		}
 	}
 	if strings.Contains(p, "--kind shipped") || strings.Contains(p, "四类") {
-		t.Error("上交提示词不应保留已删除的 shipped 类")
+		t.Error("上报提示词不应保留已删除的 shipped 类")
 	}
 	if !strings.Contains(p, "在等什么、合完要做什么，写进那件任务的备注（task note tN）") || !strings.Contains(p, "备忘只留跨任务") ||
 		strings.Contains(p, "在等什么、下次先看什么）写进备忘") {
@@ -245,12 +245,12 @@ func TestPrompt(t *testing.T) {
 		t.Errorf("全局原则、技能索引要在开场之后、部门与要点之前：\n%s", p)
 	}
 	if strings.Contains(p, "交给你去拆的任务") {
-		t.Error("没有 task.assigned 不附拆活做法")
+		t.Error("没有 task.assigned 不附拆分任务做法")
 	}
-	in.Events = append(in.Events, Event{ID: 13, Kind: "task.assigned", Task: "t6", Dept: "o3", Body: `{"tell":"用户又说：也要改网页","title":"拆活"}`})
+	in.Events = append(in.Events, Event{ID: 13, Kind: "task.assigned", Task: "t6", Dept: "o3", Body: `{"tell":"用户又说：也要改网页","title":"拆分任务"}`})
 	if p := Prompt(in); !strings.Contains(p, "交给你去拆的任务") || !strings.Contains(p, "--parent tN") ||
 		!strings.Contains(p, "用户又说：也要改网页") || !strings.Contains(p, "正文带 tell 的是交给你之后的补充") {
-		t.Error("有 task.assigned 要附拆活做法，交来之后的补充原文要看得到")
+		t.Error("有 task.assigned 要附拆分任务做法，交来之后的补充原文要看得到")
 	}
 	if !strings.Contains(Prompt(PromptInput{Leader: org.Identity{ID: "a3"}, Upstream: "secretary"}), "（空）") {
 		t.Error("空备忘要写（空）")

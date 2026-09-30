@@ -14,7 +14,7 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/platform"
 )
 
-// 捎话（task tell）怎么送到：即时写标准输入、本轮结束后按会话续上、停掉带着补充重派。
+// 补充说明（task tell）怎么送到：即时写标准输入、本轮结束后按会话继续、停掉带着补充重派。
 const (
 	TellStdin   = "stdin"
 	TellResume  = "resume"
@@ -32,8 +32,8 @@ type Request struct {
 	Dir        string    `json:"dir,omitempty"`         // 工作目录（绝对路径，有仓库时是 worktree）
 	Model      string    `json:"model,omitempty"`       // 交给工具的模型 id；空表示交给工具自己的配置
 	Effort     string    `json:"effort,omitempty"`
-	Live       bool      `json:"live,omitempty"`    // 标准输入保持打开，运行中捎话即时写入（只有 TellStdin 的工具）
-	Session    string    `json:"session,omitempty"` // 非空表示带着补充续上这个会话
+	Live       bool      `json:"live,omitempty"`    // 标准输入保持打开，运行中补充说明即时写入（只有 TellStdin 的工具）
+	Session    string    `json:"session,omitempty"` // 非空表示带着补充继续这个会话
 	Endpoint   *Endpoint `json:"endpoint,omitempty"`
 	CLI        *CLISpec  `json:"cli,omitempty"` // 通用命令行执行者的写法（远程没有档案库，随请求带过去）
 }
@@ -53,7 +53,7 @@ func Build(tool string, req Request) (Launch, error) {
 	return a.Build(req)
 }
 
-// Endpoint 是档案写的自定义模型端点；KeyEnv 是密钥所在的环境变量（值由派活方按凭据名注入）。
+// Endpoint 是档案写的自定义模型端点；KeyEnv 是密钥所在的环境变量（值由分派任务方按凭据名注入）。
 type Endpoint struct {
 	BaseURL string `json:"base_url"`
 	API     string `json:"api"`
@@ -67,7 +67,7 @@ type Launch struct {
 	Dir       string            `json:"dir"`
 	StdinFile string            `json:"stdin_file,omitempty"` // 接到标准输入的文件；空表示不接
 	StdinData string            `json:"stdin_data,omitempty"` // 工具要求结构化标准输入时的内容
-	Live      bool              `json:"live,omitempty"`       // 标准输入是消息流：先写 StdinFile 内容作第一条消息，之后写捎话
+	Live      bool              `json:"live,omitempty"`       // 标准输入是消息流：先写 StdinFile 内容作第一条消息，之后写补充说明
 	Env       map[string]string `json:"env,omitempty"`        // 白名单环境之上额外设的变量（不放密钥）
 }
 
@@ -106,7 +106,7 @@ func (a *Driver) Build(in Request) (Launch, error) {
 	return a.build(in)
 }
 
-// SessionOf 从日志开头取会话 id（续上时用）；取不到或工具不支持返回空。
+// SessionOf 从日志开头取会话 id（继续时用）；取不到或工具不支持返回空。
 func (a *Driver) SessionOf(log string) string {
 	if a.session == nil {
 		return ""
@@ -117,7 +117,7 @@ func (a *Driver) SessionOf(log string) string {
 	return ""
 }
 
-// CanResume：捎话本轮结束后能不能按会话续上。
+// CanResume：补充说明本轮结束后能不能按会话继续。
 func (a *Driver) CanResume() bool { return a.session != nil && a.Tell != TellRestart }
 
 const argPromptMax = 256 * 1024
@@ -160,7 +160,7 @@ func (a *Driver) check(in Request) error {
 		return api.Usage("%s 只能接 %s 接口的端点，档案写的是 %s", a.Tool, strings.Join(a.Endpoints, "、"), in.Endpoint.API)
 	}
 	if in.Live && a.Tell != TellStdin {
-		return api.Usage("%s 不能即时送捎话", a.Tool)
+		return api.Usage("%s 不能即时送补充说明", a.Tool)
 	}
 	return nil
 }
@@ -227,7 +227,7 @@ func claudeAdapter() *Driver {
 // codex exec：--json 逐行输出事件；-C 工作目录、-s 沙箱、-m 模型、强度走 -c model_reasoning_effort；PROMPT 写 - 从标准输入读。
 // --skip-git-repo-check：没有仓库的任务（work/、工作地点、审阅）目录不是 git 仓库，不带 codex 直接拒绝启动。
 // --ignore-user-config：不读用户个人的 config.toml（模型、强度、MCP、hooks、memories），登录照用；没写模型时用 CLI 自带的缺省（最新）。
-// 续上：codex exec resume --json <会话> -（没有 -C、-s，沙箱走配置覆盖）；会话 id 是 thread.started 的 thread_id。
+// 继续：codex exec resume --json <会话> -（没有 -C、-s，沙箱走配置覆盖）；会话 id 是 thread.started 的 thread_id。
 func codexAdapter() *Driver {
 	a := &Driver{Tool: "codex", Exe: "codex", Efforts: []string{"minimal", "low", "medium", "high", "xhigh"},
 		Tell: TellResume, JSON: true, Endpoints: []string{"responses"}, read: readCodex, session: regexp.MustCompile(`"type":"thread.started","thread_id":"([0-9a-f-]{36})"`)}
@@ -325,7 +325,7 @@ func CursorModel(model, effort string) (string, error) {
 	return out, nil
 }
 
-// cursor-agent -p：提示词读标准输入；stream-json 事件；--force --trust --sandbox disabled 全放行。续上 --resume。
+// cursor-agent -p：提示词读标准输入；stream-json 事件；--force --trust --sandbox disabled 全放行。继续 --resume。
 // 缺省模型 auto 由 Cursor 自己挑（跟随）。
 func cursorAdapter() *Driver {
 	a := &Driver{Tool: "cursor", Exe: "cursor-agent", DefaultModel: "auto", Efforts: cursorEfforts, Tell: TellResume, JSON: true,

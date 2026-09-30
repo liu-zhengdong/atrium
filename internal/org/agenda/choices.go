@@ -28,7 +28,7 @@ const (
 	maxOptionField = 600
 	maxReason      = 600
 	maxPickNote    = 300
-	ChoiceFile     = "choice.json" // 调研任务在工作目录根写它，完成时关卡读出来登记（Settle）
+	ChoiceFile     = "choice.json" // 调研任务在工作目录根写它，完成时交付检查读出来登记（Settle）
 )
 
 // ChoiceFormat 是 choice.json 的格式与限制，调研任务详述和 choice add --help 都引用这一份；判定在 ParseChoice、CheckChoice。
@@ -36,7 +36,7 @@ var ChoiceFormat = fmt.Sprintf(`格式（JSON；不认识的字段直接报错�
 {"title": "…", "options": [{"title": "…", "gain": "能多做到什么", "why_now": "为什么现在", "cost": "代价", "if_not": "不做会怎样", "evidence": "依据", "org": "oN"}], "recommend": [1], "reason": "推荐理由"}
 - title：必填，最多 %d 字
 - options：%d–%d 项；每项 title（最多 %d 字）和 gain、why_now、cost、if_not、evidence 五栏都必填，五栏各最多 %d 字
-- options[].org：可选，这一项归哪个部门（oN，不写归出选项单的部门），选中后交给那里的负责人设计、拆活
+- options[].org：可选，这一项归哪个部门（oN，不写归出选项单的部门），选中后交给那里的负责人设计、拆分任务
 - recommend：推荐第几项，从 1 起，至少一项、不重复
 - reason：必填，最多 %d 字`, maxChoiceTitle, org.MinOptions, org.MaxOptions, maxOptionTitle, maxOptionField, maxReason)
 
@@ -359,7 +359,7 @@ func Decide(ctx context.Context, db *store.DB, id string, picks []int, note, act
 		if !slices.Contains(picks, o.Pos) {
 			continue
 		}
-		// 选中的项交给它所属部门（没写是出选项单的部门）往上最近的负责人去设计、拆活（ledger 发 task.assigned 唤醒）。
+		// 选中的项交给它所属部门（没写是出选项单的部门）往上最近的负责人去设计、拆分任务（ledger 发 task.assigned 唤醒）。
 		dept := cmp.Or(o.Org, c.Org)
 		owner, err := org.Recipient(ctx, db, dept)
 		if err != nil {
@@ -397,8 +397,8 @@ func Decide(ctx context.Context, db *store.DB, id string, picks []int, note, act
 	return GetChoice(ctx, db, id)
 }
 
-// ParseChoice 解析并核对调研任务交的 choice.json（关卡用它判过不过，登记在落地时经 Settle）。
-// 不合法返回 usage 错误（写明哪一栏），调用方把它当关卡不过交回执行者修。
+// ParseChoice 解析并核对调研任务交的 choice.json（交付检查用它判过不过，登记在应用时经 Settle）。
+// 不合法返回 usage 错误（写明哪一栏），调用方把它当交付检查未通过交回执行者修。
 func ParseChoice(raw []byte) (ChoiceInput, error) {
 	var in ChoiceInput
 	dec := json.NewDecoder(bytes.NewReader(raw))
@@ -409,7 +409,7 @@ func ParseChoice(raw []byte) (ChoiceInput, error) {
 	return in, CheckChoice(in)
 }
 
-// Settle 是 choice 交付方式的落地（gates 在验收或关卡过了之后调）：raw 是工作目录根 choice.json 的内容（远程经代理读），
+// Settle 是 choice 交付方式的应用（gates 在验收或交付检查通过后之后调）：raw 是工作目录根 choice.json 的内容（远程经代理读），
 // 登记成选项单，挂在任务的部门下。没有这个文件（raw 为 nil）返回 nil；不合法返回 usage 错误。
 func Settle(ctx context.Context, db *store.DB, task string, raw []byte) (*Choice, error) {
 	if raw == nil {

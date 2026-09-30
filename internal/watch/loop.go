@@ -325,7 +325,7 @@ func perform(ctx context.Context, env *app.Env, hk Hooks, t ledger.Task, f Facts
 	return overdue(ctx, db, target, t.ID, t.Org, h, Level(h, now), now, t.Title)
 }
 
-// overdue 发一条到期事件；同一次持球同一轮只发一回。
+// overdue 发一条到期事件；同一次等待同一轮只发一回。
 func overdue(ctx context.Context, db *store.DB, target, task, dept string, h Holder, lv int, now int64, title string) error {
 	key := fmt.Sprintf("overdue:%s:%s:%s:%d:%d", task, h.Who, h.Role, h.Since, lv)
 	seen, err := events.Seen(ctx, db, target, key)

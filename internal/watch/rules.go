@@ -9,7 +9,7 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/org"
 )
 
-// Role 是期限表里的一行：按谁持球、从什么时候起算。
+// Role 是期限表里的一行：按当前在等谁、从什么时候起算。
 type Role string
 
 const (
@@ -18,7 +18,7 @@ const (
 	RoleCheck       Role = "check"        // 合入前的快检查
 	RoleRelease     Role = "release"      // 已合入等发版
 	RoleAccept      Role = "accept"       // 等验收人（部门设置的 leader 或 user）
-	RoleLeader      Role = "leader"       // 负责人（受阻、失败、待派活、积压事件）
+	RoleLeader      Role = "leader"       // 负责人（受阻、失败、待分派、积压事件）
 	RoleSecretary   Role = "secretary"    // 秘书的事件没人取
 )
 
@@ -30,14 +30,14 @@ type Rule struct {
 	Action string        `json:"action"`
 }
 
-// Rules 是持球与期限的唯一一张表（规格「持球与期限」）。
+// Rules 是等待对象与处理时限的唯一一张表（对应规格中的任务处理时限）。
 var Rules = []Rule{
 	{RoleWorkerStart, "执行者（启动）", 3 * time.Minute, "结束、重试一次，再卡转失败"},
 	{RoleWorker, "执行者", 20 * time.Minute, "结束，转受阻交负责人"},
 	{RoleCheck, "检查", 10 * time.Minute, "结束；有失败用例交回，没有按没跑成重跑一次（合入队列判）"},
 	{RoleRelease, "发版", 30 * time.Minute, "告诉负责人"},
-	{RoleAccept, "验收人", 24 * time.Hour, "提醒验收人一次，不往上交"},
-	{RoleLeader, "负责人", 30 * time.Minute, "叫醒一次，再 30 分钟上交上一层"},
+	{RoleAccept, "验收人", 24 * time.Hour, "提醒验收人一次，不向上级上报"},
+	{RoleLeader, "负责人", 30 * time.Minute, "唤醒一次，再 30 分钟向上一级上报"},
 	{RoleSecretary, "秘书", 3 * time.Minute, "状态栏标红"},
 }
 
@@ -64,7 +64,7 @@ type Proc struct {
 // Local 判断进程是否在服务这台机器上（能直接查存活、结束进程树）。
 func (p Proc) Local() bool { return p.Host == "" || p.Host == "h1" }
 
-// Holder 是「球现在在谁手里」。Role 为空表示不算期限（排队、等依赖、运行时自己推进）。
+// Holder 是「当前在等谁」。Role 为空表示不算期限（排队、等依赖、运行时自己推进）。
 type Holder struct {
 	Kind  string `json:"kind"` // worker check runtime release leader secretary user deps children draft
 	Who   string `json:"who,omitempty"`
@@ -74,7 +74,7 @@ type Holder struct {
 	Next  string `json:"next,omitempty"`
 }
 
-// Facts 是判定持球人需要的事实，由调用方从账本、组织、内存里取来。
+// Facts 是判定当前等待对象需要的事实，由调用方从账本、组织、内存里取来。
 type Facts struct {
 	Task         ledger.Task
 	Owner        string            // 所属部门往上最近的负责人，没有是 secretary
@@ -88,7 +88,7 @@ type Facts struct {
 	ProgressAt   int64             // 进程最近一次有进展；0 表示拉起后还没有
 }
 
-// HolderOf 判定一件没结束的任务现在在谁手里。top、statusline、task show 共用。
+// HolderOf 判定一件没结束的任务当前在等谁。top、statusline、task show 共用。
 func HolderOf(f Facts) Holder {
 	t := f.Task
 	owner := Holder{Kind: kindOf(f.Owner), Who: f.Owner, Role: RoleLeader, Since: t.UpdatedAt}
@@ -97,8 +97,8 @@ func HolderOf(f Facts) Holder {
 	case ledger.Done, ledger.Cancelled:
 		return Holder{Kind: "", Text: "已结束"}
 	case ledger.Draft:
-		// 草稿不在谁手里：不计时、不叫醒，想清楚了由人转待派。
-		return Holder{Kind: "draft", Text: "草稿：还没想清楚，不派活、不计时", Next: "atrium task set " + t.ID + " --status todo"}
+		// 草稿没有当前等待对象：不计时、不唤醒，想清楚了由人转待派。
+		return Holder{Kind: "draft", Text: "草稿：还没想清楚，不分派任务、不计时", Next: "atrium task set " + t.ID + " --status todo"}
 	case ledger.Todo:
 		owner.Since = leaderSince(f, broken)
 		if len(broken) > 0 {
@@ -124,7 +124,7 @@ func HolderOf(f Facts) Holder {
 			// 拆开在做的父任务：子任务各自计时，全部结束后负责人收到结果再来收尾。
 			return Holder{Kind: "children", Text: fmt.Sprintf("子任务在做（%d/%d 结束）", f.Children-f.OpenChildren, f.Children)}
 		}
-		owner.Text, owner.Next = "待派活", "atrium task run "+t.ID
+		owner.Text, owner.Next = "待分派", "atrium task run "+t.ID
 		if f.Children > 0 {
 			owner.Text, owner.Next = "子任务都结束了，等收尾", "atrium task set "+t.ID+" --status done"
 		}
@@ -156,7 +156,7 @@ func HolderOf(f Facts) Holder {
 		}
 		return h
 	case ledger.StageGate:
-		return Holder{Kind: "runtime", Who: "运行时", Text: "关卡在查"}
+		return Holder{Kind: "runtime", Who: "运行时", Text: "正在检查交付结果"}
 	case ledger.StageReview:
 		return Holder{Kind: "runtime", Who: "运行时", Text: "审阅中"}
 	case ledger.StageAccept:
@@ -183,8 +183,8 @@ func HolderOf(f Facts) Holder {
 }
 
 // leaderSince 是待派任务归负责人时的计时起点：它开始要负责人处理的那一刻。依赖断了从最早断的那个算，
-// 待派活、等收尾从最后一个结束的依赖或子任务算；都早于任务自己最近的改动时按改动时刻算。
-// 只按任务的 updated_at 算的话，久放的待派任务依赖一断就已过两倍时限，负责人还没被叫醒就上交了。
+// 待分派、等收尾从最后一个结束的依赖或子任务算；都早于任务自己最近的改动时按改动时刻算。
+// 只按任务的 updated_at 算的话，久放的待派任务依赖一断就已过两倍时限，负责人还没被唤醒就上报了。
 func leaderSince(f Facts, broken []ledger.DepState) int64 {
 	var at int64
 	if len(broken) > 0 {
@@ -210,7 +210,7 @@ func kindOf(who string) string {
 	return "secretary"
 }
 
-// Level 是到期几轮：0 没到期；1 到期；2 过了两倍时限（负责人这一行据此再上交一层）。
+// Level 是到期几轮：0 没到期；1 到期；2 过了两倍时限（负责人这一行据此再向上一级上报）。
 func Level(h Holder, now int64) int {
 	limit := Limit(h.Role)
 	if limit == 0 || h.Since == 0 {
@@ -254,13 +254,13 @@ type Action string
 
 const (
 	Keep     Action = ""
-	ExitOK   Action = "exit_ok"   // 进程已结束且没见错误：进关卡（关卡自己查事实）
+	ExitOK   Action = "exit_ok"   // 进程已结束且没见错误：进入交付检查（交付检查自己查事实）
 	ExitFail Action = "exit_fail" // 进程已结束且出错：转失败
-	Retry    Action = "retry"     // 结束进程、转失败、交给派活重新入队（可换人）
+	Retry    Action = "retry"     // 结束进程、转失败、交给分派任务重新入队（可换人）
 	Fail     Action = "fail"      // 结束进程、转失败
 	BlockIt  Action = "block"     // 结束进程、转受阻交负责人
 	KillIt   Action = "kill"      // 结束检查进程（结果由合入队列判）
-	Notify   Action = "notify"    // 发 overdue 给持球人（负责人一轮）
+	Notify   Action = "notify"    // 发 overdue 给当前等待对象（负责人一轮）
 	Escalate Action = "escalate"  // 发 overdue 给上一层
 )
 
@@ -315,7 +315,7 @@ func Decide(h Holder, o Obs, now int64) Action {
 	return Keep
 }
 
-// Held 是一句「持球多久」的人话。
+// Held 是一句「等了多久」的人话。
 func Held(since, now int64) string {
 	if since == 0 {
 		return ""

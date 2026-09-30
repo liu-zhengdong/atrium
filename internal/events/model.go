@@ -8,10 +8,10 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/api"
 )
 
-// LevelOf 是事件的缺省级别：任务失败、受阻、等验收、非用户本人做的完成，交给负责人去拆的任务，到期、上限满了、自升级失败与负责人上交要处理；
-// 其余只知会，包括落地的中间步骤（如已合入等发版）与用户本人（u1）做的完成、验收通过——用户亲手做的不再推回给秘书。
+// LevelOf 是事件的缺省级别：任务失败、受阻、等验收、非用户本人做的完成，交给负责人去拆的任务，到期、上限满了、自升级失败与负责人上报要处理；
+// 其余只知会，包括应用的中间步骤（如已合入等发版）与用户本人（u1）做的完成、验收通过——用户亲手做的不再推回给秘书。
 // 正文的 by 是引起它的身份（ledger 填操作人）。
-// 上交必须是「要处理」：上一层负责人按要处理的事件被唤醒，秘书的 events wait 也只取要处理的。
+// 上报必须是「要处理」：上一层负责人按要处理的事件被唤醒，秘书的 events wait 也只取要处理的。
 func LevelOf(kind string, body any) string {
 	switch kind {
 	case Overdue, OnlineFailed, LimitFull, TaskAssigned, LeaderEscalate:
@@ -27,7 +27,7 @@ func LevelOf(kind string, body any) string {
 	return Info
 }
 
-// KeyOf 是事件的缺省去重键：同一件任务的状态变化合并成最新一条，交给负责人去拆（连同之后的捎话）也合并成最新一条；
+// KeyOf 是事件的缺省去重键：同一件任务的状态变化合并成最新一条，交给负责人去拆（连同之后的补充说明）也合并成最新一条；
 // 同一部门同一项上限合并；其余不合并。
 func KeyOf(e Event) string {
 	if e.Kind == TaskStatus && e.Task != "" {
@@ -44,13 +44,13 @@ func KeyOf(e Event) string {
 	return ""
 }
 
-// Delivery 是一件任务事件投给谁、什么级别。
+// Delivery 是一件任务事件发给谁、什么级别。
 type Delivery struct {
 	Target string
 	Level  string
 }
 
-// result 判断任务事件是不是结果：完成、落地推进一步（如已合入等发版）、失败、受阻（卡住、交回超过次数、上线失败都转受阻）。
+// result 判断任务事件是不是结果：完成、应用推进一步（如已合入等发版）、失败、受阻（卡住、交回超过次数、上线失败都转受阻）。
 // 其余（入队、拉起、交回一次、取消、改回 todo）是过程。
 func result(kind string, body any) bool {
 	if kind != TaskStatus {
@@ -63,10 +63,10 @@ func result(kind string, body any) bool {
 	return field(body, "event") == "land"
 }
 
-// Route 纯函数：任务事件投给谁、什么级别；只投要动手的那一位，不投返回 false。owner 是处理人（task add --owner，
-// 缺省派活的人），assigner 是派活人，leader 是部门往上最近的负责人（没有为空）。正文的 by 是本次操作人。
-//   - 等验收（accept_by）投验收人：user 经秘书投给用户，leader 投部门负责人（没有投秘书）。
-//   - 负责人自己引起的结果改投派活人：u1、secretary 投秘书，其他负责人投本人；派活人为空或就是处理人则不投。
+// Route 纯函数：任务事件发给谁、什么级别；只投要动手的那一位，不投返回 false。owner 是处理人（task add --owner，
+// 缺省分派任务的人），assigner 是任务分派人，leader 是部门往上最近的负责人（没有为空）。正文的 by 是本次操作人。
+//   - 等验收（accept_by）投验收人：user 经秘书发给用户，leader 投部门负责人（没有投秘书）。
+//   - 负责人自己引起的结果改投任务分派人：u1、secretary 投秘书，其他负责人投本人；任务分派人为空或就是处理人则不投。
 //   - 其余结果按 LevelOf 的级别投处理人：负责人（aN）投本人；秘书、用户派的与运行时建的，部门有负责人投负责人，
 //     没有投秘书。运行时建的（审阅任务等）成功由运行时自己接着走，只知会。
 //   - 过程（入队、拉起、交回一次、取消、改回 todo）不投：没有要动手的事。
@@ -128,7 +128,7 @@ func Summary(r Row) string {
 		if t := s("tell"); t != "" {
 			return "交给你拆的" + title + "有补充：" + clip(t, 80)
 		}
-		return "交给你去拆" + title + "：拆子任务、派活、收尾"
+		return "交给你去拆" + title + "：拆子任务、分派任务、收尾"
 	case TaskStatus:
 		line := s("from") + " → " + s("to")
 		if st := s("stage"); st != "" {
@@ -148,7 +148,7 @@ func Summary(r Row) string {
 		}
 		return line + title
 	case LeaderEscalate:
-		return fmt.Sprintf("%s 上交（%s）：%s", s("from"), s("label"), clip(s("note"), 80))
+		return fmt.Sprintf("%s 上报（%s）：%s", s("from"), s("label"), clip(s("note"), 80))
 	case WorkerDown:
 		return s("target") + " 不可用：" + clip(s("reason"), 80) + " · " + s("next")
 	case LimitFull:

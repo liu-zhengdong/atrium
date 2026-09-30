@@ -46,7 +46,7 @@ func (o *Options) check() error {
 	return nil
 }
 
-// item 是派活队列里的一件：状态 queued 的任务，带着入队选项（交回的任务没有队列行，沿用上次拉起的执行者、机器与选项）。
+// item 是分派任务队列里的一件：状态 queued 的任务，带着入队选项（交回的任务没有队列行，沿用上次拉起的执行者、机器与选项）。
 type item struct {
 	Task ledger.Task
 	Opts Options
@@ -59,7 +59,7 @@ const priorityOrder = `CASE t.priority WHEN 'urgent' THEN 0 WHEN 'fix' THEN 1 WH
 
 const maxQueue = 500
 
-// queued 按派活顺序列出队列里的任务。
+// queued 按分派任务顺序列出队列里的任务。
 func queued(ctx context.Context, q store.Querier) ([]item, error) {
 	rows, err := q.QueryContext(ctx, `SELECT t.id, q.opts FROM tasks t LEFT JOIN queue q ON q.task = t.id
 		WHERE t.status = 'queued' ORDER BY `+priorityOrder+`, COALESCE(q.enqueued_at, t.updated_at), t.id LIMIT ?`, maxQueue)
@@ -158,7 +158,7 @@ func childGate(id string, open []ledger.Task) error {
 		id, len(open), list, id).WithNext(next)
 }
 
-// Enqueue 是 task run：核对选项、进派活队列（依赖还没完成的也进，完成后才派）。写死的执行者当场核对档案能不能接，免得排到时才报错。
+// Enqueue 是 task run：核对选项、进分派任务队列（依赖还没完成的也进，完成后才派）。写死的执行者当场核对档案能不能接，免得排到时才报错。
 // 任务的执行者与机器改成这一轮指定的（自动挑的留空，拉起时由 record 写上）；上一轮是谁留在经历里。
 func Enqueue(ctx context.Context, env *app.Env, id string, o Options, actor string) (ledger.Task, error) {
 	if err := o.check(); err != nil {
@@ -209,7 +209,7 @@ func Enqueue(ctx context.Context, env *app.Env, id string, o Options, actor stri
 		if err != nil {
 			return err
 		}
-		// 关卡按经历 risk 判要不要审阅（gates.Risk）。
+		// 交付检查按经历 risk 判要不要审阅（gates.Risk）。
 		return ledger.Record(ctx, tx, id, gates.KindRisk, actor, o.Risk)
 	}); err != nil {
 		return t, err

@@ -92,7 +92,7 @@ func profileLine(t *testing.T, db *store.DB) string {
 	}
 	var id string
 	for i := 0; i < 20 && id != ProfileDept; i++ {
-		d, err := org.Add(ctx, db, org.NewDept{Name: "派活", Parent: "o2"})
+		d, err := org.Add(ctx, db, org.NewDept{Name: "分派任务", Parent: "o2"})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -162,8 +162,8 @@ func TestLeaderGuard(t *testing.T) {
 		{"写自己的备忘", "PUT", "/api/memo", map[string]string{"body": "下次先看 t1"}, "ok"},
 		{"读秘书备忘", "GET", "/api/memo?as=secretary", nil, "forbidden"},
 		{"写别人备忘", "PUT", "/api/memo?as=a1", map[string]string{"body": "x"}, "forbidden"},
-		{"确认投给自己的事件", "POST", "/api/events/ack", map[string]any{"ids": []int{1}}, "ok"},
-		{"确认投给秘书的事件", "POST", "/api/events/ack", map[string]any{"ids": []int{1, 2}}, "forbidden"},
+		{"确认发给自己的事件", "POST", "/api/events/ack", map[string]any{"ids": []int{1}}, "ok"},
+		{"确认发给秘书的事件", "POST", "/api/events/ack", map[string]any{"ids": []int{1, 2}}, "forbidden"},
 		{"取自己的事件", "GET", "/api/events/wait?timeout=0", nil, "ok"},
 		{"取别人的事件", "GET", "/api/events/wait?timeout=0&as=a1", nil, "forbidden"},
 		{"本部门递选项单", "POST", "/api/choices", choice("o2"), "ok"},
@@ -186,7 +186,7 @@ func TestLeaderGuard(t *testing.T) {
 		}
 		var ae *api.Error
 		if c.want == "forbidden" && errors.As(err, &ae) && !strings.Contains(ae.Next, "leader escalate") && ae.Next != "" {
-			t.Errorf("%s：越权提示应指向上交：%q", c.name, ae.Next)
+			t.Errorf("%s：越权提示应指向上报：%q", c.name, ae.Next)
 		}
 	}
 	for path, body := range map[string]any{
@@ -213,7 +213,7 @@ func TestLeaderGuard(t *testing.T) {
 	if err := a1.Do(ctx, "PATCH", "/api/org/o2", map[string]string{"next": "上级写的"}, &d); err != nil || d.Next != "上级写的" {
 		t.Fatalf("上级负责人改下属部门介绍：%+v %v", d, err)
 	}
-	// 被拒时说明自己直接管的地方要上交。
+	// 被拒时说明自己直接管的地方要上报。
 	var ae *api.Error
 	if err := a2.Do(ctx, "PATCH", "/api/org/o2", map[string]string{"name": "x"}, nil); !errors.As(err, &ae) || !strings.Contains(ae.Message, "交上一层") {
 		t.Fatalf("改名被拒要说明归属：%v", err)
@@ -222,7 +222,7 @@ func TestLeaderGuard(t *testing.T) {
 	if err := user.Do(ctx, "POST", "/api/tasks/t2/notes", map[string]string{"text": "x"}, nil); err != nil {
 		t.Fatalf("用户令牌：%v", err)
 	}
-	// 执行者档案归派活部门：挂在 o2 下，a2 的管辖包含它；另一位负责人只管线外的顶层部门。
+	// 执行者档案归分派任务部门：挂在 o2 下，a2 的管辖包含它；另一位负责人只管线外的顶层部门。
 	outside := profileLine(t, env.DB)
 	tokOut, _ := h.issue(outside)
 	byLeader := map[string]*api.Client{"a2": a2, outside: {Base: srv.URL, Token: tokOut}}
@@ -243,8 +243,8 @@ func TestLeaderGuard(t *testing.T) {
 			}
 			var ae *api.Error
 			if c.want == "forbidden" && (!errors.As(err, &ae) || !strings.Contains(ae.Message, "执行者档案") ||
-				!strings.Contains(ae.Message, ProfileDept) || !strings.Contains(ae.Message, "上交") || !strings.Contains(ae.Next, "leader escalate")) {
-				t.Errorf("%s %s 应说明归 %s 的负责人管、要上交：%v", c.name, call.path, ProfileDept, err)
+				!strings.Contains(ae.Message, ProfileDept) || !strings.Contains(ae.Message, "上报") || !strings.Contains(ae.Next, "leader escalate")) {
+				t.Errorf("%s %s 应说明归 %s 的负责人管、要上报：%v", c.name, call.path, ProfileDept, err)
 			}
 		}
 	}
@@ -266,16 +266,16 @@ func TestEscalate(t *testing.T) {
 
 	var out Escalation
 	if err := a2.Do(ctx, "POST", "/api/escalations", EscalateIn{Kind: "stuck", Note: "卡了三次", Task: "t1"}, &out); err != nil || out.To != "a1" {
-		t.Fatalf("a2 上交应投 a1：%+v %v", out, err)
+		t.Fatalf("a2 上报应投 a1：%+v %v", out, err)
 	}
 	var target, kind, body string
 	env.DB.QueryRowContext(ctx, `SELECT target, kind, body FROM events ORDER BY id DESC LIMIT 1`).Scan(&target, &kind, &body)
 	if target != "a1" || kind != events.LeaderEscalate || !strings.Contains(body, "卡了三次") {
-		t.Fatalf("上交事件：%s %s %s", target, kind, body)
+		t.Fatalf("上报事件：%s %s %s", target, kind, body)
 	}
 	hist, _ := ledger.History(ctx, env.DB, "t1", 100)
 	if hist[len(hist)-1].Kind != "escalated" {
-		t.Fatalf("任务经历应记上交：%+v", hist)
+		t.Fatalf("任务经历应记上报：%+v", hist)
 	}
 	// a1 转交这一条（#1）往上：顶层投秘书，带原文。
 	if err := a1.Do(ctx, "POST", "/api/escalations", EscalateIn{Kind: "stuck", Note: "同意，要用户定", Event: 1}, &out); err != nil || out.To != "secretary" || out.Task != "t1" {
@@ -292,7 +292,7 @@ func TestEscalate(t *testing.T) {
 	}{
 		"别处任务":     {a2, EscalateIn{Kind: "stuck", Note: "x", Task: "t2"}, "forbidden"},
 		"转交别人的事件":  {a2, EscalateIn{Kind: "stuck", Note: "x", Event: 2}, "forbidden"},
-		"用户不上交":    {user, EscalateIn{Kind: "stuck", Note: "x"}, "forbidden"},
+		"用户不上报":    {user, EscalateIn{Kind: "stuck", Note: "x"}, "forbidden"},
 		"类型不对":     {a2, EscalateIn{Kind: "help", Note: "x"}, "usage"},
 		"已删除的类型":   {a2, EscalateIn{Kind: "shipped", Note: "x", Task: "t1"}, "usage"},
 		"已删除的类型转交": {a1, EscalateIn{Kind: "shipped", Note: "x", Event: 1}, "usage"},
@@ -360,7 +360,7 @@ func TestWake(t *testing.T) {
 	}
 	l := f.seen[0]
 	if l.Profile != "fake" || l.Env["ATRIUM_WORKER"] != "" || l.Env["ATRIUM_DATA"] != env.Paths.Data ||
-		!strings.Contains(l.Prompt, "k1（o1）简洁优先") || !strings.Contains(l.Prompt, "## 用户的全局原则（~/AGENTS.md，优先于部门要点）\n\n先给结论") || !strings.Contains(l.Prompt, "#1") || !strings.Contains(l.Prompt, "投给 a1") ||
+		!strings.Contains(l.Prompt, "k1（o1）简洁优先") || !strings.Contains(l.Prompt, "## 用户的全局原则（~/AGENTS.md，优先于部门要点）\n\n先给结论") || !strings.Contains(l.Prompt, "#1") || !strings.Contains(l.Prompt, "发给 a1") ||
 		!strings.Contains(l.Prompt, "也归你管的下属部门：o4 网页") {
 		t.Fatalf("唤醒输入不对：%+v", l)
 	}
@@ -412,7 +412,7 @@ func TestWakeTimeout(t *testing.T) {
 	f := &fakeLauncher{h: h, db: env.DB, cmd: "sleep 30"}
 	SetLauncher(f.launch)
 	t.Cleanup(func() { SetLauncher(nil) })
-	// 知会不叫醒负责人。
+	// 知会不唤醒负责人。
 	events.Emit(ctx, env.DB, events.Event{Kind: "x", Target: "a2", Level: events.Info})
 	if err := h.round(ctx, env); err != nil {
 		t.Fatal(err)

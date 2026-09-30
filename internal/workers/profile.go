@@ -27,12 +27,12 @@ type Rules struct {
 	Auto        *bool          `yaml:"auto,omitempty" json:"auto,omitempty"` // nil：缺省参与自动挑人
 	Trust       string         `yaml:"trust,omitempty" json:"trust,omitempty"`
 	MaxRisk     string         `yaml:"max_risk,omitempty" json:"max_risk,omitempty"`
-	Checks      []string       `yaml:"checks,omitempty" json:"checks,omitempty"` // nil：没写（关卡用缺省）；空：不加查
+	Checks      []string       `yaml:"checks,omitempty" json:"checks,omitempty"` // nil：没写（交付检查用缺省）；空：不加查
 	Limits      map[string]int `yaml:"limits,omitempty" json:"limits,omitempty"`
 	Model       string         `yaml:"model,omitempty" json:"model,omitempty"`
 	Endpoint    string         `yaml:"endpoint,omitempty" json:"endpoint,omitempty"`
 	EndpointAPI string         `yaml:"endpoint_api,omitempty" json:"endpoint_api,omitempty"`
-	EndpointKey string         `yaml:"endpoint_key,omitempty" json:"endpoint_key,omitempty"` // 凭据名，值派活时注入
+	EndpointKey string         `yaml:"endpoint_key,omitempty" json:"endpoint_key,omitempty"` // 凭据名，值分派任务时注入
 	Protocol    string         `yaml:"protocol,omitempty" json:"protocol,omitempty"`         // 只在 harness 层：cli
 	CLISpec     `yaml:",inline" json:"-"`
 }
@@ -162,7 +162,7 @@ func CheckProfile(name string, keys map[string]any) error {
 	}
 	for _, c := range r.Checks {
 		if !checkNameRE.MatchString(c) {
-			p = append(p, fmt.Sprintf("checks 里的 %q 不是关卡名", c))
+			p = append(p, fmt.Sprintf("checks 里的 %q 不是交付检查名", c))
 		}
 	}
 	if r.Model != "" && !modelRE.MatchString(r.Model) {

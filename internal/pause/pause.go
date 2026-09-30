@@ -1,5 +1,5 @@
 // Package pause 是一键停机的状态与判定：全局（all）、按部门（oN，含下属）、按机器（hN）。
-// 派活、唤醒、周期任务、合入、发版在每次自主动作前调 Paused；命令在 service 包（pause/resume）。
+// 分派任务、唤醒、周期任务、合入、发版在每次自主动作前调 Paused；命令在 service 包（pause/resume）。
 package pause
 
 import (

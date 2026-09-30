@@ -47,7 +47,7 @@ func parseWorkerToken(key, token string) (task string, n int, ok bool) {
 }
 
 // WorkerLive 纯判定：第 n 次拉起的令牌此刻是否有效。lastN 是账上最近一次拉起（没有为 0）。
-// 这次拉起已落账：任务在跑、不在交付阶段、最近一次就是它；拉起到落账之间（进程已起、还没记 launch）
+// 这次拉起已记录结果：任务在跑、不在交付阶段、最近一次就是它；拉起到记录结果之间（进程已起、还没记 launch）
 // 账上还是上一次，n = lastN+1 也认——那一枚只签发给正在拉起的这个进程。
 func WorkerLive(status ledger.Status, stage ledger.Stage, lastN, n int) bool {
 	if n == lastN+1 {

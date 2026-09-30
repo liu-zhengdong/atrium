@@ -1,5 +1,5 @@
 // Package leaders 是负责人的运行时：按事唤醒一次性负责人进程、签发与作废负责人令牌、
-// 服务端按令牌判权限、上交。身份、备忘与投递对象（Recipient）在 org 包里；
+// 服务端按令牌判权限、上报。身份、备忘与投递对象（Recipient）在 org 包里；
 // 本包单独成包是因为它要调 events 与 ledger，而 events 调 org（放在 org 里会成环）。
 //
 // 判定都在本文件（纯函数，表驱动测试）；IO 在 wake.go、guard.go、escalate.go。
@@ -19,18 +19,18 @@ import (
 )
 
 const (
-	BatchDelay  = 30 * time.Second // 攒批：最早一条等满 30 秒才唤醒
+	BatchDelay  = 30 * time.Second // 批量收集：最早一条等满 30 秒才唤醒
 	WakeTimeout = 20 * time.Minute // 单次唤醒上限
 	MaxFails    = 2                // 连续失败几次就把没确认的事件转交上一层
 	MaxBatch    = 50               // 一次唤醒最多带几条事件
 	maxNote     = 2000
 )
 
-// Kinds 是上交的三类。
+// Kinds 是上报的三类。
 var Kinds = []struct{ Key, Label string }{
 	{"cross", "需要别的部门配合"},
 	{"beyond", "越过权限或底线"},
-	{"stuck", "搞不定"},
+	{"stuck", "无法解决"},
 }
 
 func kindLabel(k string) string {
@@ -47,10 +47,10 @@ type EscalateIn struct {
 	Kind  string `json:"kind"`
 	Note  string `json:"note"`
 	Task  string `json:"task,omitempty"`
-	Event int64  `json:"event,omitempty"` // 转交下层上交给我的那一条
+	Event int64  `json:"event,omitempty"` // 转交下层上报给我的那一条
 }
 
-// CheckEscalate 纯校验上交输入。
+// CheckEscalate 纯校验上报输入。
 func CheckEscalate(in EscalateIn) error {
 	if kindLabel(in.Kind) == "" {
 		keys := make([]string, len(Kinds))
@@ -78,7 +78,7 @@ type Pending struct {
 	IDs    []int64
 }
 
-// Due 纯判定：哪些负责人该唤醒——最早一条已等满攒批时长，且这位没有在跑的唤醒。
+// Due 纯判定：哪些负责人该唤醒——最早一条已等满批量收集时长，且这位没有在跑的唤醒。
 func Due(pending []Pending, running map[string]bool, now int64, batch time.Duration) []Pending {
 	var out []Pending
 	for _, p := range pending {
@@ -109,7 +109,7 @@ func PickWorker(workers []string, fails int) string {
 	return workers[fails%len(workers)]
 }
 
-// Upstream 纯判定：负责人 who 上交（或转交）投给谁。从 dept 往上找到 who 负责的那一层
+// Upstream 纯判定：负责人 who 上报（或转交）发给谁。从 dept 往上找到 who 负责的那一层
 // （dept 不在 who 的链上或没给时，用 who 负责的第一个部门），再往上找最近的另一位负责人；没有投秘书。
 func Upstream(parents, leaders map[string]string, who, dept string) string {
 	start := ""
@@ -238,18 +238,18 @@ func Prompt(in PromptInput) string {
 	w("")
 	if slices.ContainsFunc(in.Events, func(e Event) bool { return e.Kind == events.TaskAssigned }) {
 		w("## 交给你去拆的任务（task.assigned）")
-		w("交来的是一件父任务，方案、拆活、派活、审核都归你：")
+		w("交来的是一件父任务，方案、拆分任务、分派任务、审核都归你：")
 		w("1. 看它：task show tN；说明里没写清服务三个目标里的哪一个，先用 task note tN 补上。想清怎么做，取舍写进 task note。要用户拍板的整理成选项单（choice add），不要替用户定。")
 		w("2. 拆成做得完的子任务：task add 标题 --parent tN --repo 仓库（或 --dir 本机文件夹）[--after tM]，先后用 --after 写清。长期方向写进部门介绍（org edit oN --next …），不建成做不完的任务。")
 		w("3. 逐件 task run；依赖还没完成的也可以先 run，依赖完成后自动派，依赖失败或取消会转受阻并通知你。")
-		w("4. 子任务的结果投给你，父任务进度由子任务汇总（task tree tN）；都完成后 task set tN --status done 收尾（子任务没结束时父任务不计时）。")
-		w("正文带 tell 的是交给你之后的补充（捎话或改了说明），以它和 task show tN 的最新说明为准；没取走时合并成最新一条，之前的补充在 task show 的经历里。已按旧说明派出的子任务用 task tell / task set --detail 跟上，做偏了的 task stop。")
+		w("4. 子任务的结果发给你，父任务进度由子任务汇总（task tree tN）；都完成后 task set tN --status done 收尾（子任务没结束时父任务不计时）。")
+		w("正文带 tell 的是交给你之后的补充（补充说明或改了说明），以它和 task show tN 的最新说明为准；没取走时合并成最新一条，之前的补充在 task show 的经历里。已按旧说明派出的子任务用 task tell / task set --detail 跟上，做偏了的 task stop。")
 		w("")
 	}
 	w("## 可用命令（都是 atrium，已按你的身份连到服务；加 --json 得结构化结果）")
 	w("- 看：task show tN；task log tN；task ls --org %s；org show oN", home)
 	w("- 派与管：task add 标题 --org %s；task run tN；task tell tN 补充；task stop tN；task set tN --status …；task note tN 取舍与原因", home)
-	w("- 验收（部门的验收人是负责人时，等验收的事件投给你）：task accept tN；task reject tN --reason 哪里不行")
+	w("- 验收（部门的验收人是负责人时，等验收的事件发给你）：task accept tN；task reject tN --reason 哪里不行")
 	w("- 规矩写成要点：point add oN 一句话 --why 为什么；point edit kN …")
 	w("- 记草稿：%s", ledger.DraftHowTo)
 	w("- 资料：material ls 按部门列全部资料，material ls mN 取正文、mN/<相对路径> 取这条资料里的其他文件（二进制加 --out 文件），material add oN 新建一条资料（一个目录是一条，同名也是新的）、material add mN 给已有资料加一版；跨部门的事先查别的部门已有的资料再调研，不直接搜数据目录")
@@ -258,15 +258,15 @@ func Prompt(in PromptInput) string {
 	w("- 备忘：memo edit 文本（覆盖写；只放跨任务、下次醒来先要知道的提示，任务进展写进 task note；超过 %d 字会被拒，先精简）", org.MaxMemo)
 	w("")
 	w("## 权限边界（服务端按你的令牌强制，越权会被拒）")
-	w("- 可以：动你负责的部门及其下属的任务、要点、资料、周期任务，改介绍；在下属负责人管的区域里建、改、裁撤部门，登记新负责人时用 leader add <名字> --org oN 一步绑定部门，或用 org edit oN --leader <aN|-> 撤换、清除。直接下属负责人最多 %d 位，同一位可管多个部门。管辖派活部门（%s）的负责人还能改执行者档案、解除不可用标记（atrium workers edit，--clear 解除）。", org.MaxDirectLeaders, ProfileDept)
-	w("- 不可以：在自己直接管的地方改结构，或动管辖之外的部门。需要建分工时用 atrium leader escalate <要建什么、为什么> --kind beyond 上交；上一层收到后自己动手建（即审批），或回复不同意。不能停机或操作服务。")
+	w("- 可以：动你负责的部门及其下属的任务、要点、资料、周期任务，改介绍；在下属负责人管的区域里建、改、裁撤部门，登记新负责人时用 leader add <名字> --org oN 一步绑定部门，或用 org edit oN --leader <aN|-> 撤换、清除。直接下属负责人最多 %d 位，同一位可管多个部门。管辖分派任务部门（%s）的负责人还能改执行者档案、解除不可用标记（atrium workers edit，--clear 解除）。", org.MaxDirectLeaders, ProfileDept)
+	w("- 不可以：在自己直接管的地方改结构，或动管辖之外的部门。需要建分工时用 atrium leader escalate <要建什么、为什么> --kind beyond 上报；上一层收到后自己动手建（即审批），或回复不同意。不能停机或操作服务。")
 	w("")
-	w("## 上交（投给 %s；只有这三类才上交，其余自己处理）", in.Upstream)
-	w("完成结果自动投回派活人；自己建、自己收的任务在网页今天页的完成列表查看。")
+	w("## 上报（发给 %s；只有这三类才上报，其余自己处理）", in.Upstream)
+	w("完成结果自动发回任务分派人；自己建、自己收的任务在网页今天页的完成列表查看。")
 	for _, k := range Kinds {
 		w("- %s %s → atrium leader escalate 说明 --kind %s [--task tN]", k.Key, k.Label, k.Key)
 	}
-	w("- 下层上交给你、你也要往上报的：atrium leader escalate 你的意见 --kind 同类 --event 编号（上面能看到原文），再确认原事件")
+	w("- 下层上报给你、你也要向上级上报的：atrium leader escalate 你的意见 --kind 同类 --event 编号（上面能看到原文），再确认原事件")
 	w("")
 	w("## 收尾")
 	w("1. 在等什么、合完要做什么，写进那件任务的备注（task note tN），做了取舍的也写进去。备忘只留跨任务、下次醒来先要知道的几句提示，不记任务进展、命令用法和排障经过（排障经过写进部门资料）。")
@@ -275,7 +275,7 @@ func Prompt(in PromptInput) string {
 	return b.String()
 }
 
-// ProfileDept 是执行者档案归属的部门（派活）。档案全组织一份，不按部门拆；
+// ProfileDept 是执行者档案归属的部门（分派任务）。档案全组织一份，不按部门拆；
 // 谁能改，看管辖包不包括这个部门。仓库没有设置表，为这一处另建配置不值，所以写在这里。
 const ProfileDept = "o9"
 
@@ -296,8 +296,8 @@ const (
 	RuleScheduleRef               // 路径 {id} 是周期任务
 	RuleBodyDept                  // 建资料、周期任务：请求体里的 org／department 必须给且在管辖内
 	RuleMemo                      // 自己的备忘（由 memo 路由按身份判）
-	RuleEventsAck                 // 确认事件：只能是投给自己的
-	RuleEscalate                  // 上交
+	RuleEventsAck                 // 确认事件：只能是发给自己的
+	RuleEscalate                  // 上报
 	RuleWorkerProfile             // 改执行者档案、解除不可用标记：管辖包含档案所属部门
 )
 
@@ -411,7 +411,7 @@ type Check struct {
 	Dept string
 }
 
-// InScope 纯判定：每项都在 scope 里才放行；否则返回给负责人看的中文说明（附上交提示）。
+// InScope 纯判定：每项都在 scope 里才放行；否则返回给负责人看的中文说明（附上报提示）。
 func InScope(leader string, scope map[string]bool, checks []Check) error {
 	for _, c := range checks {
 		if c.Dept == "" {
@@ -424,7 +424,7 @@ func InScope(leader string, scope map[string]bool, checks []Check) error {
 	return nil
 }
 
-// Forbid 是越权：中文说明 + 上交提示。
+// Forbid 是越权：中文说明 + 上报提示。
 func Forbid(format string, a ...any) *api.Error {
-	return api.Forbidden(format+"；需要就上交", a...).WithNext("atrium leader escalate <说明> --kind beyond|cross")
+	return api.Forbidden(format+"；需要就上报", a...).WithNext("atrium leader escalate <说明> --kind beyond|cross")
 }

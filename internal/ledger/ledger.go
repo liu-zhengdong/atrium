@@ -71,7 +71,7 @@ func scanTask(s scanner) (Task, error) {
 const (
 	maxTitle  = 200
 	maxDetail = 20000
-	maxRetell = 3800 // 改说明捎的话里说明最多带几字（捎话上限 4000）
+	maxRetell = 3800 // 改说明捎的话里说明最多带几字（补充说明上限 4000）
 	maxNote   = 4000
 	maxDeps   = 50
 )
@@ -87,18 +87,18 @@ type NewTask struct {
 	Repo     string   `json:"repo"`
 	Dir      string   `json:"dir"`
 	After    []string `json:"after"`
-	// Owner 是处理人；负责人自己引起的结果回投派活人，其余按部门路由，缺省为派活人。
+	// Owner 是处理人；负责人自己引起的结果回投任务分派人，其余按部门路由，缺省为任务分派人。
 	Owner string `json:"owner"`
-	// Draft：建成草稿（还没想清楚、条件还不够；不派活、不计时），缺省建成 todo。
+	// Draft：建成草稿（还没想清楚、条件还不够；不分派任务、不计时），缺省建成 todo。
 	Draft bool `json:"draft"`
 	// Source、Class：草稿记的发现从哪来、归哪一类（只给草稿）。
 	Source Source `json:"source"`
 	Class  string `json:"class"`
-	// By 是派活人，缺省为建任务的身份；周期任务记建周期任务的人。不从请求体读。
+	// By 是任务分派人，缺省为建任务的身份；周期任务记建周期任务的人。不从请求体读。
 	By string `json:"-"`
 }
 
-// Parties 是任务的派活人与处理人，记在 created 经历里。
+// Parties 是任务的任务分派人与处理人，记在 created 经历里。
 type Parties struct {
 	By    string `json:"by,omitempty"`
 	Owner string `json:"owner,omitempty"`
@@ -114,7 +114,7 @@ func checkText(field, v string, limit int, required bool) error {
 	return nil
 }
 
-// checkPlace 核对仓库与工作地点（纯函数）：工作地点是本机文件夹的绝对路径，两者只给一个。文件夹在不在派活时才查
+// checkPlace 核对仓库与工作地点（纯函数）：工作地点是本机文件夹的绝对路径，两者只给一个。文件夹在不在分派任务时才查
 // （可能由前面的任务建出来）。
 func checkPlace(repo, dir string) error {
 	switch {
@@ -128,7 +128,7 @@ func checkPlace(repo, dir string) error {
 	return nil
 }
 
-// Assignee 纯判定：这件任务是不是交给负责人去拆——处理人是负责人（aN），不是派活人、也不是操作的人自己，任务待派
+// Assignee 纯判定：这件任务是不是交给负责人去拆——处理人是负责人（aN），不是任务分派人、也不是操作的人自己，任务待派
 // （todo，草稿不算）、没有仓库也没有工作地点；是就返回这位负责人，否则返回空。
 func Assignee(t Task, p Parties, actor string) string {
 	if t.Status != Todo || t.Repo != "" || t.Dir != "" || p.Owner == actor || p.Owner == p.By || !api.IsRef(p.Owner, "a") {
@@ -137,7 +137,7 @@ func Assignee(t Task, p Parties, actor string) string {
 	return p.Owner
 }
 
-// handOver 是建任务、改处理人、草稿转待派共用的一段：t 是改完的样子，p 是改完的派活人与处理人，was 是改之前交给谁去拆
+// handOver 是建任务、改处理人、草稿转待派共用的一段：t 是改完的样子，p 是改完的任务分派人与处理人，was 是改之前交给谁去拆
 // （Assignee 的结果，新建为空）。这次新交给负责人去拆时，没部门的落到它负责的那个部门（写回 t.Org），有部门的要在它管辖内
 // （它才动得了），返回要唤醒的负责人；不是新交的返回空。
 func handOver(ctx context.Context, tx *sql.Tx, t *Task, p Parties, was, actor string) (string, error) {
@@ -168,7 +168,7 @@ func handOver(ctx context.Context, tx *sql.Tx, t *Task, p Parties, was, actor st
 	return who, nil
 }
 
-// assigned 给交给它去拆的负责人发一条要处理的 task.assigned（who 为空不发）；tell 是交出去之后的捎话（没有为空）。
+// assigned 给交给它去拆的负责人发一条要处理的 task.assigned（who 为空不发）；tell 是交出去之后的补充说明（没有为空）。
 // 同一任务还没取走的合并成最新一条（events.KeyOf）。
 func assigned(ctx context.Context, tx *sql.Tx, t Task, who, tell, actor string) error {
 	if who == "" {
@@ -181,11 +181,11 @@ func assigned(ctx context.Context, tx *sql.Tx, t Task, who, tell, actor string) 
 	return events.Emit(ctx, tx, events.Event{Kind: events.TaskAssigned, Task: t.ID, Dept: t.Org, Target: who, Body: body, By: actor})
 }
 
-// Tell 是捎话（dispatch.Tell：记经历、投负责人、送到在跑的执行者），dispatch 装配时接上。Edit 改了说明用它送到在做的人。
+// Tell 是补充说明（dispatch.Tell：记经历、投负责人、送到在跑的执行者），dispatch 装配时接上。Edit 改了说明用它送到在做的人。
 var Tell func(ctx context.Context, id, text, by string) error
 
-// RecordTell 在调用方事务里记一条捎话；任务交给负责人拆着（Assignee）的，同时随 task.assigned 投给它。
-// 返回经历编号与投给的负责人（不是交给负责人的为空）。
+// RecordTell 在调用方事务里记一条补充说明；任务交给负责人拆着（Assignee）的，同时随 task.assigned 发给它。
+// 返回经历编号与发给的负责人（不是交给负责人的为空）。
 func RecordTell(ctx context.Context, tx *sql.Tx, t Task, text, by string) (int64, string, error) {
 	if err := Record(ctx, tx, t.ID, "tell", by, text); err != nil {
 		return 0, "", err
@@ -202,7 +202,7 @@ func RecordTell(ctx context.Context, tx *sql.Tx, t Task, text, by string) (int64
 	return id, who, assigned(ctx, tx, t, who, text, by)
 }
 
-// Taken 纯判定：改了说明要不要当一次捎话送到——交给负责人拆着的（Assignee），或执行者在跑、还没交付的；
+// Taken 纯判定：改了说明要不要当一次补充说明送到——交给负责人拆着的（Assignee），或执行者在跑、还没交付的；
 // 没人在做的下次拉起自然读到最新说明，不用捎。
 func Taken(t Task, p Parties, actor string) bool {
 	return Assignee(t, p, actor) != "" || t.Status == Running && t.Stage == StageNone
@@ -229,7 +229,7 @@ func mustOwner(ctx context.Context, q store.Querier, owner string) error {
 	return nil
 }
 
-// DeptRepo 纯判定：派活时任务该带上部门的哪个仓库（repos 是部门自己的仓库），不用补为空。任务没仓库也没工作地点、
+// DeptRepo 纯判定：分派任务时任务该带上部门的哪个仓库（repos 是部门自己的仓库），不用补为空。任务没仓库也没工作地点、
 // 部门恰有一个仓库才补——多个时分不出是哪个；只补能派的（按 Transition），在跑、在交付的不动，免得中途换了交付方式。
 func DeptRepo(t Task, repos []string) string {
 	if t.Repo != "" || t.Dir != "" || len(repos) != 1 {
@@ -519,7 +519,7 @@ type Patch struct {
 	After    *[]string `json:"after,omitempty"`
 	Source   *Source   `json:"source,omitempty"`
 	Class    *string   `json:"class,omitempty"`
-	// Owner 改处理人（空串回到派活人）；记在 edited 经历里，PartiesOf 取最近一次。
+	// Owner 改处理人（空串回到任务分派人）；记在 edited 经历里，PartiesOf 取最近一次。
 	Owner *string `json:"owner,omitempty"`
 }
 
@@ -788,7 +788,7 @@ func apply(ctx context.Context, db *store.DB, id string, ev Event, actor, note s
 		}
 		accepting := next.Stage == StageAccept && t.Stage != StageAccept
 		if next.Status == t.Status && ev.Kind != Land && !accepting {
-			return nil // 只有状态变化、落地推进一步（如已合入等发版）与转入等验收发事件
+			return nil // 只有状态变化、应用推进一步（如已合入等发版）与转入等验收发事件
 		}
 		payload := map[string]any{"from": t.Status, "to": next.Status, "stage": next.Stage, "title": t.Title, "event": ev.Kind, "by": actor}
 		if note != "" {
@@ -807,8 +807,8 @@ func apply(ctx context.Context, db *store.DB, id string, ev Event, actor, note s
 	return Get(ctx, db, id)
 }
 
-// PartiesOf 读任务的派活人与处理人：派活人没另记就是建它的身份（u1、secretary、aN，或 gates 这类运行时），
-// 处理人取建立时指定的、改过取最近一次，都没有就是派活人。没有建立记录（不经 Add 写进库的）两者都为空，按运行时建的算。
+// PartiesOf 读任务的任务分派人与处理人：任务分派人没另记就是建它的身份（u1、secretary、aN，或 gates 这类运行时），
+// 处理人取建立时指定的、改过取最近一次，都没有就是任务分派人。没有建立记录（不经 Add 写进库的）两者都为空，按运行时建的算。
 func PartiesOf(ctx context.Context, q store.Querier, id string) (Parties, error) {
 	var actor, body string
 	err := q.QueryRowContext(ctx, `SELECT actor, body FROM task_events WHERE task = ? AND kind = 'created' ORDER BY id LIMIT 1`, id).
@@ -828,7 +828,7 @@ func PartiesOf(ctx context.Context, q store.Querier, id string) (Parties, error)
 	if p.By == "" {
 		p.By = actor
 	}
-	// 处理人改过（task set --owner）以最近一次为准；改成空串是回到派活人。
+	// 处理人改过（task set --owner）以最近一次为准；改成空串是回到任务分派人。
 	err = q.QueryRowContext(ctx, `SELECT body FROM task_events WHERE task = ? AND kind = 'edited' AND instr(body, '"owner":') > 0
 		ORDER BY id DESC LIMIT 1`, id).Scan(&body)
 	if err != nil && !store.IsNotFound(err) {
@@ -891,7 +891,7 @@ func SetFacts(ctx context.Context, db *store.DB, id string, f Facts, actor strin
 	return err
 }
 
-// Record 追加一条任务经历。其他包记关卡结论、交回原因等也用它（kind 自定，如 "gate"、"review"）。
+// Record 追加一条任务经历。其他包记交付检查结论、交回原因等也用它（kind 自定，如 "gate"、"review"）。
 func Record(ctx context.Context, q store.Querier, id, kind, actor, body string) error {
 	_, err := q.ExecContext(ctx, `INSERT INTO task_events (task, at, kind, actor, body) VALUES (?, ?, ?, ?, ?)`,
 		id, store.Now(), kind, actor, body)
@@ -1012,7 +1012,7 @@ func prefixed(p, cols string) string {
 	return strings.Join(parts, ", ")
 }
 
-// notifier 在任务有任何写入后唤醒全部等待者（task wait 长轮询、第二波的派活循环）。
+// notifier 在任务有任何写入后唤醒全部等待者（task wait 长轮询、第二波的分派任务循环）。
 type notifier struct {
 	mu sync.Mutex
 	ch chan struct{}

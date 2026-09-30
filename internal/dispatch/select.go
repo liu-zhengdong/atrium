@@ -9,7 +9,7 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/workers"
 )
 
-// view 收集事实并挑执行者（task run --dry-run 与自动派活同一份）。
+// view 收集事实并挑执行者（task run --dry-run 与自动分派任务同一份）。
 func (d *dispatcher) view(ctx context.Context, t ledger.Task, risk string, exclude map[string]bool, pinned ...string) (PickView, error) {
 	db := d.env.DB
 	var preferred []string

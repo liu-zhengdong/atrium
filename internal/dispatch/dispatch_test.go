@@ -124,12 +124,12 @@ func TestRouteExit(t *testing.T) {
 		in   ExitInput
 		want string
 	}{
-		{"正常退出交关卡", ExitInput{Code: 0}, "gate"},
-		{"接管的进程按日志", ExitInput{Code: workers.ExitUnknown}, "gate"},
+		{"正常退出进入交付检查", ExitInput{Code: 0}, "gate"},
+		{"继续跟进的进程按日志", ExitInput{Code: workers.ExitUnknown}, "gate"},
 		{"退出码非 0", ExitInput{Code: 2}, "fail"},
 		{"非 0 但日志正常收尾", ExitInput{Code: 1, Ending: workers.Ending{Known: true, OK: true}}, "gate"},
 		{"报错收尾", ExitInput{Code: 0, Ending: workers.Ending{Known: true, Reason: "x"}}, "fail"},
-		{"捎话要重派", ExitInput{Code: -1, StopFor: "restart"}, "restart"},
+		{"补充说明要重派", ExitInput{Code: -1, StopFor: "restart"}, "restart"},
 		{"额度用尽重新排队", ExitInput{Code: 1, Signal: quota, Switches: 2}, "requeue"},
 		{"模型名无效重新排队", ExitInput{Code: 1, Signal: workers.Signal{Kind: workers.SignalModel, Reason: "模型名无效"}}, "requeue"},
 		{"思考耗尽换人", ExitInput{Code: 0, Signal: thinking}, "switch"},
@@ -139,8 +139,8 @@ func TestRouteExit(t *testing.T) {
 		{"临时错误用尽", ExitInput{Code: 1, Signal: transient, Same: 1, Switches: 2}, "fail"},
 		{"零步骤出错退出重新排队", ExitInput{Code: 1, Signal: workers.Signal{Kind: workers.SignalNoStart, Reason: "零步骤出错退出（退出码 1，原因不明）"}}, "requeue"},
 		{"没登录重新排队", ExitInput{Code: 1, Signal: workers.Signal{Kind: workers.SignalSetup, Reason: "没登录"}, Switches: 2}, "requeue"},
-		{"有捎话能续上", ExitInput{Code: 0, Pending: 1, CanResume: true}, "resume"},
-		{"有捎话不能续上", ExitInput{Code: 0, Pending: 2}, "restart"},
+		{"有补充说明能继续", ExitInput{Code: 0, Pending: 1, CanResume: true}, "resume"},
+		{"有补充说明不能继续", ExitInput{Code: 0, Pending: 2}, "restart"},
 	}
 	for _, c := range cases {
 		if got := RouteExit(c.in); got.Do != c.want {
@@ -186,7 +186,7 @@ func TestBuildPrompt(t *testing.T) {
 		t.Errorf("没有仓库的提示词：\n%s", p)
 	}
 	if r := ResumePrompt([]string{"改用 B"}); !strings.Contains(r, "- 改用 B") || !strings.Contains(r, langRule) {
-		t.Errorf("续上的补充：\n%s", r)
+		t.Errorf("继续的补充：\n%s", r)
 	}
 }
 
@@ -255,7 +255,7 @@ func TestBounceCause(t *testing.T) {
 		{"merge_queue", "快检查没过（rebase 到 origin/main 后跑 .agents/check）", "检查没过"},
 		{"review", "审阅打回（t9，codex）：缺测试", "审阅打回"},
 		{"accept", "验收打回（u1）：本地跑不起来", "验收打回"},
-		{"gate", "关卡没过：没有 PR", "关卡没过"},
+		{"gate", "交付检查未通过：没有 PR", "交付检查未通过"},
 	}
 	for _, c := range cases {
 		if got := BounceCause(c.stage, c.note); got != c.want {
@@ -280,7 +280,7 @@ func TestQueuedBounceKeepsHost(t *testing.T) {
 	}
 	ledger.Record(ctx, db, tk.ID, workers.RunKind, "dispatch", `{"n":1,"why":"first","worker":"claude+opus","host":"h3","risk":"medium","secrets":["DEMO_TOKEN"]}`)
 	for _, k := range []ledger.EventKind{ledger.ExitOK, ledger.Bounce} {
-		if _, err := ledger.Apply(ctx, db, tk.ID, ledger.Event{Kind: k}, "gates", "关卡没过"); err != nil {
+		if _, err := ledger.Apply(ctx, db, tk.ID, ledger.Event{Kind: k}, "gates", "交付检查未通过"); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -396,7 +396,7 @@ func TestViewIsolated(t *testing.T) {
 	}
 }
 
-// 捎话、改说明给交给负责人拆着的任务：投给负责人一条要处理的 task.assigned（带补充原文），没取走时再来合并成一条；
+// 补充说明、改说明给交给负责人拆着的任务：发给负责人一条要处理的 task.assigned（带补充原文），没取走时再来合并成一条；
 // 负责人自己捎、自己改不投。t442 交给 a7 后秘书改了说明，a7 什么也没收到。
 func TestTellLeader(t *testing.T) {
 	ctx := context.Background()
@@ -436,12 +436,12 @@ func TestTellLeader(t *testing.T) {
 		}
 		return out
 	}
-	goal, _ := ledger.Add(ctx, db, ledger.NewTask{Title: "拆活", Owner: "a1"}, "secretary")
+	goal, _ := ledger.Add(ctx, db, ledger.NewTask{Title: "拆分任务", Owner: "a1"}, "secretary")
 	db.Exec(`UPDATE events SET acked_at = 1 WHERE task = ?`, goal.ID) // 负责人已接走交来的那条
 
 	r, err := Tell(ctx, env, goal.ID, "用户又说：也要改网页", "secretary")
 	if err != nil || r.Via != "leader" {
-		t.Fatalf("应投给负责人：%+v %v", r, err)
+		t.Fatalf("应发给负责人：%+v %v", r, err)
 	}
 	got := pending(goal.ID)
 	if len(got) != 1 || got[0].Target != "a1" || got[0].Level != events.Act || !strings.Contains(got[0].Body, `"tell":"用户又说：也要改网页"`) {
@@ -456,7 +456,7 @@ func TestTellLeader(t *testing.T) {
 	if len(got) != 1 || got[0].Count != 2 || !strings.Contains(got[0].Body, `说明已改，以最新说明为准：\n新说明`) {
 		t.Fatalf("没取走时应合并成一条最新的：%+v", got)
 	}
-	// 负责人自己捎、自己改：不投给自己。
+	// 负责人自己捎、自己改：不发给自己。
 	if _, err := Tell(ctx, env, goal.ID, "记一笔", "a1"); err != nil {
 		t.Fatal(err)
 	}
@@ -475,7 +475,7 @@ func TestTellLeader(t *testing.T) {
 		}
 	}
 	if n != 3 {
-		t.Fatalf("捎话都记进经历（两次捎话、一次改说明）：%d", n)
+		t.Fatalf("补充说明都记进经历（两次补充说明、一次改说明）：%d", n)
 	}
 }
 

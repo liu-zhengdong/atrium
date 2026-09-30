@@ -34,7 +34,7 @@ type Assignment struct {
 	Log string `json:"-"`
 }
 
-// Query 是服务问代理的只读查询（关卡查远程工作树的事实）：在 Dir 里跑一条只读 git，或读 Dir 根下的一个文件。
+// Query 是服务问代理的只读查询（交付检查查远程工作树的事实）：在 Dir 里跑一条只读 git，或读 Dir 根下的一个文件。
 // 代理按 QueryRefusal 核对。
 type Query struct {
 	Dir  string   `json:"dir"`
@@ -260,7 +260,7 @@ func Launch(ctx context.Context, env *app.Env, host string, a Assignment) (run, 
 // queryWait 是等代理答一条查询的上限（含领走；fetch 要走网络）。
 var queryWait = 2 * time.Minute
 
-// Ask 问远程机器一条只读查询（关卡查远程工作树的事实）：下发、等回执。代理拒绝或跑失败返回错误。
+// Ask 问远程机器一条只读查询（交付检查查远程工作树的事实）：下发、等回执。代理拒绝或跑失败返回错误。
 func Ask(ctx context.Context, host string, q Query) (Ack, error) {
 	id, ackc := theHub.push(host, Command{Kind: "query", Query: &q})
 	select {

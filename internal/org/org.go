@@ -115,7 +115,7 @@ func Ancestors(ctx context.Context, q store.Querier, id string) ([]string, error
 	return chain, nil
 }
 
-// Chain 是部门的要点链：从顶层到本部门，各部门按 pos 排。派活时每条附一行（ChainLine）。
+// Chain 是部门的要点链：从顶层到本部门，各部门按 pos 排。分派任务时每条附一行（ChainLine）。
 func Chain(ctx context.Context, q store.Querier, id string) ([]Point, error) {
 	chain, err := Ancestors(ctx, q, id)
 	if err != nil {

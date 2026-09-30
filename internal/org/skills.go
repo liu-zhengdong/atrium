@@ -142,7 +142,7 @@ func checkTokens(field string, list []string, check func(string) error) error {
 	return nil
 }
 
-// checkName：技能的 checks 只能写 skillcheck 认得的检查名，写错当场报，不拖到关卡。
+// checkName：技能的 checks 只能写 skillcheck 认得的检查名，写错当场报，不拖到交付检查。
 func checkName(v string) error {
 	if err := skillcheck.Validate(v); err != nil {
 		return api.Usage("--checks: %v", err)
@@ -498,7 +498,7 @@ func skillCommands(t *cli.Table) {
 		Flags: []cli.Flag{
 			{Name: "workers", Value: "执行者", Multi: true, Help: "优先的执行者，写法同 task run --worker（给空串清掉）"},
 			{Name: "checks", Value: "检查", Multi: true, Help: "交付时运行时自己跑的检查：" + strings.Join(skillcheck.Known(), "、") + "（给空串清掉）"},
-			{Name: "secrets", Value: "名称", Multi: true, Help: "这类活要的凭据名，派活时按任务部门往上找（给空串清掉）"},
+			{Name: "secrets", Value: "名称", Multi: true, Help: "这类活要的凭据名，分派任务时按任务部门往上找（给空串清掉）"},
 		},
 		Run: func(c *cli.Ctx) error {
 			name, err := c.Arg(0, "<名字>")

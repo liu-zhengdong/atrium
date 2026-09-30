@@ -22,8 +22,8 @@
 ## 导入后要手动做的
 
 - **负责人挂回部门**：旧库里负责人都没挂部门（09-28 审视时临时撤下，见秘书备忘）。恢复用 `atrium org edit oN --leader aN`。
-- **超限的旧数据**：导入回执会列出来（例如 o2 要点 8/7、visual-design 技能超过 6KB、o4 资料总量超限）。照样可用，派活与网页会标「超限」，有空再整理。
-- **执行者档案**：旧键 `invoke`、`cost`、`progress`、`single_instance` 与关卡 `local_check` 在导入时去掉了（v2 内置适配器负责调用；合入队列总跑 `.agents/check`）。回执逐份列出。
+- **超限的旧数据**：导入回执会列出来（例如 o2 要点 8/7、visual-design 技能超过 6KB、o4 资料总量超限）。照样可用，分派任务与网页会标「超限」，有空再整理。
+- **执行者档案**：旧键 `invoke`、`cost`、`progress`、`single_instance` 与交付检查 `local_check` 在导入时去掉了（v2 内置适配器负责调用；合入队列总跑 `.agents/check`）。回执逐份列出。
 
 ## 远程机器 ggb（Windows）
 

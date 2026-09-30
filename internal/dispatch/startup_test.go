@@ -20,7 +20,7 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/workers"
 )
 
-// 临时数据库、临时 PATH 和假工具：真实自检落库后，现有派活循环自动接着派。
+// 临时数据库、临时 PATH 和假工具：真实自检落库后，现有分派任务循环自动接着派。
 func TestStartupProbeAutoDispatch(t *testing.T) {
 	for _, installed := range []bool{true, false} {
 		name := "就绪后自动派出"
@@ -89,7 +89,7 @@ func TestStartupProbeAutoDispatch(t *testing.T) {
 			if err != nil || !v.Waiting || !strings.Contains(v.Reason, "尚未完成工具自检") {
 				t.Fatalf("%+v %v", v, err)
 			}
-			// 不再入队、不手动 wake，真实后台自检和派活循环自行推进。
+			// 不再入队、不手动 wake，真实后台自检和分派任务循环自行推进。
 			done, hostDone := make(chan error, 1), make(chan error, 1)
 			go func() { done <- Run(ctx, env) }()
 			go func() { hostDone <- hosts.Run(ctx, env) }()
@@ -117,7 +117,7 @@ func TestStartupProbeAutoDispatch(t *testing.T) {
 				}
 				select {
 				case <-ctx.Done():
-					t.Fatalf("等待自检后派活超时：%+v", got)
+					t.Fatalf("等待自检后分派任务超时：%+v", got)
 				case <-time.After(20 * time.Millisecond):
 				}
 			}

@@ -177,7 +177,7 @@ func TestCorrection(t *testing.T) {
 	}{
 		{"用户验收时退回", accepting, State{Queued, StageNone}, Bounce, "u1", "用户验收时退回 t5：写文章"},
 		{"秘书退回不算", accepting, State{Queued, StageNone}, Bounce, "secretary", ""},
-		{"关卡交回不算", Task{ID: "t5", Status: Running, Stage: StageGate}, State{Queued, StageNone}, Bounce, "u1", ""},
+		{"交付检查交回不算", Task{ID: "t5", Status: Running, Stage: StageGate}, State{Queued, StageNone}, Bounce, "u1", ""},
 		{"用户取消", Task{ID: "t6", Title: "调研", Status: Todo}, State{Cancelled, StageNone}, Cancel, "u1", "用户取消 t6：调研"},
 		{"负责人取消不算", Task{ID: "t6", Status: Todo}, State{Cancelled, StageNone}, Cancel, "a1", ""},
 		{"取消草稿是清理，不算", Task{ID: "t7", Status: Draft}, State{Cancelled, StageNone}, Cancel, "u1", ""},

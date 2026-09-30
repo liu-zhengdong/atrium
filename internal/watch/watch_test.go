@@ -48,7 +48,7 @@ func TestLevel(t *testing.T) {
 	}
 	for _, c := range cases {
 		if got := Level(Holder{Role: c.role, Since: c.since}, now); got != c.want {
-			t.Errorf("Level(%s, 持球 %d 分) = %d，应为 %d", c.role, (now-c.since)/minute, got, c.want)
+			t.Errorf("Level(%s, 等待 %d 分) = %d，应为 %d", c.role, (now-c.since)/minute, got, c.want)
 		}
 	}
 }
@@ -66,7 +66,7 @@ func TestHolderOf(t *testing.T) {
 		role  Role
 		since int64
 	}{
-		{"待派活归负责人", Facts{Task: task(ledger.Todo, ""), Owner: "a1"}, "leader", "a1", RoleLeader, 500},
+		{"待分派归负责人", Facts{Task: task(ledger.Todo, ""), Owner: "a1"}, "leader", "a1", RoleLeader, 500},
 		{"等依赖不算期限", Facts{Task: task(ledger.Todo, ""), Owner: "a1", Deps: []ledger.DepState{{ID: "t2", Status: ledger.Running}, {ID: "t3", Status: ledger.Done}}}, "deps", "", "", 0},
 		{"依赖取消了归负责人", Facts{Task: task(ledger.Todo, ""), Owner: "a1", Deps: []ledger.DepState{{ID: "t2", Status: ledger.Cancelled}, {ID: "t3", Status: ledger.Done}}}, "leader", "a1", RoleLeader, 500},
 		{"依赖失败了归负责人，在等的也不算", Facts{Task: task(ledger.Todo, ""), Owner: "a1", Deps: []ledger.DepState{{ID: "t2", Status: ledger.Failed}, {ID: "t3", Status: ledger.Running}}}, "leader", "a1", RoleLeader, 500},
@@ -78,7 +78,7 @@ func TestHolderOf(t *testing.T) {
 		{"执行者刚起", Facts{Task: task(ledger.Running, ""), Proc: proc}, "worker", "codex", RoleWorkerStart, 1000},
 		{"执行者有进展", Facts{Task: task(ledger.Running, ""), Proc: proc, ProgressAt: 2000}, "worker", "codex", RoleWorker, 2000},
 		{"执行者没登记进程", Facts{Task: task(ledger.Running, "")}, "worker", "codex", "", 0},
-		{"关卡", Facts{Task: task(ledger.Running, ledger.StageGate)}, "runtime", "运行时", "", 0},
+		{"交付检查", Facts{Task: task(ledger.Running, ledger.StageGate)}, "runtime", "运行时", "", 0},
 		{"检查在跑", Facts{Task: task(ledger.Running, ledger.StageMerge), Proc: &Proc{Role: "check", At: 700}}, "check", "运行时", RoleCheck, 700},
 		{"排队合入", Facts{Task: task(ledger.Running, ledger.StageMerge)}, "runtime", "运行时", "", 0},
 		{"等发版", Facts{Task: task(ledger.Running, ledger.StageMerged)}, "release", "运行时", RoleRelease, 500},
@@ -113,15 +113,15 @@ func TestHolderBrokenDeps(t *testing.T) {
 		if h.Text != c.text || h.Next != c.next || h.Who != "a3" || h.Role != RoleLeader {
 			t.Errorf("%s：%+v", name, h)
 		}
-		// 负责人一行计时：到期叫醒，再到期上交。
+		// 负责人一行计时：到期唤醒，再到期上报。
 		if Decide(h, Obs{}, 500+int64(31*minute)) != Notify || Decide(h, Obs{}, 500+int64(61*minute)) != Escalate {
-			t.Errorf("%s：到期应叫醒负责人", name)
+			t.Errorf("%s：到期应唤醒负责人", name)
 		}
 	}
 }
 
 // t501：待派任务归负责人时从开始要他处理的那一刻计时，不按任务自己的 updated_at；
-// 久放的任务依赖刚断，先叫醒负责人，30 分钟后才可能上交。
+// 久放的任务依赖刚断，先唤醒负责人，30 分钟后才可能上报。
 func TestLeaderSince(t *testing.T) {
 	now := int64(1000 * minute)
 	old := now - 5*60*minute // 放了 5 小时
@@ -142,7 +142,7 @@ func TestLeaderSince(t *testing.T) {
 			Deps: []ledger.DepState{dep("t2", ledger.Cancelled)}, DepEnded: map[string]int64{"t2": now - 10*minute}}, now},
 		{"建任务时依赖早就断了：从建的时刻算", Facts{Task: todo, Deps: []ledger.DepState{dep("t2", ledger.Cancelled)},
 			DepEnded: map[string]int64{"t2": old - 60*minute}}, old},
-		{"依赖都完成、待派活：从最后完成的算", Facts{Task: todo, Deps: []ledger.DepState{dep("t2", ledger.Done), dep("t3", ledger.Done)},
+		{"依赖都完成、待分派：从最后完成的算", Facts{Task: todo, Deps: []ledger.DepState{dep("t2", ledger.Done), dep("t3", ledger.Done)},
 			DepEnded: map[string]int64{"t2": now - 10*minute, "t3": now}}, now},
 		{"子任务都结束、等收尾：从最后结束的算", Facts{Task: todo, Children: 3, ChildEnded: now}, now},
 		{"没有依赖和子任务：从任务改动的时刻算", Facts{Task: todo}, old},
@@ -165,7 +165,7 @@ func TestLeaderSince(t *testing.T) {
 	}
 }
 
-// 巡检一轮：放了 5 小时的待派任务依赖刚取消，不上交；过 30 分钟先叫醒 o2 的负责人 a2，不发给上一层 a1。
+// 巡检一轮：放了 5 小时的待派任务依赖刚取消，不上报；过 30 分钟先唤醒 o2 的负责人 a2，不发给上一层 a1。
 func TestTickBrokenDepWakesOwnerFirst(t *testing.T) {
 	env, ctx := setup(t)
 	dep, _ := ledger.Add(ctx, env.DB, ledger.NewTask{Title: "前置", Org: "o2"}, "u1")
@@ -198,7 +198,7 @@ func TestTickBrokenDepWakesOwnerFirst(t *testing.T) {
 		t.Fatal(err)
 	}
 	if a1, a2 := overdues("a1"), overdues("a2"); len(a1) != 0 || len(a2) != 1 {
-		t.Fatalf("断了 31 分钟应只叫醒 a2：a1 %+v，a2 %+v", a1, a2)
+		t.Fatalf("断了 31 分钟应只唤醒 a2：a1 %+v，a2 %+v", a1, a2)
 	}
 }
 
@@ -218,17 +218,17 @@ func TestDecide(t *testing.T) {
 		{"临时错误重试", worker(RoleWorker, now-minute), Obs{Alive: true, Signal: SigTransient}, Retry},
 		{"额度用尽重试", worker(RoleWorker, now-minute), Obs{Alive: true, Signal: SigQuota}, Retry},
 		{"刚退出先等拉起者收尾", worker(RoleWorker, now-minute), Obs{DeadTicks: 1}, Keep},
-		{"没人收尾且没报错进关卡", worker(RoleWorker, now-minute), Obs{DeadTicks: 2}, ExitOK},
+		{"没人收尾且没报错进入交付检查", worker(RoleWorker, now-minute), Obs{DeadTicks: 2}, ExitOK},
 		{"没人收尾且报错", worker(RoleWorker, now-minute), Obs{DeadTicks: 2, Signal: SigError}, ExitFail},
 		{"没人收尾且思考耗尽", worker(RoleWorker, now-minute), Obs{DeadTicks: 3, Signal: SigThinking}, Retry},
 		{"检查没输出", Holder{Kind: "check", Role: RoleCheck, Since: now - 11*minute}, Obs{Alive: true}, KillIt},
 		{"检查已退出不管", Holder{Kind: "check", Role: RoleCheck, Since: now - 11*minute}, Obs{}, Keep},
 		{"等发版到期", Holder{Kind: "release", Role: RoleRelease, Since: now - 31*minute}, Obs{}, Notify},
 		{"负责人到期", Holder{Kind: "leader", Role: RoleLeader, Since: now - 31*minute}, Obs{}, Notify},
-		{"负责人再到期上交", Holder{Kind: "leader", Role: RoleLeader, Since: now - 61*minute}, Obs{}, Escalate},
+		{"负责人再到期上报", Holder{Kind: "leader", Role: RoleLeader, Since: now - 61*minute}, Obs{}, Escalate},
 		{"验收人没到期", Holder{Kind: "user", Role: RoleAccept, Since: now - 60*minute}, Obs{}, Keep},
 		{"验收人到期提醒", Holder{Kind: "user", Role: RoleAccept, Since: now - 25*60*minute}, Obs{}, Notify},
-		{"验收人只提醒一次不上交", Holder{Kind: "user", Role: RoleAccept, Since: now - 49*60*minute}, Obs{}, Keep},
+		{"验收人只提醒一次不上报", Holder{Kind: "user", Role: RoleAccept, Since: now - 49*60*minute}, Obs{}, Keep},
 		{"不算期限", Holder{Kind: "runtime"}, Obs{}, Keep},
 	}
 	for _, c := range cases {
@@ -309,7 +309,7 @@ func TestTickTakesOverExitedWorker(t *testing.T) {
 		t.Fatal(err)
 	}
 	if s := status(t, env, task.ID); s.Status != ledger.Running || s.Stage != ledger.StageGate {
-		t.Fatalf("连续两轮不在应进关卡：%+v", s)
+		t.Fatalf("连续两轮不在应进入交付检查：%+v", s)
 	}
 }
 
@@ -392,7 +392,7 @@ func TestTickPausedAndEscalates(t *testing.T) {
 	}
 	rows, _ := events.Pending(ctx, env.DB, "a1", false, 10)
 	if len(rows) != 1 || rows[0].Kind != events.Overdue || rows[0].Task != task.ID {
-		t.Fatalf("受阻 60 分钟应上交 a1（o2 的上一层）一次：%+v", rows)
+		t.Fatalf("受阻 60 分钟应上报 a1（o2 的上一层）一次：%+v", rows)
 	}
 	events.Ack(ctx, env.DB, []int64{rows[0].ID}, "", "u1")
 	Tick(ctx, env)
@@ -401,7 +401,7 @@ func TestTickPausedAndEscalates(t *testing.T) {
 	}
 }
 
-// 等你验收超过一天：经秘书提醒一次，不投负责人、不往上交。
+// 等你验收超过一天：经秘书提醒一次，不投负责人、不向上级上报。
 func TestTickRemindsUserToAccept(t *testing.T) {
 	env, ctx := setup(t)
 	env.DB.Exec(`INSERT INTO acceptors (department, who) VALUES ('o1', 'user')`)

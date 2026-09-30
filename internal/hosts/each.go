@@ -10,7 +10,7 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/org"
 )
 
-// usableHosts 给后台维持隧道与派活挑机器。坏登记留在原处并交秘书，
+// usableHosts 给后台维持隧道与分派任务挑机器。坏登记留在原处并交秘书，
 // 其余机器照常使用；按错误原因去重，服务重启也不会每轮刷屏。
 func usableHosts(ctx context.Context, env *app.Env) ([]Host, error) {
 	rows, err := hostRows(ctx, env.DB)

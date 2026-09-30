@@ -23,8 +23,8 @@ const (
 	OutOK     = "ok"     // 正常交付
 	OutQuota  = "quota"  // 额度用尽
 	OutSetup  = "setup"  // 起不来：没登录、缺运行环境、零步骤出错退出
-	OutFail   = "fail"   // 其他失败：模型名无效、临时错误、思考耗尽、出错退出、卡死
-	OutBounce = "bounce" // 交付被交回（关卡、审阅、验收、合入退回）
+	OutFail   = "fail"   // 其他失败：模型名无效、临时错误、思考耗尽、出错退出、长时间没进展
+	OutBounce = "bounce" // 交付被交回（交付检查、审阅、验收、合入退回）
 )
 
 var outText = map[string]string{OutOK: "交付", OutQuota: "额度", OutSetup: "起不来", OutFail: "其他失败", OutBounce: "被交回"}

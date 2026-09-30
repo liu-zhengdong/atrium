@@ -23,7 +23,7 @@ func TestAutoRule(t *testing.T) {
 			}
 			want := ""
 			if value == "false" {
-				want = "档案 auto=false：只接点名派活"
+				want = "档案 auto=false：只接点名分派任务"
 			}
 			if got := r.Refusal("low", true); got != want {
 				t.Fatalf("自动：%q，期望 %q", got, want)

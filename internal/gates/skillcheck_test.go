@@ -39,7 +39,7 @@ func (f frames) Run(ctx context.Context, dir, name string, args ...string) (stri
 	return "", png.Encode(w, img)
 }
 
-// 挂了声明 checks 的技能：关卡跑检查，过了把结论与产物路径记进经历；没过交回执行者；
+// 挂了声明 checks 的技能：交付检查跑检查，过了把结论与产物路径记进经历；没过交回执行者；
 // 执行者改不了的（工作目录在远程、技能里写了不认识的名字）转受阻。
 func TestGateSkillChecks(t *testing.T) {
 	e := setup(t)
@@ -80,7 +80,7 @@ func TestGateSkillChecks(t *testing.T) {
 	e.sweep()
 	out := filepath.Join(e.g.Data, "tasks", ok.ID)
 	if got := e.state(ok.ID); got != "done/gate" || !strings.Contains(e.lastNote(ok.ID), "技能检查通过：video") {
-		t.Fatalf("检查过了应落地：%s %s", got, e.lastNote(ok.ID))
+		t.Fatalf("检查过了应应用：%s %s", got, e.lastNote(ok.ID))
 	}
 	h, _ := ledger.History(e.ctx, e.db, ok.ID, 50)
 	var got []string

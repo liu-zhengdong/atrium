@@ -6,7 +6,7 @@ import "fmt"
 type Status string
 
 const (
-	Draft     Status = "draft" // 草稿：还没想清楚、条件还不够；不派活、不计时
+	Draft     Status = "draft" // 草稿：还没想清楚、条件还不够；不分派任务、不计时
 	Todo      Status = "todo"
 	Queued    Status = "queued"
 	Running   Status = "running"
@@ -30,19 +30,19 @@ func (s Status) Valid() bool {
 // Finished：进入这些状态记结束时间，不再自己动。
 func (s Status) Finished() bool { return s == Done || s == Failed || s == Cancelled }
 
-// Stage 是交付阶段：执行者交付之后由运行时（和验收人）推进；状态保持 running 直到落地完成。
-// 核心一生是 关卡 → 审阅（可选）→ 验收（部门的验收人不是运行时才有）→ 落地；落地的步骤归交付方式（gates），
-// 核心只认「落地中」（Landing）与「落地完成」。
+// Stage 是交付阶段：执行者交付之后由运行时（和验收人）推进；状态保持 running 直到应用完成。
+// 核心一生是 交付检查 → 审阅（可选）→ 验收（部门的验收人不是运行时才有）→ 应用；应用的步骤归交付方式（gates），
+// 核心只认「应用中」（Landing）与「应用完成」。
 type Stage string
 
 const (
 	StageNone   Stage = ""
-	StageGate   Stage = "gate"   // 关卡：运行时查事实
+	StageGate   Stage = "gate"   // 交付检查：运行时查事实
 	StageReview Stage = "review" // 另一个模型审阅
 	StageAccept Stage = "accept" // 等验收人（部门设置的 leader 或 user）判
 )
 
-// pr 交付方式的落地步骤（合入队列 → 已合入等发版 → 已上线）。核心不认它们的先后，只当落地中的阶段名；
+// pr 交付方式的应用步骤（合入队列 → 已合入等发版 → 已上线）。核心不认它们的先后，只当应用中的阶段名；
 // merge、release 经 Land 推进，watch、web 按它们写人话。放在这里是因为 watch、web 在 gates 之下，引用不到 gates。
 const (
 	StageMerge    Stage = "merge_queue"
@@ -50,7 +50,7 @@ const (
 	StageReleased Stage = "released"
 )
 
-// Landing 判一个阶段是不是落地中（交付方式自己的步骤）。
+// Landing 判一个阶段是不是应用中（交付方式自己的步骤）。
 func (s Stage) Landing() bool {
 	return s != StageNone && s != StageGate && s != StageReview && s != StageAccept
 }
@@ -71,9 +71,9 @@ type Event struct {
 	To Status
 	// NeedReview：GatePass 后是否先审阅。
 	NeedReview bool
-	// AcceptBy：GatePass、ReviewPass、Deliver 后要等谁验收（leader、user）；空表示不用等人，直接落地。
+	// AcceptBy：GatePass、ReviewPass、Deliver 后要等谁验收（leader、user）；空表示不用等人，直接应用。
 	AcceptBy string
-	// Land：落地的下一步（交付方式的阶段）。GatePass、ReviewPass、Accept 时为空表示当场落完、任务完成；
+	// Land：应用的下一步（交付方式的阶段）。GatePass、ReviewPass、Accept 时为空表示当场应用完成、任务完成；
 	// Land 事件把任务推到这一步，Final 为真时同时完成。
 	Land  Stage
 	Final bool
@@ -84,22 +84,22 @@ type Event struct {
 type EventKind string
 
 const (
-	Enqueue    EventKind = "enqueue"     // 进派活队列（task run）
+	Enqueue    EventKind = "enqueue"     // 进分派任务队列（task run）
 	Start      EventKind = "start"       // 执行者进程已拉起
-	ExitOK     EventKind = "exit_ok"     // 执行者正常退出，进关卡
+	ExitOK     EventKind = "exit_ok"     // 执行者正常退出，进入交付检查
 	ExitFail   EventKind = "exit_fail"   // 执行者失败且重试用尽
-	GatePass   EventKind = "gate_pass"   // 关卡通过
+	GatePass   EventKind = "gate_pass"   // 交付检查通过
 	ReviewPass EventKind = "review_pass" // 审阅通过
 	Accept     EventKind = "accept"      // 验收通过（task accept）
-	Bounce     EventKind = "bounce"      // 关卡不过、审阅打回、验收打回、落地失败：交回原执行者
-	Land       EventKind = "land"        // 落地推进一步（如已合入、已上线）
+	Bounce     EventKind = "bounce"      // 交付检查未通过、审阅打回、验收打回、应用失败：交回原执行者
+	Land       EventKind = "land"        // 应用推进一步（如已合入、已上线）
 	Block      EventKind = "block"       // 缺条件、等决策
 	Cancel     EventKind = "cancel"      // 不做了
 	Set        EventKind = "set"         // 人工改状态（task set --status）
-	Deliver    EventKind = "deliver"     // 人工放进落地（task merge：登记亲手做的 PR，或放行受阻的交付）
+	Deliver    EventKind = "deliver"     // 人工放进应用（task merge：登记亲手做的 PR，或放行受阻的交付）
 )
 
-// passTo 是过了关卡、审阅或验收之后去哪：要等人验收 → accept；交付方式有落地步骤 → 那一步；否则当场完成（阶段留在 st）。
+// passTo 是过了交付检查、审阅或验收之后去哪：要等人验收 → accept；交付方式有应用步骤 → 那一步；否则当场完成（阶段留在 st）。
 func passTo(e Event, st Stage) (State, error) {
 	switch {
 	case e.AcceptBy != "":
@@ -107,7 +107,7 @@ func passTo(e Event, st Stage) (State, error) {
 	case e.Land == "":
 		return State{Done, st}, nil
 	case !e.Land.Landing():
-		return State{}, fmt.Errorf("%q 不是落地步骤", e.Land)
+		return State{}, fmt.Errorf("%q 不是应用步骤", e.Land)
 	}
 	return State{Running, e.Land}, nil
 }
@@ -133,12 +133,12 @@ func Transition(from State, e Event) (State, error) {
 		if s == Draft || s == Todo || s == Failed || s == Blocked {
 			return State{Queued, StageNone}, nil
 		}
-		return reject("任务当前 %s，不能派活（只有 draft、todo、failed、blocked 能派）", s)
+		return reject("任务当前 %s，不能分派任务（只有 draft、todo、failed、blocked 能派）", s)
 	case Start:
 		if s == Queued {
 			return State{Running, StageNone}, nil
 		}
-		return reject("任务当前 %s，不在派活队列里，不能拉起", s)
+		return reject("任务当前 %s，不在分派任务队列里，不能拉起", s)
 	case ExitOK, ExitFail:
 		if s != Running || st != StageNone {
 			return reject("任务当前 %s/%s，没有在跑的执行者", s, st)
@@ -149,7 +149,7 @@ func Transition(from State, e Event) (State, error) {
 		return State{Failed, StageNone}, nil
 	case GatePass:
 		if !delivering || st != StageGate {
-			return reject("任务不在关卡阶段（当前 %s/%s）", s, st)
+			return reject("任务不在交付检查阶段（当前 %s/%s）", s, st)
 		}
 		if e.NeedReview {
 			return State{Running, StageReview}, nil
@@ -176,10 +176,10 @@ func Transition(from State, e Event) (State, error) {
 		return State{Queued, StageNone}, nil
 	case Land:
 		if !delivering || !st.Landing() {
-			return reject("任务不在落地中（当前 %s/%s）", s, st)
+			return reject("任务不在应用中（当前 %s/%s）", s, st)
 		}
 		if !e.Land.Landing() {
-			return reject("%q 不是落地步骤", e.Land)
+			return reject("%q 不是应用步骤", e.Land)
 		}
 		if e.Final {
 			return State{Done, e.Land}, nil
@@ -197,16 +197,16 @@ func Transition(from State, e Event) (State, error) {
 		return State{Cancelled, st}, nil
 	case Deliver:
 		if s != Todo && s != Failed && s != Blocked {
-			return reject("任务当前 %s，不能放进落地（只有 todo、failed、blocked 能放）", s)
+			return reject("任务当前 %s，不能放进应用（只有 todo、failed、blocked 能放）", s)
 		}
 		if e.AcceptBy == "" && e.Land == "" {
-			return reject("放进落地要给落地步骤")
+			return reject("放进应用要给应用步骤")
 		}
 		return passOr(e, st)
 	case Set:
 		switch e.To {
 		case Queued, Running:
-			return reject("%s 只能由运行时进入：派活用 atrium task run", e.To)
+			return reject("%s 只能由运行时进入：分派任务用 atrium task run", e.To)
 		case Todo:
 			return State{Todo, StageNone}, nil
 		case Draft:

@@ -60,7 +60,7 @@ func (l *localGit) Run(ctx context.Context, dir, name string, args ...string) (s
 	return l.Runner.Run(ctx, dir, name, args...)
 }
 
-// 关卡按工作树登记的机器取事实：本机直接 git，远程经代理（只读 git、读 choice.json）；PR 仍由服务查（假 gh）。
+// 交付检查按工作树登记的机器取事实：本机直接 git，远程经代理（只读 git、读 choice.json）；PR 仍由服务查（假 gh）。
 // 没有仓库的任务不要求工作树。
 func TestGateWhere(t *testing.T) {
 	choice := `{"title":"下一步","options":[` + strings.Repeat(`{"title":"A","gain":"g","why_now":"w","cost":"c","if_not":"i","evidence":"e"},`, 2) +
@@ -75,8 +75,8 @@ func TestGateWhere(t *testing.T) {
 		choices      int
 		note         string
 	}{
-		{"本机有仓库", false, true, true, false, ledger.Running, ledger.StageMerge, 0, "关卡通过"},
-		{"远程有仓库", true, true, true, false, ledger.Running, ledger.StageMerge, 0, "关卡通过"},
+		{"本机有仓库", false, true, true, false, ledger.Running, ledger.StageMerge, 0, "交付检查通过"},
+		{"远程有仓库", true, true, true, false, ledger.Running, ledger.StageMerge, 0, "交付检查通过"},
 		{"远程有仓库没收尾", true, true, true, true, ledger.Queued, "", 0, "未提交"},
 		{"本机无仓库", false, false, true, false, ledger.Done, ledger.StageGate, 1, "登记了选项单"},
 		{"远程无仓库", true, false, true, false, ledger.Done, ledger.StageGate, 1, "登记了选项单"},

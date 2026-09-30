@@ -718,6 +718,7 @@ type Host struct {
 
 // Perf 是一个「工具+模型」近 workers.StatWindow 次有结果的拉起（与 atrium workers 同一份统计）和此刻挡住它的不可用标记。
 type Perf struct {
+	Timing   string         `json:"timing"`
 	Combo    string         `json:"combo"`
 	Recent   []string       `json:"recent"` // 每次拉起的结果（workers.Out*），新的在前
 	OK       int            `json:"ok"`

@@ -237,6 +237,7 @@ func perfRows(stats map[string][]workers.Attempt, marks []workers.Mark) []Perf {
 		}
 		st := workers.Count(ls)
 		p.OK, p.Launches = st.OK, st.Launches
+		p.Timing = st.Timing()
 		if s, err := workers.ParseWorker(combo); err == nil {
 			for i, m := range marks {
 				if m.Covers(s) {
@@ -261,7 +262,7 @@ func perfRows(stats map[string][]workers.Attempt, marks []workers.Mark) []Perf {
 		k, ok := rows[combo]
 		if !ok {
 			k, rows[combo] = len(out), len(out)
-			out = append(out, Perf{Combo: combo, Recent: []string{}, Marks: []workers.Mark{}})
+			out = append(out, Perf{Combo: combo, Recent: []string{}, Marks: []workers.Mark{}, Timing: (workers.Stat{}).Timing()})
 		}
 		out[k].Marks = append(out[k].Marks, m)
 	}

@@ -277,8 +277,8 @@ function renderLegion(d) {
     : `<div class="empty">还没有登记机器</div>`;
   const outName = { ok: "交付", bounce: "被交回", quota: "额度", setup: "起不来", fail: "其他失败" };
   const markText = m => `${m.host} ${m.reason} · ${m.until ? day(m.until) + " " + clock(m.until) + " 恢复" : m.kind === "probe" ? "自检跑通后自动解除" : "等人处理"}`;
-  const perf = d.perf.length ? `<div class="tablewrap"><table class="perf"><tr><th>组合</th><th>近 ${d.window} 次拉起，新的在左</th><th>交付</th></tr>${d.perf.map(p => `
-    <tr><td>${esc(p.combo)}${p.marks.map(m => `<span class="mark" title="${esc(m.evidence || "")}">${esc(markText(m))}</span>`).join("")}</td><td><span class="pips runs">${p.recent.map(o => `<i class="${o}" title="${outName[o]}"></i>`).join("")}</span></td><td class="num">${p.launches ? p.ok + "/" + p.launches : ""}</td></tr>`).join("")}</table>
+  const perf = d.perf.length ? `<div class="tablewrap"><table class="perf"><tr><th>组合</th><th>近 ${d.window} 次拉起，新的在左</th><th>交付</th><th>用时</th></tr>${d.perf.map(p => `
+    <tr><td>${esc(p.combo)}${p.marks.map(m => `<span class="mark" title="${esc(m.evidence || "")}">${esc(markText(m))}</span>`).join("")}</td><td><span class="pips runs">${p.recent.map(o => `<i class="${o}" title="${outName[o]}"></i>`).join("")}</span></td><td class="num">${p.launches ? p.ok + "/" + p.launches : ""}</td><td>${esc(p.timing)}</td></tr>`).join("")}</table>
     <div class="legend"><i class="ok"></i>交付<i class="bounce"></i>被交回<i class="fail"></i>没拉起来（额度、起不来、其他）</div></div>`
     : `<div class="empty">还没有拉起记录</div>`;
   $("#page").innerHTML = `<h1 class="hello">执行者</h1>

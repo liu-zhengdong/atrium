@@ -337,9 +337,9 @@ func dryText(r RunResult) string {
 		if c.ID == v.Recommended {
 			mark = "→ "
 		}
-		extra := ""
+		extra := "  " + c.Stat.Timing()
 		if c.Spare != nil {
-			extra = fmt.Sprintf("  富余 %.1f%%", *c.Spare)
+			extra += fmt.Sprintf("  富余 %.1f%%", *c.Spare)
 		}
 		if c.Busy {
 			extra += "  正忙"
@@ -350,7 +350,7 @@ func dryText(r RunResult) string {
 		if c.Eligible {
 			fmt.Fprintf(&b, "%s%d. %s  trust=%s  max_risk=%s%s\n", mark, c.Rank, c.ID, c.Trust, c.MaxRisk, extra)
 		} else {
-			fmt.Fprintf(&b, "%s×  %s：%s\n", mark, c.ID, strings.Join(c.Refusals, "；"))
+			fmt.Fprintf(&b, "%s×  %s：%s\n", mark, c.ID, strings.Join(c.Refusals, "；")+"  "+c.Stat.Timing())
 		}
 	}
 	fmt.Fprintf(&b, "推荐：%s\n", v.Reason)

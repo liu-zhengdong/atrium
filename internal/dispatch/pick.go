@@ -23,8 +23,9 @@ type Fact struct {
 	Installed   bool
 	Unavailable string // 本机上接不了活的原因：不可用标记（workers.Blocked）或看出没登录
 	Exclusive   bool
-	Preferred   int // 技能里的优先顺序（1 起）；0 不是
-	Fails       int // 这个「工具+模型」近 ShakyWindow 次拉起里启动失败几次（workers.Fails）
+	Preferred   int          // 技能里的优先顺序（1 起）；0 不是
+	Stat        workers.Stat // 近 StatWindow 次表现，仅供展示
+	Fails       int          // 这个「工具+模型」近 ShakyWindow 次拉起里启动失败几次（workers.Fails）
 }
 
 // 近 ShakyWindow 次拉起里启动失败（额度、起不来、其他）≥ ShakyFails 次的候选往后排：只影响排序、不排除；
@@ -49,15 +50,16 @@ type PickInput struct {
 
 // Candidate 是 --dry-run 列出的一位候选。
 type Candidate struct {
-	ID       string   `json:"id"`
-	Trust    string   `json:"trust"`
-	MaxRisk  string   `json:"max_risk"`
-	Eligible bool     `json:"eligible"`
-	Refusals []string `json:"refusals,omitempty"`
-	Busy     bool     `json:"busy,omitempty"`
-	Spare    *float64 `json:"spare,omitempty"` // 富余百分点（与 atrium quota 同一个数）；没数据为空
-	Rank     int      `json:"rank,omitempty"`  // 能接的里排第几（1 起）
-	Fails    int      `json:"fails,omitempty"` // 近 ShakyWindow 次拉起里启动失败几次
+	ID       string       `json:"id"`
+	Stat     workers.Stat `json:"stat"`
+	Trust    string       `json:"trust"`
+	MaxRisk  string       `json:"max_risk"`
+	Eligible bool         `json:"eligible"`
+	Refusals []string     `json:"refusals,omitempty"`
+	Busy     bool         `json:"busy,omitempty"`
+	Spare    *float64     `json:"spare,omitempty"` // 富余百分点（与 atrium quota 同一个数）；没数据为空
+	Rank     int          `json:"rank,omitempty"`  // 能接的里排第几（1 起）
+	Fails    int          `json:"fails,omitempty"` // 近 ShakyWindow 次拉起里启动失败几次
 }
 
 // PickView 是挑执行者的结论：候选（能接的按推荐顺序在前）、推荐与理由。
@@ -97,7 +99,7 @@ func Pick(in PickInput) PickView {
 	var ok, no []row
 	anyData := false
 	for i, f := range in.Facts {
-		c := Candidate{ID: f.ID, Trust: f.Trust, MaxRisk: f.MaxRisk, Fails: f.Fails}
+		c := Candidate{ID: f.ID, Trust: f.Trust, MaxRisk: f.MaxRisk, Fails: f.Fails, Stat: f.Stat}
 		if f.Problem != "" {
 			c.Refusals = append(c.Refusals, f.Problem)
 		}

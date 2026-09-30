@@ -524,3 +524,18 @@ func TestNoteUnknown(t *testing.T) {
 		t.Fatalf("草稿满了应报错：%v", err)
 	}
 }
+
+func TestPickDurationDisplayOnly(t *testing.T) {
+	median, longest := int64(600000), int64(3000000)
+	stat := workers.Stat{MedianMS: &median, MaxMS: &longest}
+	v := Pick(PickInput{Risk: "low", Facts: []Fact{
+		{ID: "slow", Installed: true, Stat: stat}, {ID: "fast", Installed: true},
+	}})
+	if v.Recommended != "slow" || v.Candidates[0].Stat.Timing() != stat.Timing() {
+		t.Fatalf("用时只展示，不改推荐：%+v", v)
+	}
+	text := dryText(RunResult{Task: ledger.Task{ID: "t1"}, Pick: &v})
+	if !strings.Contains(text, "用时中位 10 分 · 最长 50 分") || !strings.Contains(text, "用时中位 — · 最长 —") {
+		t.Fatal(text)
+	}
+}

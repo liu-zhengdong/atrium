@@ -4,6 +4,7 @@ import (
 	"context"
 	"slices"
 
+	"github.com/liu-zhengdong/atrium/internal/app"
 	"github.com/liu-zhengdong/atrium/internal/ledger"
 	"github.com/liu-zhengdong/atrium/internal/workers"
 )
@@ -23,9 +24,17 @@ func (d *dispatcher) view(ctx context.Context, t ledger.Task, risk string, exclu
 	if err != nil {
 		return PickView{}, err
 	}
-	stats, err := workers.Stats(ctx, db)
+	stats, issues, err := workers.StatsIssues(ctx, db)
 	if err != nil {
-		return PickView{}, err
+		return PickView{}, app.Global(err)
+	}
+	ids := make([]string, 0, len(issues))
+	for id := range issues {
+		ids = append(ids, id)
+	}
+	slices.Sort(ids)
+	if err := ledger.EachTask(ctx, db, "workers.stats", ids, func(id string) string { return id }, func(id string) error { return issues[id] }); err != nil {
+		return PickView{}, app.Global(err)
 	}
 	var facts []Fact
 	seen := map[string]bool{}
@@ -89,7 +98,7 @@ func (d *dispatcher) view(ctx context.Context, t ledger.Task, risk string, exclu
 	}
 	sp, err := spares(ctx, d.env)
 	if err != nil {
-		return PickView{}, err
+		return PickView{}, app.Global(err)
 	}
 	busy, err := busyTools(ctx, db)
 	if err != nil {

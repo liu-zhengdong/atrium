@@ -46,6 +46,7 @@ type dispatcher struct {
 	mu    sync.Mutex
 	procs map[string]*proc
 	kick  chan struct{}
+	fatal chan error
 	wg    sync.WaitGroup
 	// retired：本实例的派活循环已退出（服务停下或平滑重启）。之后看到的退出不收尾，交给新服务接管时按日志收。
 	retired atomic.Bool
@@ -60,7 +61,7 @@ func get(env *app.Env) *dispatcher {
 	curMu.Lock()
 	defer curMu.Unlock()
 	if cur == nil || cur.env != env {
-		cur = &dispatcher{env: env, procs: map[string]*proc{}, kick: make(chan struct{}, 1)}
+		cur = &dispatcher{env: env, procs: map[string]*proc{}, kick: make(chan struct{}, 1), fatal: make(chan error, 1)}
 	}
 	return cur
 }
@@ -104,6 +105,8 @@ func Run(ctx context.Context, env *app.Env) error {
 			return nil
 		case <-ch:
 		case <-d.kick:
+		case err := <-d.fatal:
+			return err
 		case <-time.After(10 * time.Second): // 暂停解除、额度恢复、机器空出来不经账本
 		}
 	}
@@ -122,59 +125,62 @@ func (d *dispatcher) reap(ctx context.Context) error {
 		list = append(list, p)
 	}
 	d.mu.Unlock()
-	for _, p := range list {
+	return ledger.EachTask(ctx, d.env.DB, "dispatch.reap", list, func(p *proc) string { return p.task }, func(p *proc) error {
 		if p.stopReason() != "" {
-			continue
+			return nil
 		}
 		t, err := ledger.Get(ctx, d.env.DB, p.task)
 		if err != nil {
 			return err
 		}
+		if t.Status != ledger.Running || t.Stage != ledger.StageNone {
+			p.setStop("gone")
+			d.kill(ctx, p)
+			return nil
+		}
 		last, err := workers.LastRun(ctx, d.env.DB, p.task)
 		if err != nil {
+			if app.InfrastructureError(ctx, d.env.DB, err) == nil {
+				p.setStop("gone")
+				d.kill(ctx, p)
+			}
 			return err
 		}
-		if t.Status == ledger.Running && t.Stage == ledger.StageNone && last != nil && last.N == p.run.N {
-			continue
+		if last != nil && last.N == p.run.N {
+			return nil
 		}
 		p.setStop("gone")
 		d.kill(ctx, p)
-	}
-	return nil
+		return nil
+	})
 }
 
-// pump 按队列顺序派一轮。依赖还没完成的跳过，依赖失败或取消的转受阻；单件任务派不出去的原因（没人能接、仓库不对……）
-// 转受阻交处理人，其余错误让服务停下。
+// pump 按队列顺序派一轮，所有按件动作经账本统一隔离错误。
 func (d *dispatcher) pump(ctx context.Context) error {
 	items, err := queued(ctx, d.env.DB)
 	if err != nil {
 		return err
 	}
-	for _, it := range items {
-		if ctx.Err() != nil {
-			return nil
+	return ledger.EachTask(ctx, d.env.DB, "dispatch.pump", items, func(it item) string { return it.Task.ID }, func(it item) error {
+		if it.Err != nil {
+			return it.Err
+		}
+		if err := it.Opts.check(); err != nil {
+			return err
 		}
 		deps, err := ledger.Deps(ctx, d.env.DB, it.Task.ID)
 		if err != nil {
 			return err
 		}
-		// 有失败或取消的依赖就转受阻（等不到了）；还有没完成的留在队列里，这一轮跳过。
 		waiting, broken := ledger.DepGate(deps)
-		switch {
-		case len(broken) > 0:
-			err = d.block(ctx, it.Task.ID, "依赖的 "+ledger.BrokenText(broken)+"，不再自动派")
-		case len(waiting) > 0:
-			continue
-		default:
-			if err = d.try(ctx, it); err != nil && isAPI(err) {
-				err = d.block(ctx, it.Task.ID, "派不出去："+err.Error())
-			}
+		if len(broken) > 0 {
+			return d.block(ctx, it.Task.ID, "依赖的 "+ledger.BrokenText(broken)+"，不再自动派")
 		}
-		if err != nil {
-			return err
+		if len(waiting) > 0 {
+			return nil
 		}
-	}
-	return nil
+		return d.try(ctx, it)
+	})
 }
 
 func (d *dispatcher) block(ctx context.Context, id, why string) error {
@@ -489,11 +495,18 @@ func (d *dispatcher) track(p *proc, wait func() int) {
 		if d.retired.Load() {
 			return
 		}
-		if err := d.exited(context.Background(), p, code); err != nil {
-			d.env.Log.Error("执行者退出后收尾失败", "task", p.task, "err", err)
-		}
-		if err := noteUnknown(context.Background(), d.env.DB, p.task, p.run); err != nil {
-			d.env.Log.Error("记日志解析草稿失败", "task", p.task, "err", err)
+		err := ledger.EachTask(context.Background(), d.env.DB, "dispatch.exit", []*proc{p}, func(p *proc) string { return p.task }, func(p *proc) error {
+			if err := d.exited(context.Background(), p, code); err != nil {
+				return err
+			}
+			return noteUnknown(context.Background(), d.env.DB, p.task, p.run)
+		})
+		if err != nil {
+			d.env.Log.Error("执行者退出后收尾发生全局错误", "task", p.task, "err", err)
+			select {
+			case d.fatal <- err:
+			default:
+			}
 		}
 		d.wake()
 	}()
@@ -729,16 +742,16 @@ func (d *dispatcher) adopt(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	for _, t := range list {
+	return ledger.EachTask(ctx, db, "dispatch.adopt", list, func(t ledger.Task) string { return t.ID }, func(t ledger.Task) error {
 		if t.Stage != ledger.StageNone || d.procOf(t.ID) != nil {
-			continue
+			return nil
 		}
 		run, err := workers.LastRun(ctx, db, t.ID)
 		if err != nil {
 			return err
 		}
 		if run == nil {
-			continue
+			return nil
 		}
 		w, err := workers.Resolve(ctx, db, run.Worker)
 		if err != nil {
@@ -747,7 +760,7 @@ func (d *dispatcher) adopt(ctx context.Context) error {
 		p := &proc{task: t.ID, run: *run, adapter: w.Adapter, remote: run.Host != LocalHost, pending: map[string]bool{}, done: make(chan struct{})}
 		if p.remote {
 			d.track(p, d.remoteWaiter(p, run.RemoteRun))
-			continue
+			return nil
 		}
 		pid := run.PID
 		d.track(p, func() int {
@@ -756,8 +769,8 @@ func (d *dispatcher) adopt(ctx context.Context) error {
 			}
 			return workers.ExitUnknown
 		})
-	}
-	return nil
+		return nil
+	})
 }
 
 func jsonUnmarshal(s string, v any) error { return json.Unmarshal([]byte(s), v) }

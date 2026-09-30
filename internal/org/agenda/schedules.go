@@ -5,14 +5,12 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/liu-zhengdong/atrium/internal/api"
 	"github.com/liu-zhengdong/atrium/internal/app"
 	"github.com/liu-zhengdong/atrium/internal/ledger"
 	"github.com/liu-zhengdong/atrium/internal/org"
-	"github.com/liu-zhengdong/atrium/internal/pause"
 	"github.com/liu-zhengdong/atrium/internal/store"
 )
 
@@ -33,7 +31,6 @@ const DispatchFailed = "派活失败"
 const (
 	maxScheduleTitle  = 150
 	maxScheduleDetail = 8000
-	dueBatch          = 100
 	recentChoices     = 5 // 调研轮附最近几份拍过板的选项单
 )
 
@@ -61,6 +58,7 @@ type Schedule struct {
 	CreatedBy string `json:"created_by"`
 	CreatedAt int64  `json:"created_at"`
 	atMinute  *int
+	scanErr   error // 后台列表把单条字段扫描错误留在该记录上
 }
 
 type NewSchedule struct {
@@ -361,100 +359,4 @@ func RunNow(ctx context.Context, env *app.Env, id string, loc *time.Location) (l
 	}
 	now := store.Now()
 	return runRound(ctx, env, x, 0, "手动生成一轮", now, loc)
-}
-
-// Tick 巡检一次到点的周期任务。暂停范围内的不动（下一轮时间不变，恢复后只补一轮）。
-func Tick(ctx context.Context, env *app.Env, now int64, loc *time.Location) error {
-	rows, err := env.DB.QueryContext(ctx, `SELECT `+scheduleCols+` FROM schedules WHERE next_at <= ? ORDER BY next_at LIMIT ?`, now, dueBatch)
-	if err != nil {
-		return err
-	}
-	var due []Schedule
-	for rows.Next() {
-		x, err := scanSchedule(rows)
-		if err != nil {
-			rows.Close()
-			return err
-		}
-		due = append(due, x)
-	}
-	rows.Close()
-	for _, x := range due {
-		chain, err := org.Ancestors(ctx, env.DB, x.Org)
-		if err != nil {
-			return err
-		}
-		if paused, err := env.Pause.Paused(ctx, pause.Scope{Orgs: chain}); err != nil || paused {
-			if err != nil {
-				return err
-			}
-			continue
-		}
-		open, err := openRound(ctx, env.DB, x)
-		if err != nil {
-			return err
-		}
-		v := Due(x.NextAt, x.EveryMs, x.atMinute, open, now, loc)
-		missed := ""
-		if v.Missed > 0 {
-			missed = fmt.Sprintf("（停机错过 %d 轮，只补这一轮）", v.Missed)
-		}
-		day := time.UnixMilli(now).In(loc).Format("01-02 15:04")
-		switch v.Kind {
-		case "skip":
-			if _, err := env.DB.ExecContext(ctx, `UPDATE schedules SET next_at = ?, skips = skips + 1, last_note = ? WHERE id = ?`,
-				v.Next, fmt.Sprintf("%s 上一轮 %s 没结束，跳过%s", day, v.Open, missed), x.ID); err != nil {
-				return err
-			}
-		case "run":
-			if _, err := runRound(ctx, env, x, v.Next, day+" 到点生成"+missed, now, loc); err != nil {
-				env.Log.Error("周期任务这一轮没派出去", "schedule", x.ID, "err", err)
-			}
-		}
-	}
-	return nil
-}
-
-// 有周期任务新建时叫醒巡检循环重新算等多久。
-var (
-	wakeMu sync.Mutex
-	wakeCh = make(chan struct{}, 1)
-)
-
-func wake() {
-	wakeMu.Lock()
-	defer wakeMu.Unlock()
-	select {
-	case wakeCh <- struct{}{}:
-	default:
-	}
-}
-
-// Run 是周期任务的后台循环：睡到最早的下一轮（最多一分钟），醒来巡检一次。
-func Run(ctx context.Context, env *app.Env) error {
-	for {
-		if err := Tick(ctx, env, store.Now(), time.Local); err != nil {
-			if ctx.Err() != nil {
-				return nil
-			}
-			return err
-		}
-		wait := time.Minute
-		var next sql.NullInt64
-		if err := env.DB.QueryRowContext(ctx, `SELECT min(next_at) FROM schedules`).Scan(&next); err != nil {
-			if ctx.Err() != nil {
-				return nil
-			}
-			return err
-		}
-		if next.Valid {
-			wait = min(wait, max(time.Duration(next.Int64-store.Now())*time.Millisecond, time.Second))
-		}
-		select {
-		case <-ctx.Done():
-			return nil
-		case <-wakeCh:
-		case <-time.After(wait):
-		}
-	}
 }

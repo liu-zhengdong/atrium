@@ -80,13 +80,10 @@ func (q *Queue) Drain(ctx context.Context) error {
 		if err != nil || !ok {
 			return err
 		}
-		if err := q.Merge(ctx, t); err != nil {
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			if berr := gates.BlockOnError(ctx, q.DB, q.Log, t.ID, "合入", err); berr != nil {
-				return berr
-			}
+		if err := ledger.EachTask(ctx, q.DB, "merge", []ledger.Task{t}, func(t ledger.Task) string { return t.ID }, func(t ledger.Task) error {
+			return q.Merge(ctx, t)
+		}); err != nil {
+			return err
 		}
 	}
 }
@@ -110,11 +107,16 @@ func (q *Queue) next(ctx context.Context) (ledger.Task, bool, error) {
 	}
 	for _, it := range Order(items) {
 		t := byID[it.Task]
-		paused, err := gates.Paused(ctx, q.DB, q.Pause, t, "")
+		ready := false
+		err := ledger.EachTask(ctx, q.DB, "merge.pause", []ledger.Task{t}, func(t ledger.Task) string { return t.ID }, func(t ledger.Task) error {
+			paused, err := gates.Paused(ctx, q.DB, q.Pause, t, "")
+			ready = err == nil && !paused
+			return err
+		})
 		if err != nil {
 			return ledger.Task{}, false, err
 		}
-		if !paused {
+		if ready {
 			return t, true, nil
 		}
 	}

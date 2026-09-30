@@ -184,17 +184,25 @@ func Tick(ctx context.Context, env *app.Env) error {
 	}
 	h := current()
 	now := store.Now()
-	for _, t := range tasks {
-		if err := checkTask(ctx, env, active, h, t, now); err != nil {
-			var ae *api.Error
-			if errors.As(err, &ae) && ae.Code == "conflict" {
-				// 拉起者同时在收尾（进程刚退出）：以账本为准，这一轮不动它。
-				env.Log.Info("巡检跳过：任务状态已被别处改了", "task", t.ID, "err", err)
-				continue
+	err = ledger.EachTask(ctx, db, "watch", tasks, func(t ledger.Task) string { return t.ID }, func(t ledger.Task) error {
+		err := checkTask(ctx, env, active, h, t, now)
+		var ae *api.Error
+		if errors.As(err, &ae) && ae.Code == "conflict" {
+			// 并发状态变化不是任务故障；只在账本确已变化时跳过。
+			latest, e := ledger.Get(ctx, db, t.ID)
+			if e != nil {
+				return e
 			}
-			return fmt.Errorf("巡检 %s：%w", t.ID, err)
+			if latest.Status != t.Status || latest.Stage != t.Stage {
+				return nil
+			}
 		}
+		return err
+	})
+	if err != nil {
+		return err
 	}
+
 	sweep()
 	return nil
 }

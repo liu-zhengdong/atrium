@@ -191,51 +191,26 @@ func (g *Gate) Sweep(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		for _, t := range tasks {
+		err = ledger.EachTask(ctx, g.DB, "gates."+string(stage), tasks, func(t ledger.Task) string { return t.ID }, func(t ledger.Task) error {
 			if paused, err := Paused(ctx, g.DB, g.Pause, t, t.Host); err != nil || paused {
-				if err != nil {
-					return err
-				}
-				continue
+				return err
 			}
-			step := g.gate
 			if stage == ledger.StageReview {
-				step = g.review
+				return g.review(ctx, t)
 			}
-			if err := step(ctx, t); err != nil {
-				if ctx.Err() != nil {
-					return nil
-				}
-				if berr := BlockOnError(ctx, g.DB, g.Log, t.ID, stageName(stage), err); berr != nil {
-					return berr
-				}
-			}
+			return g.gate(ctx, t)
+		})
+		if err != nil {
+			return err
 		}
+
 	}
 	return nil
-}
-
-func stageName(s ledger.Stage) string {
-	if s == ledger.StageReview {
-		return "审阅"
-	}
-	return "关卡"
 }
 
 // Block 把任务转受阻并记原因（负责人会收到 task.status 事件）。
 func Block(ctx context.Context, db *store.DB, id, reason string) (ledger.Task, error) {
 	return ledger.Apply(ctx, db, id, ledger.Event{Kind: ledger.Block}, Actor, reason)
-}
-
-// BlockOnError 把单件任务的出错转成受阻；任务已被别人改了状态（409）只记日志。库出错才返回。
-func BlockOnError(ctx context.Context, db *store.DB, log *slog.Logger, id, what string, cause error) error {
-	_, err := Block(ctx, db, id, fmt.Sprintf("%s出错：%v", what, cause))
-	var ae *api.Error
-	if errors.As(err, &ae) && ae.Code == "conflict" {
-		log.Warn(what+"出错，任务状态已变", "task", id, "err", cause)
-		return nil
-	}
-	return err
 }
 
 func record(ctx context.Context, db *store.DB, id, kind string, body any) error {

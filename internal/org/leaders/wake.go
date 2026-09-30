@@ -140,13 +140,13 @@ func (h *hub) round(ctx context.Context, env *app.Env) error {
 	h.mu.Lock()
 	due := Due(pending, h.running, store.Now(), h.batch)
 	h.mu.Unlock()
-	for _, p := range due {
+	return app.Each(ctx, env.DB, due, func(p Pending) error {
 		paused, err := h.paused(ctx, env, p.Leader)
 		if err != nil {
 			return err
 		}
 		if paused {
-			continue
+			return nil
 		}
 		h.mu.Lock()
 		h.running[p.Leader] = true
@@ -159,8 +159,13 @@ func (h *hub) round(ctx context.Context, env *app.Env) error {
 			delete(h.running, p.Leader)
 			h.mu.Unlock()
 		}(p)
-	}
-	return nil
+		return nil
+	}, func(p Pending, cause error) error {
+		// 这一批无法在该负责人处处理，转秘书；原记录不删除，后续不再叫醒这位。
+		env.Log.Warn("负责人待处理批次出错，转秘书", "leader", p.Leader, "err", cause)
+		_, err := events.Retarget(ctx, env.DB, p.IDs, p.Leader, org.Secretary)
+		return err
+	})
 }
 
 func (h *hub) paused(ctx context.Context, env *app.Env, leader string) (bool, error) {

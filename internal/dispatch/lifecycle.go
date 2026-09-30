@@ -3,11 +3,13 @@ package dispatch
 import (
 	"context"
 	"errors"
+	"time"
+
 	"github.com/liu-zhengdong/atrium/internal/api"
 	"github.com/liu-zhengdong/atrium/internal/app"
 	"github.com/liu-zhengdong/atrium/internal/ledger"
+	"github.com/liu-zhengdong/atrium/internal/platform"
 	"github.com/liu-zhengdong/atrium/internal/workers"
-	"time"
 )
 
 // Run 是派活循环：先接管服务重启前在跑的执行者，再等账本变化或定时，每次按队列顺序派。
@@ -17,6 +19,7 @@ func Run(ctx context.Context, env *app.Env) error {
 	if err := d.adopt(ctx); err != nil {
 		return err
 	}
+	needReclaim := true
 	for {
 		ch := ledger.Changed()
 		if err := d.reap(ctx); err != nil {
@@ -24,6 +27,15 @@ func Run(ctx context.Context, env *app.Env) error {
 				return nil
 			}
 			return err
+		}
+		if needReclaim {
+			if err := d.reclaim(ctx); err != nil {
+				if ctx.Err() != nil {
+					return nil
+				}
+				return err
+			}
+			needReclaim = d.reclaimAfter != 0 || d.reclaimDeferred
 		}
 		if err := d.pump(ctx); err != nil {
 			if ctx.Err() != nil {
@@ -35,7 +47,9 @@ func Run(ctx context.Context, env *app.Env) error {
 		case <-ctx.Done():
 			return nil
 		case <-ch:
+			needReclaim = true
 		case <-d.kick:
+			needReclaim = true
 		case <-time.After(10 * time.Second): // 暂停解除、额度恢复、机器空出来不经账本
 		}
 	}
@@ -73,4 +87,18 @@ func (d *dispatcher) reap(ctx context.Context) error {
 		d.kill(ctx, p)
 	}
 	return nil
+}
+
+// adoptProc 跟着已存在的进程等退出，本机与远程共用启动接管和终态补清的路径。
+func (d *dispatcher) adoptProc(p *proc) {
+	if p.remote {
+		d.track(p, d.remoteWaiter(p, p.run.RemoteRun))
+		return
+	}
+	d.track(p, func() int {
+		for platform.Alive(p.run.PID) {
+			time.Sleep(2 * time.Second)
+		}
+		return workers.ExitUnknown
+	})
 }

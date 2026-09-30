@@ -42,11 +42,13 @@ const actor = "runtime"
 
 // dispatcher 是服务进程里派活的内存状态：本机在跑的执行者进程。
 type dispatcher struct {
-	env   *app.Env
-	mu    sync.Mutex
-	procs map[string]*proc
-	kick  chan struct{}
-	wg    sync.WaitGroup
+	env             *app.Env
+	mu              sync.Mutex
+	procs           map[string]*proc
+	kick            chan struct{}
+	wg              sync.WaitGroup
+	reclaimAfter    int64 // 遗留工作树扫描的分页游标，不随任务总数增长
+	reclaimDeferred bool  // 本轮有进程未退或代理离线，需要继续巡检
 	// retired：本实例的派活循环已退出（服务停下或平滑重启）。之后看到的退出不收尾，交给新服务接管时按日志收。
 	retired atomic.Bool
 }
@@ -764,17 +766,7 @@ func (d *dispatcher) adopt(ctx context.Context) error {
 			return fmt.Errorf("接管 %s：%w", t.ID, err)
 		}
 		p := &proc{task: t.ID, run: *run, adapter: w.Adapter, remote: run.Host != LocalHost, pending: map[string]bool{}, done: make(chan struct{})}
-		if p.remote {
-			d.track(p, d.remoteWaiter(p, run.RemoteRun))
-			continue
-		}
-		pid := run.PID
-		d.track(p, func() int {
-			for platform.Alive(pid) {
-				time.Sleep(2 * time.Second)
-			}
-			return workers.ExitUnknown
-		})
+		d.adoptProc(p)
 	}
 	return nil
 }

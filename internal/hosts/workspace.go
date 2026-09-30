@@ -4,6 +4,8 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+
+	"github.com/liu-zhengdong/atrium/internal/worktree"
 )
 
 // worktree 在代理数据目录里克隆仓库（已有就 fetch）并为这个任务建工作树。
@@ -20,7 +22,11 @@ func (a *Agent) worktree(ctx context.Context, as Assignment) (string, error) {
 	} else if err := a.git(ctx, clone, "fetch", "--quiet", "origin"); err != nil {
 		return "", err
 	}
-	if err := a.git(ctx, clone, "worktree", "add", "--quiet", "-B", as.Branch, wt, "origin/"+as.Base); err != nil {
+	base, err := worktree.Base(ctx, clone, as.Branch, "origin/"+as.Base, a.workspaceRun)
+	if err != nil {
+		return "", err
+	}
+	if err := a.git(ctx, clone, "worktree", "add", "--quiet", "-B", as.Branch, wt, base); err != nil {
 		return "", err
 	}
 	return wt, nil

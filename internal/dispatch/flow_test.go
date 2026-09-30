@@ -591,7 +591,10 @@ func flowRemote(t *testing.T, repo string) {
 		os.WriteFile(r.Log, []byte(`{"type":"result","is_error":false,"result":"远程做完了"}`+"\n"), 0o600)
 		return 1, 4242, "/agent/repos/owner-name-" + r.Task, nil
 	}
-	waitRemote = func(context.Context, *app.Env, string, int) (int, error) { return <-exit, nil }
+	waitRemote = func(context.Context, *app.Env, string, int) (hosts.Exit, error) {
+		code := <-exit
+		return hosts.Exit{Code: &code}, nil
+	}
 	tk, _ := ledger.Add(ctx, env.DB, ledger.NewTask{Title: "远程活", Repo: repo}, "u1")
 	if _, err := Enqueue(ctx, env, tk.ID, Options{Worker: "claude"}, "u1"); err != nil {
 		t.Fatal(err)
@@ -824,5 +827,77 @@ func TestEnqueueSetsWorker(t *testing.T) {
 	ledger.Apply(ctx, env.DB, tk.ID, ledger.Event{Kind: ledger.Set, To: ledger.Failed}, "u1", "")
 	if got, err := Enqueue(ctx, env, tk.ID, Options{}, "u1"); err != nil || got.Worker != "" {
 		t.Fatalf("自动挑时执行者应留空：%+v %v", got, err)
+	}
+}
+
+// Lost 即使日志声称成功也不能进关卡，沿现有临时退出路径有界重试。
+func TestRemoteLostRetries(t *testing.T) {
+	env, d := setup(t)
+	ctx := context.Background()
+	oldLaunch, oldWait := launchRemote, waitRemote
+	t.Cleanup(func() { launchRemote, waitRemote = oldLaunch, oldWait })
+	launchRemote = func(_ context.Context, _ *app.Env, _ string, r Remote) (int, int, string, error) {
+		return 2, 4242, t.TempDir(), nil
+	}
+	waitRemote = func(context.Context, *app.Env, string, int) (hosts.Exit, error) { return hosts.Exit{Lost: true}, nil }
+	tk, err := ledger.Add(ctx, env.DB, ledger.NewTask{Title: "丢失远程轮次", Dir: t.TempDir()}, "u1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ledger.Apply(ctx, env.DB, tk.ID, ledger.Event{Kind: ledger.Enqueue}, "u1", ""); err != nil {
+		t.Fatal(err)
+	}
+	tk, err = ledger.Get(ctx, env.DB, tk.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, err := workers.Resolve(ctx, env.DB, "claude")
+	if err != nil {
+		t.Fatal(err)
+	}
+	log := filepath.Join(t.TempDir(), "run.log")
+	os.WriteFile(log, []byte(`{"type":"result","is_error":false,"result":"ok"}`), 0o600)
+	run := workers.Run{N: 1, Worker: "claude", Host: "h2", PID: 4242, Log: log, Dir: tk.Dir, Why: workers.WhyFirst}
+	if err := d.record(ctx, tk, run); err != nil {
+		t.Fatal(err)
+	}
+	p := &proc{task: tk.ID, run: run, adapter: w.Adapter, remote: true}
+	code := d.remoteWaiter(p, 1)()
+	// 不启动后台等待：重试拉起成功后立即退休，避免假退出无限连跑。
+	d.retired.Store(true)
+	if err := d.exited(ctx, p, code); err != nil {
+		t.Fatal(err)
+	}
+	d.wg.Wait()
+	last, err := workers.LastRun(ctx, env.DB, tk.ID)
+	if err != nil || last.N != 2 || last.Why != workers.WhySame {
+		t.Fatalf("未重试：%+v %v", last, err)
+	}
+	history, err := ledger.History(ctx, env.DB, tk.ID, 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, h := range history {
+		if h.Kind == "exit_ok" {
+			t.Fatal("Lost 进了关卡")
+		}
+		if h.Kind == "exit" {
+			var x workers.Exit
+			if err := jsonUnmarshal(h.Body, &x); err != nil {
+				t.Fatal(err)
+			}
+			if x.Outcome != workers.OutFail || !strings.Contains(x.Reason, "退出不明") {
+				t.Fatalf("错误退出记录：%+v", x)
+			}
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("缺少退出记录")
+	}
+	marks, err := workers.Marks(ctx, env.DB, store.Now())
+	if err != nil || len(marks) != 0 {
+		t.Fatalf("不应标不可用：%+v %v", marks, err)
 	}
 }

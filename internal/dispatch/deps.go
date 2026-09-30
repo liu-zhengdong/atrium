@@ -37,14 +37,8 @@ var (
 	launchRemote = func(ctx context.Context, env *app.Env, host string, r Remote) (run, pid int, dir string, err error) {
 		return hosts.Launch(ctx, env, host, r)
 	}
-	// waitRemote 等远程运行退出，返回退出码（不可得为 workers.ExitUnknown）。服务重启后照样能等。
-	waitRemote = func(ctx context.Context, env *app.Env, task string, run int) (int, error) {
-		x, err := hosts.WaitExit(ctx, env, task, run)
-		if err != nil || x.Code == nil {
-			return workers.ExitUnknown, err
-		}
-		return *x.Code, nil
-	}
+	// waitRemote 保留远程退出码与 Lost；服务重启后照样能等。
+	waitRemote = hosts.WaitExit
 	stopRemote = hosts.Stop
 	spares     = quota.Spares
 	accountOf  = quota.AccountOf

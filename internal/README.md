@@ -39,7 +39,6 @@ Go 代码怎么分包、包之间怎么调用、并行开发时各自改哪里�
 | `gates` | 完成 | 交付方式（`delivery.go`：pr、local、dir、choice、message 各自的提示词、关卡、落地；local 的关卡与落地在 `local.go`）；查事实、判关卡、审阅（建审阅任务经 `gates.Enqueue` 派出）；等验收与 `task accept/reject`；档案经 `workers.Resolve`；按工作树登记的机器查 git（远程经 `hosts.Ask`），PR 由服务查；与 dispatch 的经历约定见 `gates/records.go` | — |
 | `gates/skillcheck` | 完成 | 技能声明的交付检查：技能的 `checks` 写检查名（`article`、`video`），关卡在本机工作目录里查表自己跑（构建与明暗截图；ffprobe、响度、第一帧不空白、联系表），产物放任务目录、结论与路径记进经历；每项有时限，跑不起来（缺工具、工作目录在远程）转受阻；org 保存技能时经 `Validate` 校验名字 | — |
 | `merge` | 完成 | pr 交付方式的落地第一段：合入队列、快检查；`task merge`（登记亲手做的 PR、放行受阻的交付；放行的人判不了这个部门的验收时先等验收）；快检查进程经 `watch.Track` 登记 | — |
-| `worktree` | 完成 | 本机与代理共用的 Git 工作树删除、残留分支清理与重建基线选择；协调本机落地与回收的串行锁，不判任务状态，不删除任务日志 | — |
 | `release` | 完成 | pr 交付方式的落地第二段（Atrium 自己的仓库）：有新版本就自升级、平滑重启；等版本、上线冒烟；`update` | — |
 | `release/selfupdate` | 完成 | 服务与远程代理共用的自升级：版本比较与升不升（纯函数 `Upgrade`、`SelfUpgrade`）、发版仓库（`Repo`）、下载本平台二进制校验 SHA256SUMS 后替换自身（`Install`，旧文件留 `.old`）；不引用别的包 | — |
 | `watch` | 完成 | 持球与期限表（`Rules`）、巡检循环、卡死判定、服务重启后接管；每轮顺带数上限用量（刚到或超了发 `limit.full`）；持球人判定 `HolderOf`；`top` 与 `/api/top`（末行是三个目标的数） | — |
@@ -155,7 +154,6 @@ type Module struct {
 - 隔离实例（`config.Paths.Isolated`：数据目录不是缺省的那个）不自己拉起本机真实的模型进程：自动挑执行者（没写 `--worker`，含周期任务、审阅、换人）时内置工具一律不挑，只挑通用命令行执行者；写死 `--worker` 不拦（测试把假 `claude` 放进 PATH 就靠它）。负责人唤醒同理（`ATRIUM_LEADER_WAKE=1` 才开）。
 - 别的包要重新派：`dispatch.Enqueue(ctx, env, id, Options{…}, actor)`（即 task run，写队列行与 risk）；watch 经 `Hooks.Requeue`、周期任务经 `agenda.Enqueue`、审阅任务经 `gates.Enqueue`，都在 dispatch 的 Routes 里接上。交回（`gates.Bounce`）只转 queued、不写队列行：dispatch 对没有队列行的 queued 任务沿用上次拉起的执行者、机器（工作目录在那里；接不了就等或转受阻，不换机）、风险与凭据。
 - 远程：`workers.Request` 是纯数据，代理拿到后填 `Dir`，把提示词写到自己的任务目录并填本机的 `PromptFile`，用 `workers.Build(tool, req)` 算出同样的调用。
-- 工作树回收：dispatch 生命周期循环统一判 `Reclaimable`，`done`、`cancelled` 在执行者退出后回收；退回、受阻、可直接重派的 `failed` 保留。启动与后续循环按同一规则分页补清全部机器的工作树登记，离线代理上线后再清；回收成功记 `worktree_reclaimed`，不重复处理。只删运行时创建的仓库工作树和本地 `task-tN` 分支，prompt、run 日志及指定的工作地点保留。重开经原创建入口重建：已推送的任务分支还在就从它继续，否则从默认基线重新开始；终态里未提交、未推送的改动随工作树删除。merge 与 gates 的落地只负责合入，不再自行清理。
 
 ### 子进程（`internal/platform`）
 

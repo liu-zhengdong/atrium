@@ -16,7 +16,6 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/platform"
 	"github.com/liu-zhengdong/atrium/internal/store"
 	"github.com/liu-zhengdong/atrium/internal/workers"
-	"github.com/liu-zhengdong/atrium/internal/worktree"
 )
 
 // TaskDir 是任务目录：提示词、日志、工作树都在这里。
@@ -151,10 +150,6 @@ func Workdir(ctx context.Context, data, task, repo, place string) (dir, branch s
 		}
 	}
 	if err := os.MkdirAll(td, 0o700); err != nil {
-		return "", "", err
-	}
-	base, err = worktree.Base(ctx, main, branch, base, run)
-	if err != nil {
 		return "", "", err
 	}
 	if _, err := run(ctx, main, "git", "worktree", "add", "--quiet", "-B", branch, dir, base); err != nil {

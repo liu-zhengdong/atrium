@@ -59,17 +59,17 @@ func (e *env) file(dir, name string) string {
 	return string(b)
 }
 
-// landedOn 核对关卡的落地职责：主分支有了任务改动，工作树留给 dispatch 在终态统一回收。
+// landedOn 核对落地后的现场：主分支有了任务的改动，任务工作树与分支都删了。
 func (e *env) landedOn(repo, wt, id, name, body string) {
 	e.t.Helper()
 	if got := e.file(repo, name); got != body {
 		e.t.Fatalf("主工作树里 %s 应为 %q：%q", name, body, got)
 	}
-	if _, err := os.Stat(wt); err != nil {
-		e.t.Fatalf("关卡不应提前删除任务工作树：%v", err)
+	if _, err := os.Stat(wt); !os.IsNotExist(err) {
+		e.t.Fatalf("任务工作树应已删除：%v", err)
 	}
-	if out := e.gh.Must(repo, "branch", "--list", "task-"+id); out == "" {
-		e.t.Fatalf("关卡不应提前删除任务分支：%s", out)
+	if out := e.gh.Must(repo, "branch", "--list", "task-"+id); out != "" {
+		e.t.Fatalf("任务分支应已删除：%s", out)
 	}
 }
 

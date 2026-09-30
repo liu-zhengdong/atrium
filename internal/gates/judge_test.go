@@ -4,6 +4,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/liu-zhengdong/atrium/internal/org"
 )
 
 func goodFacts() Facts {
@@ -178,6 +180,26 @@ func TestParseSlug(t *testing.T) {
 		got, ok := ParseSlug(c.in)
 		if got != c.want || ok != c.ok {
 			t.Errorf("ParseSlug(%q) = %q,%v，要 %q,%v", c.in, got, ok, c.want, c.ok)
+		}
+	}
+}
+
+func TestReviewBrief(t *testing.T) {
+	for _, dir := range []string{"", "worktree"} {
+		brief := ReviewBrief("t1", "文档站", "o/r", PR{Number: 7, URL: "https://github.com/o/r/pull/7", Head: "task-t1"}, dir, "main", "低 trust", "3 个文件", "普通读者能找到开始入口")
+		if strings.Count(brief, org.ReviewChecklist) != 1 {
+			t.Fatal("审阅须完整引用唯一清单一次")
+		}
+		if strings.Index(brief, org.ReviewChecklist) > strings.Index(brief, "gh pr diff") {
+			t.Fatal("先定标准，再查看 PR")
+		}
+		for _, want := range []string{"普通读者能找到开始入口", "只读：不修改", "审阅结论：通过", "审阅结论：打回", "gh pr diff 7 -R o/r"} {
+			if !strings.Contains(brief, want) {
+				t.Errorf("提示词缺 %q", want)
+			}
+		}
+		if (dir != "") != strings.Contains(brief, "git -C worktree diff origin/main...HEAD") {
+			t.Fatal("本地与远程查看方式不符")
 		}
 	}
 }

@@ -36,9 +36,8 @@ type Request struct {
 	Session    string    `json:"session,omitempty"` // 非空表示带着补充继续这个会话
 	Endpoint   *Endpoint `json:"endpoint,omitempty"`
 	CLI        *CLISpec  `json:"cli,omitempty"` // 通用命令行执行者的写法（远程没有档案库，随请求带过去）
-	// 本机工具（codex 的 -c 覆盖，含 computer use 与 chrome-devtools），由拉起那台机器经 LocalTools 填，服务端不填
+	// 本机工具（codex 的 computer use -c 覆盖），由拉起那台机器经 LocalTools 填，服务端不填
 	ComputerUse []string `json:"computer_use,omitempty"`
-	ChromeURL   string   `json:"chrome_url,omitempty"`
 }
 
 // Build 按工具名算出进程调用（纯函数）：内置工具用内置适配器，通用命令行执行者用 req.CLI。
@@ -213,13 +212,11 @@ func claudeAdapter() *Driver {
 			args = append(args, "--input-format", "stream-json", "--replay-user-messages")
 		}
 		args = append(args, "--permission-mode", "bypassPermissions", "--setting-sources", "user,project", "--strict-mcp-config")
-		if in.ChromeURL != "" {
-			config, err := json.Marshal(map[string]any{"mcpServers": map[string]any{"chrome-devtools": chromeMCP(in.ChromeURL)}})
-			if err != nil {
-				return Launch{}, err
-			}
-			args = append(args, "--mcp-config", string(config))
+		config, err := json.Marshal(map[string]any{"mcpServers": map[string]any{"chrome-devtools": chromeMCP()}})
+		if err != nil {
+			return Launch{}, err
 		}
+		args = append(args, "--mcp-config", string(config))
 		if in.Model != "" {
 			args = append(args, "--model", in.Model)
 		}
@@ -252,7 +249,11 @@ func codexAdapter() *Driver {
 			args = []string{"exec", "--json", "--skip-git-repo-check", "--ignore-user-config", "--dangerously-bypass-approvals-and-sandbox", "-C", in.Dir}
 		}
 		args = append(args, "--disable", "apps")
-		for _, kv := range in.ComputerUse {
+		overrides, err := codexMCPOverrides(in.ComputerUse)
+		if err != nil {
+			return Launch{}, err
+		}
+		for _, kv := range overrides {
 			args = append(args, "-c", kv)
 		}
 		if in.Model != "" {

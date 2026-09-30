@@ -168,6 +168,7 @@ type Module struct {
 - **可用性**：用没登录、额度用尽、模型名无效的日志样本验证 `workers/signals.go` 的 `Classify` 与 `workers/marks.go` 的 `MarkOf`，确认失败能分类并挡住后续分派任务。
 - **额度**：由 `workers.Resolved.Account()` 唯一给出额度账号，调用方直接使用，自带读取接在 `quota/readers.go` 并登记 `quota/merge.go` 的 `Accounts`，或核对 OpenQuota 的 `providerId` 与账号一致（`quota/openquota.go`、`quota/merge.go`），在执行者详情用假读数确认 `quota.Last` 的已用、周期进度与富余；缺周期依据不能把剩余百分比当富余。无法读取账号用量或余额时，在档案正文明确写「无读数」、原因及自动挑人的处理（如 `auto=false` 只接点名派活，无法保证用户留份额）。
 - **远程能力**：确认 `workers/tools.go` 的 `ToolCatalog` 包含命令，`hosts/agent.go` 能取得目录并经 `hosts/probe.go` 上报可用性，登录判定在 `hosts/info.go`。
+- Claude、Codex 始终带 chrome-devtools MCP，由 MCP 启动 Chrome，使用默认专用资料目录 `~/.cache/chrome-devtools-mcp/chrome-profile`。macOS 可用 `open -na "Google Chrome" --args --user-data-dir="$HOME/.cache/chrome-devtools-mcp/chrome-profile"` 在该目录登录一次，关闭这个专用 Chrome 后再交给执行者；登录可与使用同目录的个人 MCP 共用。同目录第二个会话报错，不排队、不回退。其他执行者仍读个人 MCP 配置。
 - **工具集**：执行者会话的工具由 Atrium 给出，不继承用户个人配置中的 MCP；要什么在适配器里显式带上，并在 `workers/computeruse.go` 开头的说明里写清带了什么、各做什么。
 - **补充说明与并发**：核对 `workers/adapter.go` 的 `Tell`、会话续接与 `Exclusive`（通用命令行档案在 `workers/cli.go`），确认 `dispatch/actions.go` 的补充说明和 `dispatch/pick.go` 的并发约束适用。
 - **自动挑人**：在档案明确 `auto`、`trust`、`max_risk`，用 `workers/profile.go`、`workers/refusal.go` 与 `dispatch/select.go` 核对是否参与自动挑人及能接的风险。

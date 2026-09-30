@@ -1,13 +1,12 @@
 package workers
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 
-	"github.com/liu-zhengdong/atrium/internal/platform"
 	"github.com/pelletier/go-toml/v2"
 	"reflect"
-	"runtime"
 	"strings"
 	"testing"
 )
@@ -75,9 +74,9 @@ func TestLocalTools(t *testing.T) {
 	t.Setenv("USERPROFILE", home)
 	t.Setenv("LOCALAPPDATA", home)
 	t.Setenv("XDG_CONFIG_HOME", home)
-	req := Request{Prompt: "x", Dir: home, ChromeURL: "http://wrong:1", ComputerUse: []string{"wrong"}}
+	req := Request{Prompt: "x", Dir: home, ComputerUse: []string{"wrong"}}
 	// 没有 ~/.codex/config.toml：什么都不带。
-	if got, err := LocalTools("codex", req); err != nil || (got.ComputerUse != nil || got.ChromeURL != "") {
+	if got, err := LocalTools("codex", req); err != nil || got.ComputerUse != nil {
 		t.Fatalf("没配置：%+v %v", got, err)
 	}
 	if err := os.MkdirAll(filepath.Join(home, ".codex"), 0o700); err != nil {
@@ -112,53 +111,72 @@ func sameOverrides(a, b []string) bool {
 	return reflect.DeepEqual(decode(a), decode(b))
 }
 
-func TestChromeBrowserURL(t *testing.T) {
-	for _, c := range []struct{ input, want string }{{"9222\n/devtools/browser/x\n", "http://127.0.0.1:9222"}, {"0", ""}, {"65536", ""}, {"bad", ""}, {"", ""}} {
-		got, err := ChromeBrowserURL(c.input)
-		if got != c.want || (err != nil) != (c.want == "") {
-			t.Fatalf("%q: %q %v", c.input, got, err)
-		}
-	}
-}
-
 func TestUnifiedMCP(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
-	t.Setenv("LOCALAPPDATA", home)
-	t.Setenv("XDG_CONFIG_HOME", home)
-	marker := platform.ChromeActivePortPath(runtime.GOOS, home, home, home)
-	if err := os.MkdirAll(filepath.Dir(marker), 0700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(marker, []byte("9222\n/devtools/browser/test"), 0600); err != nil {
-		t.Fatal(err)
-	}
 	for _, tool := range []string{"codex", "claude"} {
-		req, err := LocalTools(tool, Request{Dir: home, Prompt: "x"})
-		if err != nil || req.ChromeURL != "http://127.0.0.1:9222" {
-			t.Fatalf("%s: %+v %v", tool, req, err)
-		}
-		launch, err := Build(tool, req)
-		if err != nil {
-			t.Fatal(err)
-		}
-		args := strings.Join(launch.Args, " ")
-		if !strings.Contains(args, "chrome-devtools") || !strings.Contains(args, "--browser-url=http://127.0.0.1:9222") {
-			t.Fatalf("%s: %s", tool, args)
-		}
-		if tool == "codex" && !strings.Contains(args, "--disable apps") {
-			t.Fatal(args)
+		for _, computerUse := range []string{"", "[mcp_servers.computer-use]\ncommand=\"cu\""} {
+			req, err := LocalTools(tool, Request{Dir: home, Prompt: "x"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			req.ComputerUse, err = ComputerUseOverrides(computerUse)
+			if err != nil {
+				t.Fatal(err)
+			}
+			launch, err := Build(tool, req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var server map[string]any
+			for i, arg := range launch.Args {
+				if tool == "claude" && arg == "--mcp-config" {
+					var config struct {
+						Servers map[string]map[string]any `json:"mcpServers"`
+					}
+					if err := json.Unmarshal([]byte(launch.Args[i+1]), &config); err != nil {
+						t.Fatal(err)
+					}
+					server = config.Servers["chrome-devtools"]
+				}
+				if tool == "codex" && arg == "-c" && strings.HasPrefix(launch.Args[i+1], "mcp_servers ") {
+					var config struct {
+						Servers map[string]map[string]any `toml:"mcp_servers"`
+					}
+					if err := toml.Unmarshal([]byte(launch.Args[i+1]), &config); err != nil {
+						t.Fatal(err)
+					}
+					server = config.Servers["chrome-devtools"]
+					if computerUse != "" && config.Servers["computer-use"]["command"] != "cu" {
+						t.Fatal(config)
+					}
+				}
+			}
+			want := map[string]any{"command": "npx", "args": []any{"-y", "chrome-devtools-mcp@latest", "--no-usage-statistics"}}
+			if !reflect.DeepEqual(server, want) {
+				t.Fatalf("%s: %+v", tool, server)
+			}
+			if tool == "codex" && !strings.Contains(strings.Join(launch.Args, " "), "--disable apps") {
+				t.Fatal(launch.Args)
+			}
 		}
 	}
-	overrides, err := localOverrides("[mcp_servers.computer-use]\ncommand='cu'", "http://127.0.0.1:9222")
-	if err != nil || len(overrides) != 1 || !strings.Contains(overrides[0], "computer-use") || !strings.Contains(overrides[0], "chrome-devtools") {
-		t.Fatalf("%q %v", overrides, err)
-	}
-	if err := os.WriteFile(marker, []byte("not a port"), 0600); err != nil {
+}
+
+func TestCodexMCPOverrides(t *testing.T) {
+	overrides, err := codexMCPOverrides([]string{`mcp_servers={node_repl={command="node"}}`, `plugins={"computer-use@openai-bundled"={enabled=true}}`})
+	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := LocalTools("claude", Request{}); err == nil {
-		t.Fatal("坏标记应报错")
+	var config map[string]map[string]any
+	if err := toml.Unmarshal([]byte(strings.Join(overrides, "\n")), &config); err != nil {
+		t.Fatal(err)
+	}
+	if config["mcp_servers"]["node_repl"] == nil || config["mcp_servers"]["chrome-devtools"] == nil || config["plugins"]["computer-use@openai-bundled"] == nil {
+		t.Fatal(config)
+	}
+	if _, err := codexMCPOverrides([]string{"broken = ["}); err == nil {
+		t.Fatal("损坏的覆盖应报错")
 	}
 }

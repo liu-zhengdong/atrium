@@ -2,6 +2,8 @@ package workers
 
 import (
 	"context"
+	"database/sql"
+	"encoding/json"
 	"strings"
 	"time"
 
@@ -10,7 +12,11 @@ import (
 )
 
 // 执行者可用性：某个「工具+模型」在某台机器上此刻能不能接活。执行者退出时按信号记不可用（MarkOf），
+// 机器定期自检（hosts 跑 --version）不过的记 MarkProbe、跑通了自动解除（SyncProbes）；
 // 挑执行者与挑机器时跳过（Blocked）；workers 列出，workers edit --clear 手动解除。
+
+// MarkProbe 是自检不过的标记种类：只由下一次自检解除，退出信号记的标记不归它管。
+const MarkProbe = "probe"
 
 // QuotaHold 是额度用尽但报文没写恢复时刻时的保守缺省。
 const QuotaHold = 4 * time.Hour
@@ -39,6 +45,9 @@ func (m Mark) Covers(s Spec) bool { return m.Tool == s.Tool && (m.Model == "" ||
 func (m Mark) Text() string {
 	if m.Until > 0 {
 		return m.Reason + "，" + time.UnixMilli(m.Until).Local().Format("01-02 15:04") + " 恢复"
+	}
+	if m.Kind == MarkProbe {
+		return m.Reason + "，自检跑通后自动解除"
 	}
 	return m.Reason + "，等人处理后 atrium workers edit --clear " + m.Target()
 }
@@ -83,6 +92,30 @@ func SetMark(ctx context.Context, q store.Querier, m Mark) error {
 		reason = excluded.reason, evidence = excluded.evidence, until = excluded.until, since = excluded.since`,
 		m.Tool, m.Model, m.Host, m.Kind, m.Reason, m.Evidence, m.Until, m.Since)
 	return err
+}
+
+// SyncProbes 按一台机器这一轮的自检结果改标记：failed 里的工具记（或刷新）MarkProbe，这台上其余工具的 MarkProbe 解除。
+// 这台上这个工具已有别的标记（没登录、额度用尽……）时不覆盖：它已经挡着，也不该随自检跑通一起解除。
+func SyncProbes(ctx context.Context, db *store.DB, host string, failed []Mark, now int64) error {
+	return db.Tx(ctx, func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM worker_marks WHERE until > 0 AND until <= ?`, now); err != nil {
+			return err
+		}
+		tools := []string{}
+		for _, m := range failed {
+			tools = append(tools, m.Tool)
+			if _, err := tx.ExecContext(ctx, `INSERT INTO worker_marks (tool, model, host, kind, reason, evidence, until, since)
+				VALUES (?, '', ?, ?, ?, ?, 0, ?) ON CONFLICT (tool, model, host) DO UPDATE SET reason = excluded.reason,
+				evidence = excluded.evidence WHERE worker_marks.kind = ?`,
+				m.Tool, host, MarkProbe, m.Reason, m.Evidence, now, MarkProbe); err != nil {
+				return err
+			}
+		}
+		raw, _ := json.Marshal(tools)
+		_, err := tx.ExecContext(ctx, `DELETE FROM worker_marks WHERE host = ? AND kind = ? AND tool NOT IN (SELECT value FROM json_each(?))`,
+			host, MarkProbe, string(raw))
+		return err
+	})
 }
 
 // Marks 是此刻有效的标记（按工具、模型、机器排）。

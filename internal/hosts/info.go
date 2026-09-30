@@ -90,8 +90,11 @@ func BusyReason(load float64, cpus int) string {
 	return ""
 }
 
-// loadavg 读 1 分钟负载；Windows 没有，报 0。
-func loadavg() float64 {
+// loadavg 读 1 分钟负载（测试换成假读数，免得本机忙时挑机器变成排队）。
+var loadavg = readLoadavg
+
+// readLoadavg 读本机 1 分钟负载；Windows 没有，报 0。
+func readLoadavg() float64 {
 	switch runtime.GOOS {
 	case "linux":
 		b, err := os.ReadFile("/proc/loadavg")

@@ -202,6 +202,20 @@ func (g *rig) waitOnline(host string) {
 	g.t.Fatalf("%s 没上线", host)
 }
 
+// waitCLIs 等到这台报过工具自检。连上只说明在领指令，自检是另一路上报。
+func waitCLIs(t *testing.T, env *app.Env, host string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		h, err := Get(context.Background(), env.DB, host)
+		if err == nil && h.Info != nil && h.Info.CLIs != nil {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("%s 自检没报上", host)
+}
+
 func waitExit(t *testing.T, env *app.Env, task string, run int) Exit {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
@@ -231,6 +245,8 @@ func TestAgentLaunchLogExit(t *testing.T) {
 	if host != "h2" {
 		t.Fatalf("远程应为 h2，得 %s", host)
 	}
+	// 自检和连上是两件事：没报上之前 CLIs 还是 nil，挑机器会排队而不是拒绝。
+	waitCLIs(t, g.env, host)
 	// 挑机器：本机 h1 在；远程在线、登记了 *。
 	choice, err := Pick(context.Background(), g.env, Need{Tool: "echo"}, host)
 	if err != nil || choice.Kind != "refuse" { // 远程没装 echo（假工具）：指定也拒绝

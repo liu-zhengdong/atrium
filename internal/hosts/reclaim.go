@@ -9,7 +9,6 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/liu-zhengdong/atrium/internal/worktree"
 )
@@ -24,19 +23,14 @@ type ReclaimRequest struct {
 func Online(host string) bool { return theHub.isPolling(host) }
 
 func Reclaim(ctx context.Context, host string, r ReclaimRequest) error {
-	id, ackc := theHub.push(host, Command{Kind: "reclaim", Reclaim: &r})
-	defer theHub.withdraw(host, id)
-	select {
-	case ack := <-ackc:
-		if !ack.OK {
-			return fmt.Errorf("%s 回收 %s 失败：%s", host, r.Task, ack.Error)
-		}
-		return nil
-	case <-time.After(queryWait):
-		return fmt.Errorf("%s 没回执回收 %s", host, r.Task)
-	case <-ctx.Done():
-		return ctx.Err()
+	ack, err := call(ctx, host, Command{Kind: "reclaim", Reclaim: &r}, queryWait)
+	if err != nil {
+		return err
 	}
+	if !ack.OK {
+		return fmt.Errorf("%s 回收 %s 失败：%s", host, r.Task, ack.Error)
+	}
+	return nil
 }
 
 var reclaimTaskRE = regexp.MustCompile(`^t[1-9][0-9]*$`)

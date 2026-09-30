@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/liu-zhengdong/atrium/internal/app"
 	"github.com/liu-zhengdong/atrium/internal/gates"
 	"github.com/liu-zhengdong/atrium/internal/hosts"
 	"github.com/liu-zhengdong/atrium/internal/ledger"
@@ -67,6 +68,10 @@ func (d *dispatcher) reclaim(ctx context.Context) error {
 				return nil
 			}
 			if err := hosts.Reclaim(ctx, w.Host, hosts.ReclaimRequest{Task: it.task, Dir: w.Dir, Run: it.remoteRun}); err != nil {
+				if app.IsNotNow(err) {
+					d.reclaimDeferred = true
+					return nil
+				}
 				return err
 			}
 		} else if it.repo == "" && (w.Dir == filepath.Join(TaskDir(d.env.Paths.Data, it.task), "work") || (it.workdir != "" && w.Dir == it.workdir)) {

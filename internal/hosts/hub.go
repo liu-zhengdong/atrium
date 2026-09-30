@@ -168,6 +168,39 @@ func (h *hub) isPolling(host string) bool {
 	return h.polling[host] > 0
 }
 
+func (h *hub) pending(host, id string) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.pendingLocked(host, id)
+}
+
+func (h *hub) pendingLocked(host, id string) bool {
+	for _, c := range h.queue[host] {
+		if c.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+// dropQueued 撤回还在队列里的指令。已经领走则不动，返回 false。
+func (h *hub) dropQueued(host, id string) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if !h.pendingLocked(host, id) {
+		return false
+	}
+	delete(h.acks, id)
+	q := h.queue[host]
+	for i, c := range q {
+		if c.ID == id {
+			h.queue[host] = append(q[:i:i], q[i+1:]...)
+			return true
+		}
+	}
+	return false
+}
+
 // notify 告诉在等退出的人：某次运行有变化。
 func (h *hub) notify() {
 	h.mu.Lock()
@@ -188,7 +221,8 @@ func (h *hub) changes() chan struct{} {
 var ackWait = 60 * time.Second
 
 // Launch 把一次运行派到远程机器：记下这一轮、下发指令、等代理拉起后回执。返回轮号、pid 与那台上的工作目录。
-// 之后日志按字节偏移追加到 a.Log，退出用 WaitExit 等。
+// 机器没在领指令、指令还没领走时返回 app.NotNow，调用方下一轮再试，不把任务转受阻。
+// 指令已经领走却没回执仍是失败（这一轮可能已经拉起了进程）。之后日志按字节偏移追加到 a.Log，退出用 WaitExit 等。
 func Launch(ctx context.Context, env *app.Env, host string, a Assignment) (run, pid int, dir string, err error) {
 	h, err := Get(ctx, env.DB, host)
 	if err != nil {
@@ -204,6 +238,9 @@ func Launch(ctx context.Context, env *app.Env, host string, a Assignment) (run, 
 		return 0, 0, "", api.Usage("Assignment.Log 不能为空")
 	}
 	if err := os.MkdirAll(filepath.Dir(a.Log), 0o700); err != nil {
+		return 0, 0, "", err
+	}
+	if err := waitPolling(ctx, host); err != nil {
 		return 0, 0, "", err
 	}
 	err = env.DB.Tx(ctx, func(tx *sql.Tx) error {
@@ -231,51 +268,44 @@ func Launch(ctx context.Context, env *app.Env, host string, a Assignment) (run, 
 		return 0, 0, "", err
 	}
 	f.Close()
-	cmd := Command{Kind: "launch", Launch: &a}
-	id, ackc := theHub.push(host, cmd)
+	id, ackc := theHub.push(host, Command{Kind: "launch", Launch: &a})
 	fail := func(e error) (int, int, string, error) {
 		// 没拉起：这一轮按退出不明收尾，免得 WaitExit 永远等。
 		finishRun(context.WithoutCancel(ctx), env.DB, RunRef{a.Task, a.Run}, Exit{Lost: true})
 		theHub.notify()
 		return 0, 0, "", e
 	}
-	select {
-	case ack := <-ackc:
-		if !ack.OK {
-			return fail(api.Conflict("%s 拉起失败：%s", host, ack.Error))
+	ack, err := waitAck(ctx, host, id, ackc, ackWait, "launch")
+	if err != nil {
+		// 取消仍是 ctx 的错误（调用方用 errors.Is 识别）。没领走的超时是 NotNow，不包成冲突。
+		if !app.IsNotNow(err) && ctx.Err() == nil {
+			err = api.Conflict("%s", err.Error())
 		}
-		if _, err := env.DB.ExecContext(ctx, `UPDATE host_runs SET pid = ? WHERE task = ? AND run = ?`, ack.PID, a.Task, a.Run); err != nil {
-			return 0, 0, "", err
-		}
-		return a.Run, ack.PID, ack.Dir, nil
-	case <-time.After(ackWait):
-		theHub.withdraw(host, id)
-		return fail(api.Conflict("%s 在 %s 内没领走或没回执拉起指令（离线？）", host, ackWait))
-	case <-ctx.Done():
-		theHub.withdraw(host, id)
-		return fail(ctx.Err())
+		return fail(err)
 	}
+	if !ack.OK {
+		return fail(api.Conflict("%s 拉起失败：%s", host, ack.Error))
+	}
+	if _, err := env.DB.ExecContext(ctx, `UPDATE host_runs SET pid = ? WHERE task = ? AND run = ?`, ack.PID, a.Task, a.Run); err != nil {
+		return 0, 0, "", err
+	}
+	return a.Run, ack.PID, ack.Dir, nil
 }
 
 // queryWait 是等代理答一条查询的上限（含领走；fetch 要走网络）。
 var queryWait = 2 * time.Minute
 
-// Ask 问远程机器一条只读查询（交付检查查远程工作树的事实）：下发、等回执。代理拒绝或跑失败返回错误。
+// Ask 问远程机器一条只读查询（交付检查查远程工作树的事实）：下发、等回执。
+// 机器没在领指令时返回 app.NotNow，调用方下一轮再试。代理拒绝或跑失败返回错误。
 func Ask(ctx context.Context, host string, q Query) (Ack, error) {
-	id, ackc := theHub.push(host, Command{Kind: "query", Query: &q})
-	select {
-	case ack := <-ackc:
-		if !ack.OK {
-			return ack, fmt.Errorf("%s 上查询失败：%s", host, ack.Error)
-		}
-		return ack, nil
-	case <-time.After(queryWait):
-		theHub.withdraw(host, id)
-		return Ack{}, fmt.Errorf("%s 在 %s 内没答查询（离线？）", host, queryWait)
-	case <-ctx.Done():
-		theHub.withdraw(host, id)
-		return Ack{}, ctx.Err()
+	ack, err := call(ctx, host, Command{Kind: "query", Query: &q}, queryWait)
+	if err != nil {
+		return Ack{}, err
 	}
+	if !ack.OK {
+		return ack, fmt.Errorf("%s 上查询失败：%s", host, ack.Error)
+	}
+	return ack, nil
 }
 
 // Stop 让代理结束这个任务当前这一轮（整棵进程树）；退出照常经 WaitExit 报回。

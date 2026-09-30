@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/liu-zhengdong/atrium/internal/api"
 	"github.com/liu-zhengdong/atrium/internal/app"
@@ -149,5 +150,72 @@ func TestGateBadWorktree(t *testing.T) {
 	e.sweep()
 	if got := e.get(task.ID); got.Status != ledger.Blocked || !strings.Contains(e.lastNote(task.ID), "工作树登记不是") {
 		t.Fatalf("%+v %s", got, e.lastNote(task.ID))
+	}
+}
+
+// 远程机器没在领指令时，交付检查不转受阻；代理回来后同一轮检查继续，不必手工放行。
+func TestGateAwayThenCheck(t *testing.T) {
+	e := setup(t)
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	aenv := &app.Env{DB: e.db, Paths: config.Paths{Data: t.TempDir()}, Port: 4999, Log: log, Pause: &pause.Store{DB: e.db}}
+	r := api.NewRouter(log)
+	hosts.Routes(r, aenv)
+	srv := httptest.NewServer(r)
+	t.Cleanup(srv.Close)
+	_, code, err := hosts.Add(e.ctx, e.db, hosts.AddInput{Name: "远程", Repos: []string{"*"}}, aenv.Port)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	cfg, err := hosts.JoinServer(e.ctx, dir, srv.URL, code, platform.EnvMap(os.Environ()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dept, err := org.Add(e.ctx, e.db, org.NewDept{Name: "部门"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := ledger.Add(e.ctx, e.db, ledger.NewTask{Title: "活", Org: dept.ID, Repo: "o/r"}, "u1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.start(task.ID, "claude+opus")
+	repoDir := filepath.Join(dir, "repos", "o-r-"+task.ID)
+	if err := os.MkdirAll(filepath.Dir(repoDir), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	e.gh.Branch(repoDir, "task-"+task.ID, map[string]string{"a.go": "package a\n"})
+	e.gh.Open("task-"+task.ID, goodBody)
+	raw, _ := json.Marshal(gates.Worktree{Host: cfg.Host, Dir: repoDir})
+	if err := ledger.Record(e.ctx, e.db, task.ID, gates.KindWorktree, "dispatch", string(raw)); err != nil {
+		t.Fatal(err)
+	}
+	e.exit(task.ID)
+
+	e.sweep()
+	e.sweep()
+	got := e.get(task.ID)
+	if got.Status != ledger.Running || got.Stage != ledger.StageGate {
+		t.Fatalf("机器不在时被转走了：%s/%s %s", got.Status, got.Stage, e.lastNote(task.ID))
+	}
+	if n := e.count(task.ID, ledger.KindLoopError); n != 0 {
+		t.Fatalf("记了 %d 条失败", n)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- hosts.NewAgent(dir, cfg, log).Run(ctx) }()
+	t.Cleanup(func() { cancel(); <-done })
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) && !hosts.Online(cfg.Host) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !hosts.Online(cfg.Host) {
+		t.Fatal("代理没上线")
+	}
+	e.sweep()
+	got = e.get(task.ID)
+	if got.Status != ledger.Running || got.Stage != ledger.StageMerge {
+		t.Fatalf("代理回来后应继续交付检查：%s/%s %s", got.Status, got.Stage, e.lastNote(task.ID))
 	}
 }

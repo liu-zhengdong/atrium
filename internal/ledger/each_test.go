@@ -11,6 +11,7 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/app"
 	"github.com/liu-zhengdong/atrium/internal/gates"
 	"github.com/liu-zhengdong/atrium/internal/ledger"
+	"github.com/liu-zhengdong/atrium/internal/org"
 	"github.com/liu-zhengdong/atrium/internal/store"
 )
 
@@ -26,7 +27,11 @@ func TestEachTaskBadWorkspace(t *testing.T) {
 					t.Fatal(err)
 				}
 				defer func() { db.Close() }()
-				bad, err := ledger.Add(ctx, db, ledger.NewTask{Title: "bad"}, "u1")
+				dept, err := org.Add(ctx, db, org.NewDept{Name: "测试部门"})
+				if err != nil {
+					t.Fatal(err)
+				}
+				bad, err := ledger.Add(ctx, db, ledger.NewTask{Title: "bad", Org: dept.ID}, "u1")
 				if err != nil {
 					t.Fatal(err)
 				}

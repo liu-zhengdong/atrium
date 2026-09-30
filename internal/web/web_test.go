@@ -693,3 +693,27 @@ func TestNavShippedID(t *testing.T) {
 	emit("shipped")
 	read(4)
 }
+
+// 今天完成超出列表上限时，没列出的件数单独给出，页面总数不被截在上限上。
+func TestTodayShippedMore(t *testing.T) {
+	ctx := context.Background()
+	db, err := store.Open(filepath.Join(t.TempDir(), "atrium.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	root, _ := org.Add(ctx, db, org.NewDept{Name: "组织"})
+	for i := 0; i < 102; i++ {
+		x, err := ledger.Add(ctx, db, ledger.NewTask{Title: "做完的", Org: root.ID}, "u1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := ledger.Apply(ctx, db, x.ID, ledger.Event{Kind: ledger.Set, To: ledger.Done}, "u1", ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	today, err := loadToday(ctx, db, time.Now())
+	if err != nil || len(today.Shipped) != 100 || today.ShippedMore != 2 {
+		t.Fatalf("列出 %d 件、没列出 %d 件，want 100、2；err=%v", len(today.Shipped), today.ShippedMore, err)
+	}
+}

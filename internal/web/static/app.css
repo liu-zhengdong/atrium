@@ -71,6 +71,7 @@ a.quiet{color:inherit}a.quiet:hover{color:var(--ink)}
 .today{display:grid;grid-template-columns:16px minmax(0,1fr) auto auto auto;column-gap:12px}
 .today>.section,.today .rows,.today .row{grid-column:1/-1;display:grid;grid-template-columns:subgrid}
 .today .section>:not(.rows){grid-column:1/-1}
+.today .rows>.more{grid-column:1/-1}
 .today .section h2{font-size:15px;font-weight:600;color:var(--ink);margin-bottom:6px}
 .today h2 .n{font-size:13px;font-weight:400;color:var(--ink3)}
 .today .row .time{width:auto;min-width:40px}
@@ -304,7 +305,7 @@ b.logo{display:grid;place-items:center;border-radius:4px;background:var(--raise)
 @media (prefers-reduced-motion:reduce){.drawer,.open .drawer{transition:none}}
 .opt .rec{font-size:11px;color:var(--ink);font-weight:500}
 .opt details{margin-top:6px}
-.opt summary{color:var(--ink3);font-size:12px;cursor:pointer;list-style:none}
+.opt summary{display:flex;gap:6px;align-items:center;color:var(--ink3);font-size:12px;cursor:pointer;list-style:none}
 .opt summary::-webkit-details-marker{display:none}
 .opt summary:hover{color:var(--ink)}
 .opt .whyt{margin-top:6px;font-size:13px;color:var(--ink2)}
@@ -317,7 +318,10 @@ b.logo{display:grid;place-items:center;border-radius:4px;background:var(--raise)
 .quiet-line{color:var(--ink3);font-size:13px;padding:4px 0}
 .status-line.warn{color:var(--bad)}
 details.full{margin-top:22px}
-details.full summary{color:var(--ink3);font-size:13px;cursor:pointer;list-style:none}
+details.full summary{display:flex;gap:8px;align-items:center;color:var(--ink3);font-size:13px;cursor:pointer;list-style:none}
+/* 折起的「为什么现在」「详述」「N 个文件」：与其他折叠一样带箭头，展开时转下 */
+.opt summary svg,details.full summary svg{width:14px;height:14px;flex-shrink:0}
+.opt details[open]>summary svg,details.full[open]>summary svg{transform:rotate(90deg)}
 details.full summary::-webkit-details-marker{display:none}
 details.full summary:hover{color:var(--ink2)}
 details.full .result{margin-top:8px;font-size:13px;color:var(--ink2)}

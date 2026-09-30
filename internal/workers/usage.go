@@ -30,6 +30,7 @@ type Usage struct {
 	Currency string   `json:"currency,omitempty"`
 	Source   string   `json:"source,omitempty"`  // tool / estimate
 	Billing  string   `json:"billing,omitempty"` // metered / subscription
+	Missing  []string `json:"missing,omitempty"` // 估算没算进的类别（读不到 token 或缺单价）
 }
 
 func (r Rules) billingProblems() []string {
@@ -51,9 +52,11 @@ func (r Rules) billingProblems() []string {
 	return out
 }
 
-// Charge 优先保留工具非零花费；估算须所有计费类别都已知，且非零类别有单价。
+// Charge 优先保留工具非零花费；否则按档案单价估算能算的类别，读不到 token 或缺单价的记进 Missing。
+// token 与单价都没有的类别视为这个执行者没有，不算缺；一个类别都算不进就不估算。
 func Charge(u Usage, r Rules) Usage {
 	u.Billing = r.Billing
+	u.Missing = nil
 	if u.Cost != nil && *u.Cost > 0 {
 		u.Source = "tool"
 		return u
@@ -63,19 +66,30 @@ func Charge(u Usage, r Rules) Usage {
 		return u
 	}
 	p := r.Prices
-	cost := 0.0
+	cost, counted := 0.0, 0
+	var missing []string
 	for i, n := range []*int64{u.Input, u.Output, u.CacheRead, u.CacheWrite} {
 		price := []*float64{p.Input, p.Output, p.CacheRead, p.CacheWrite}[i]
-		if n == nil || (*n != 0 && price == nil) {
-			return u
-		}
-		if price != nil {
-			cost += float64(*n) * *price / 1e6
+		switch {
+		case n == nil && price == nil:
+		case n == nil || (*n != 0 && price == nil):
+			missing = append(missing, usageNames[i])
+		default:
+			counted++
+			if price != nil {
+				cost += float64(*n) * *price / 1e6
+			}
 		}
 	}
-	u.Cost, u.Currency, u.Source = &cost, p.Currency, "estimate"
+	if counted == 0 {
+		return u
+	}
+	u.Cost, u.Currency, u.Source, u.Missing = &cost, p.Currency, "estimate", missing
 	return u
 }
+
+// usageNames 是四个 token 类别的叫法，顺序同 Tokens。
+var usageNames = []string{"输入", "输出", "缓存读", "缓存写"}
 
 func tokenText(n *int64) string {
 	if n == nil {
@@ -96,6 +110,9 @@ func (u Usage) String() string {
 	source := "工具报"
 	if u.Source == "estimate" {
 		source = "估算"
+		if len(u.Missing) > 0 {
+			source += "，未含" + strings.Join(u.Missing, "、")
+		}
 	}
 	if u.Billing == "" {
 		label = "金额"

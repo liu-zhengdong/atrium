@@ -91,6 +91,8 @@ func TestUsageSpecProfile(t *testing.T) {
 		{"protocol: cli\ncommand: mytool\nargs: [\"{prompt}\"]\nusage: {cost: total_cost_usd}", false, "三位大写货币"},
 		{"protocol: cli\ncommand: mytool\nargs: [\"{prompt}\"]\nusage: {input: usage.input_tokens, currency: USD}", false, "只在写了 cost"},
 		{"protocol: cli\ncommand: mytool\nargs: [\"{prompt}\"]\nusage: {input: usage.input_tokens, extra: 1}", false, "规则写得不对"},
+		{"protocol: cli\ncommand: mytool\nargs: [\"{prompt}\"]\nusage: {input: a, cache_read: b, input_includes_cache_read: true}", true, ""},
+		{"protocol: cli\ncommand: mytool\nargs: [\"{prompt}\"]\nusage: {input: a, input_includes_cache_read: true}", false, "同时写 input 与 cache_read"},
 	} {
 		keys, _, err := SplitSource("---\n" + c.src + "\n---\n")
 		if err != nil {

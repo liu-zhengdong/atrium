@@ -217,6 +217,15 @@ func Routes(r *api.Router, env *app.Env) {
 		}
 		return map[string]any{"target": in.Target, "cleared": n}, nil
 	})
+	r.Handle("POST /api/workers/recount", func(q *api.Req) (any, error) {
+		var in struct {
+			Task string `json:"task"`
+		}
+		if err := q.Decode(&in); err != nil {
+			return nil, err
+		}
+		return Recount(q.Context(), env.DB, in.Task, q.Actor.ID)
+	})
 	r.Handle("POST /api/workers/edit", func(q *api.Req) (any, error) {
 		var in struct {
 			Name string `json:"name"`
@@ -236,6 +245,7 @@ func Routes(r *api.Router, env *app.Env) {
 // Commands 注册 workers：列与看只读（执行者连着用户的服务也能跑），改档案与解除标记在 workers edit。
 func Commands(t *cli.Table) {
 	ledger.HistoryText[ExitKind] = ExitText
+	ledger.HistoryText[RecountKind] = RecountText
 	t.Group("workers", "执行者：可派的组合、档案与近期拉起统计")
 	t.Add(cli.Command{Path: "workers", Args: "[执行者或 层/名]",
 		Summary: "列执行者（组合、信任、近 20 次拉起的结果、哪台上不可用）；给名字看叠加后的档案与每次拉起的明细，或一层原文",
@@ -269,17 +279,21 @@ func Commands(t *cli.Table) {
 			return c.Done(rows, b.String(), "atrium workers <执行者>")
 		}})
 	t.Add(cli.Command{Path: "workers edit", Args: "[层/名]",
-		Summary: "改一层档案（--file/--set/--unset/--delete）；--clear 解除不可用标记",
+		Summary: "改一层档案（--file/--set/--unset/--delete）；--clear 解除不可用标记；--recount 按当前档案补算一件任务的用量",
 		Flags: []cli.Flag{
 			{Name: "clear", Value: "工具[+模型][@机器]", Help: "解除不可用标记（额度用尽、没登录、缺运行环境、模型名无效、零步骤出错退出；自检不过的下次自检跑通自动解除，还不过会再标上）；没写模型或机器就解除这个工具在全部模型或机器上的"},
 			{Name: "file", Value: "路径", Help: "整份替换这层档案：--- 包住的 YAML 规则 + 正文（正文附进提示词）"},
 			{Name: "set", Value: "键=值", Multi: true, Help: "改一条规则（值按 YAML：auto=false（只点名）、trust=medium、checks=[pr_exists]）"},
 			{Name: "unset", Value: "键", Multi: true, Help: "删一条规则"},
 			{Name: "delete", Bool: true, Help: "删掉这层档案"},
+			{Name: "recount", Value: "tN", Help: "按当前档案从日志重新结算这件任务每次拉起的 token 与花费，覆盖退出记录里的结果（改了 usage 或 prices 后补算历史用；日志不在就报错）"},
 		},
 		Run: func(c *cli.Ctx) error {
 			if c.Has("clear") {
 				return clearCmd(c)
+			}
+			if c.Has("recount") {
+				return recountCmd(c)
 			}
 			return editCmd(c)
 		}})
@@ -300,6 +314,25 @@ func clearCmd(c *cli.Ctx) error {
 		return err
 	}
 	return c.Done(out, fmt.Sprintf("已解除 %s 的 %d 条不可用标记", target, out.Cleared), "atrium workers")
+}
+
+func recountCmd(c *cli.Ctx) error {
+	if err := c.MaxArgs(0); err != nil {
+		return err
+	}
+	task := c.Str("recount")
+	if task == "" {
+		return api.Usage("--recount: 不能为空")
+	}
+	var out []Recounted
+	if err := c.Call("POST", "/api/workers/recount", map[string]any{"task": task}, &out); err != nil {
+		return err
+	}
+	var b strings.Builder
+	for _, r := range out {
+		fmt.Fprintf(&b, "第 %d 次拉起 · %s\n", r.N, r.After.String())
+	}
+	return c.Done(out, b.String(), "atrium task show "+task)
 }
 
 func editCmd(c *cli.Ctx) error {

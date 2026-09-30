@@ -25,6 +25,9 @@ type PromptInput struct {
 	Guide   string // 目标仓库自己的约定（.agents/README.md 正文）；没有就空
 }
 
+// langRule 放在提示词开头（标题之后）与续上的补充里：排在末尾时执行者照样用英文写交付说明（t452）。
+const langRule = "用中文写过程说明和最后的交付说明（命令、代码、标识符照原样）。"
+
 // 通用约束：对所有仓库成立的，每件活都附；怎么交由交付方式定（gates.PromptRules）；
 // 仓库自己的约定从目标仓库的 .agents/README.md 读（PromptInput.Guide）。
 var commonRules = []string{
@@ -32,13 +35,14 @@ var commonRules = []string{
 	"不碰用户的真实环境：不启停用户在跑的服务，不读写用户主目录里的数据；要跑起来验证，就用临时数据目录与空闲端口起隔离实例，用完停掉。",
 	"别的部门已有的资料：atrium material ls 按部门列，atrium material ls mN 取全文（二进制加 --out 文件）；跨部门的事先查再调研，不直接搜数据目录。",
 	"只跑改动相关的快检查，不跑全量测试（全量由运行时跑）。",
-	"过程说明与最后的总结用中文（命令、代码、标识符照原样）。",
+	"给人看的产物（报告、页面、站点、视频、图）：把能直接打开的成品或截图放进一个单独目录——当前目录上一级的 <任务号>-show/（原地干就在工作地点里单建一个子目录），不提交进仓库；" +
+		"交付说明开头写这个目录的绝对路径和入口文件，负责人收进部门资料。网页资料预览只认相对路径：站点按相对路径构建（如 base 设成 ./），做不到就交截图。",
 }
 
-// BuildPrompt 拼提示词（纯函数）：标题 + 详述 + 部门要点链 + 技能路径 + 执行者档案正文 + 仓库约定 + 捎话与交回原因 + 通用约束。
+// BuildPrompt 拼提示词（纯函数）：标题 + 语言要求 + 详述 + 部门要点链 + 技能路径 + 执行者档案正文 + 仓库约定 + 捎话与交回原因 + 通用约束。
 func BuildPrompt(in PromptInput) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "# 任务 %s：%s\n", in.Task, in.Title)
+	fmt.Fprintf(&b, "# 任务 %s：%s\n\n%s\n", in.Task, in.Title, langRule)
 	if d := strings.TrimSpace(in.Detail); d != "" {
 		fmt.Fprintf(&b, "\n%s\n", d)
 	}
@@ -74,7 +78,7 @@ func ResumePrompt(tells []string) string {
 	for _, t := range tells {
 		fmt.Fprintf(&b, "- %s\n", strings.TrimSpace(t))
 	}
-	b.WriteString("\n照补充调整，做完照原要求交付。\n")
+	b.WriteString("\n照补充调整，做完照原要求交付。" + langRule + "\n")
 	return b.String()
 }
 

@@ -209,7 +209,7 @@ func TestPromptRules(t *testing.T) {
 		t.Fatalf("pr：%s", pr)
 	}
 	local := strings.Join(gates.PromptRules(filepath.Join(t.TempDir(), "site"), "", "", "task-t1"), "\n")
-	if !strings.Contains(local, "在分支 task-t1 上提交；不要推送") || strings.Contains(local, "PR") || !strings.Contains(local, "preview/") {
+	if !strings.Contains(local, "在分支 task-t1 上提交；不要推送") || strings.Contains(local, "PR") {
 		t.Fatalf("local 不该要求推送、开 PR：%s", local)
 	}
 	msg := strings.Join(gates.PromptRules("", "", "", ""), "\n")

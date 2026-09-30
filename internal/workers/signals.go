@@ -14,11 +14,11 @@ import (
 const (
 	SignalNone      = ""
 	SignalQuota     = "quota"     // 额度用尽：标记「工具+模型@机器」到恢复时刻，重新排队
-	SignalTransient = "transient" // 供应商或网络临时错误：同一执行者重试一次，再换人一次
+	SignalTransient = "transient" // 做过事之后出错退出、原因不是下面几种（供应方临时错误多是这样）：同一执行者重试一次，再换人
 	SignalThinking  = "thinking"  // 思考耗尽单次输出：换执行者一次
 	SignalSetup     = "setup"     // 工具在这台机器上起不来（没登录、缺运行环境）：标记「工具@机器」，重新排队
 	SignalModel     = "model"     // 工具不认这个模型名：标记「工具+模型@机器」，重新排队
-	SignalNoStart   = "nostart"   // 出错退出、认不出原因、一步没做：标记「工具+模型@机器」到期自动解除，重新排队
+	SignalNoStart   = "nostart"   // 出错退出、原因不是上面几种、一步没做：标记「工具+模型@机器」到期自动解除，重新排队
 )
 
 // Signal 是从退出码与日志尾巴判出来的信号。
@@ -37,21 +37,33 @@ const ExitUnknown = -1
 // TailBytes 是判信号时读的日志末尾长度。
 const TailBytes = 64 * 1024
 
-// Tail 读文件末尾最多 n 字节。
-func Tail(path string, n int64) (string, error) {
+// LogTail 是日志末尾的整行。Cut：前面还有内容没读（开头截断的半行已丢掉）。
+type LogTail struct {
+	Text string
+	Cut  bool
+}
+
+// Tail 读文件末尾最多 n 字节；从中间读起时丢掉开头的半行——半行里可能是工具输出的任意文字，不能当报错行判。
+func Tail(path string, n int64) (LogTail, error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return "", err
+		return LogTail{}, err
 	}
 	defer f.Close()
 	st, err := f.Stat()
 	if err != nil {
-		return "", err
+		return LogTail{}, err
 	}
 	off := max(st.Size()-n, 0)
 	buf := make([]byte, st.Size()-off)
-	_, err = f.ReadAt(buf, off)
-	return string(buf), err
+	if _, err := f.ReadAt(buf, off); err != nil {
+		return LogTail{}, err
+	}
+	if off == 0 {
+		return LogTail{Text: string(buf)}, nil
+	}
+	_, rest, _ := strings.Cut(string(buf), "\n")
+	return LogTail{Text: rest, Cut: true}, nil
 }
 
 // LastProgress 是执行者最后一次有输出的时刻（日志修改时间）：有输出即活着。watch 用它判长时间没进展。
@@ -108,71 +120,71 @@ var (
 	retryRE      = regexp.MustCompile(`(?i)retry-after:\s*(\d+)`)
 	resetsInRE   = regexp.MustCompile(`(?i)resets? in\s+((?:\d+\s*[hms]\s*)+)`)
 	resetsRE     = regexp.MustCompile(`(?i)resets\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\s*(?:\(([^()]{2,64})\))?`)
-	transients   = []struct {
-		re   *regexp.Regexp
-		kind string
-	}{
-		{regexp.MustCompile(`(?i)certificate verif|unable to (?:get|verify) (?:local issuer )?certificate|self[- ]signed certificate|\bCERT_[A-Z_]+\b`), "证书校验出错"},
-		{regexp.MustCompile(`(?i)\bE(?:CONNRESET|CONNREFUSED|CONNABORTED|TIMEDOUT|PIPE|AI_AGAIN|NOTFOUND|NETUNREACH|HOSTUNREACH)\b|socket hang up|connection (?:reset|refused)|stream disconnected|network error`), "网络连接出错"},
-		{regexp.MustCompile(`(?i)fetch failed`), "网络请求失败"},
-		{regexp.MustCompile(`(?i)overloaded`), "供应商过载"},
-		{regexp.MustCompile(`(?i)\b(?:HTTP|status(?:\s*code)?|error\s*code)\s*[:=]?\s*5\d\d\b|Internal Server Error|Bad Gateway|Service Unavailable|Gateway Timeout`), "供应商服务端错误（5xx）"},
-	}
 )
 
-// errorReport 是日志尾巴里最后一段报错：只取执行者的出错事件或非 JSON 的报错行，不扫助手正文与工具内容。
-// 之后有一轮正常收尾的，更早的报错已被越过。
+// errorReport 是这一轮退出的报错（纯函数）：执行者用自己的出错事件报了错，就以最后一条出错事件为准——
+// 之后的非 JSON 行多是工具退出时的收尾噪音（如 codex 的 failed to record rollout items），不能盖掉它；
+// 没有出错事件时才取最后一段非 JSON 的报错行。不扫助手正文与工具内容；之后有一轮正常收尾的，更早的报错已被越过。
+// tail 要是整行（见 Tail），开头截断的半行不在里面。
 func errorReport(tail string) string {
-	last := ""
+	reported, plain := "", ""
 	for _, line := range strings.Split(tail, "\n") {
 		e := parseEvent(line)
 		if e == nil {
 			if errorWordRE.MatchString(line) || quotaMarkRE.MatchString(line) {
-				last = strings.TrimSpace(line)
-			} else if last != "" && retryHintRE.MatchString(line) {
-				last += "\n" + strings.TrimSpace(line)
+				plain = strings.TrimSpace(line)
+			} else if plain != "" && retryHintRE.MatchString(line) {
+				plain += "\n" + strings.TrimSpace(line)
 			}
 			continue
 		}
 		typ := e.str("type")
 		switch {
 		case typ == "result" && e["is_error"] == false, typ == "turn.completed":
-			last = ""
+			reported, plain = "", ""
 		case e.str("event") == "result":
 			r := e.obj("result")
 			if r.str("status") == "SUCCESS" {
-				last = ""
+				reported, plain = "", ""
 			} else if msg := r.str("error"); msg != "" {
-				last = msg
+				reported = msg
 			}
 		case typ == "rate_limit_event":
 			if s := e.obj("rate_limit_info").str("status"); rateStatusRE.MatchString(s) {
-				last = "rate limit exceeded: " + s
+				reported = "rate limit exceeded: " + s
 			}
 		case typ == "error" || typ == "turn.failed" || (typ == "result" && e["is_error"] == true):
-			var parts []string
-			for _, k := range []string{"error", "message", "result", "subtype"} {
-				switch v := e[k].(type) {
-				case string:
-					parts = append(parts, v)
-				case map[string]any:
-					m := event(v)
-					for _, f := range []string{"name", "message", "type", "code"} {
-						if s := m.str(f); s != "" {
-							parts = append(parts, s)
-						}
-					}
-					if s := m.obj("data").str("message"); s != "" {
-						parts = append(parts, s)
-					}
-				}
-			}
-			if len(parts) > 0 {
-				last = strings.Join(parts, ": ")
+			if msg := eventError(e); msg != "" {
+				reported = msg
 			}
 		}
 	}
-	return last
+	if reported != "" {
+		return reported
+	}
+	return plain
+}
+
+// eventError 拼出一条出错事件里的报文。
+func eventError(e event) string {
+	var parts []string
+	for _, k := range []string{"error", "message", "result", "subtype"} {
+		switch v := e[k].(type) {
+		case string:
+			parts = append(parts, v)
+		case map[string]any:
+			m := event(v)
+			for _, f := range []string{"name", "message", "type", "code"} {
+				if s := m.str(f); s != "" {
+					parts = append(parts, s)
+				}
+			}
+			if s := m.obj("data").str("message"); s != "" {
+				parts = append(parts, s)
+			}
+		}
+	}
+	return strings.Join(parts, ": ")
 }
 
 func oneLine(s string) string {
@@ -183,57 +195,67 @@ func oneLine(s string) string {
 	return s
 }
 
-// Classify 判执行者退出时的信号（纯函数）：先额度用尽，再思考耗尽，再起不来（没登录、缺运行环境）、模型名无效，再供应商临时错误；
-// 报文都认不出、而这一轮一步没做的，按行为算零步骤出错退出（见 idle）。worker 是这一轮的执行者标识，数步骤要按它的工具解析日志。
-// 退出码 0 不判额度、起不来、模型名无效、临时错误与零步骤（跑完了就进入交付检查）；ExitUnknown 不判后四种。
-func Classify(exitCode int, worker, tail string, now time.Time) Signal {
+// Classify 判执行者退出时的信号（纯函数）：先额度用尽，再思考耗尽，再起不来（没登录、缺运行环境）、模型名无效——这几种换人或等人才过得去，按报文认；
+// 其余出错退出不再按措辞分，按行为判：这一轮一步没做的算零步骤出错退出（见 idle），做过事的算临时错误、原地重试。
+// worker 是这一轮的执行者标识，数步骤要按它的工具解析日志。
+// 出错退出指退出码非 0 且日志最后不是正常收尾；继续跟进拿不到退出码（ExitUnknown）的，日志最后是报错收尾才算。退出码 0 只判思考耗尽（跑完了就进入交付检查）。
+func Classify(exitCode int, worker string, log LogTail, now time.Time) Signal {
+	tail := log.Text
 	report := errorReport(tail)
-	if exitCode != 0 && report != "" && (quotaMarkRE.MatchString(report) || http429RE.MatchString(report)) {
-		s := Signal{Kind: SignalQuota, Reason: "额度用尽", Evidence: oneLine(report)}
-		if t, ok := resetAt(report, now); ok {
-			s.ResetAt = t.UnixMilli()
-			s.Reason = "额度用尽，" + t.Local().Format("01-02 15:04") + " 恢复"
+	if exitCode != 0 {
+		if s, ok := quotaSignal(report, now); ok {
+			return s
 		}
-		return s
 	}
 	if s, ok := thinkingExhausted(tail); ok {
 		return s
 	}
-	if exitCode != 0 && exitCode != ExitUnknown {
-		plain := ""
-		if !endedOK(tail) {
-			plain = lastPlainLines(tail, 12)
-		}
-		for _, text := range []string{report, plain} {
-			for _, st := range setups {
-				if line := matchLine(st.re, text); line != "" {
-					return Signal{Kind: SignalSetup, Reason: st.reason, Evidence: oneLine(line)}
-				}
-			}
-			if modelNameRE.MatchString(text) {
-				return Signal{Kind: SignalModel, Reason: "模型名无效", Evidence: oneLine(text)}
+	ended, ok := lastEnding(tail)
+	if failed := (ended && !ok) || (!ended && exitCode != ExitUnknown); exitCode == 0 || !failed {
+		return Signal{}
+	}
+	plain := lastPlainLines(tail, 12)
+	for _, text := range []string{report, plain} {
+		for _, st := range setups {
+			if line := matchLine(st.re, text); line != "" {
+				return Signal{Kind: SignalSetup, Reason: st.reason, Evidence: oneLine(line)}
 			}
 		}
-		text := report
-		if text == "" {
-			text = plain
-		}
-		for _, t := range transients {
-			if t.re.MatchString(text) {
-				return Signal{Kind: SignalTransient, Reason: "供应商或网络临时错误：" + t.kind, Evidence: oneLine(text)}
-			}
-		}
-		if idle(worker, tail) {
-			return Signal{Kind: SignalNoStart, Reason: fmt.Sprintf("零步骤出错退出（退出码 %d，原因不明）", exitCode), Evidence: oneLine(text)}
+		if modelNameRE.MatchString(text) {
+			return Signal{Kind: SignalModel, Reason: "模型名无效", Evidence: oneLine(text)}
 		}
 	}
-	return Signal{}
+	text := report
+	if text == "" {
+		text = plain
+	}
+	code := "退出码不明"
+	if exitCode != ExitUnknown {
+		code = fmt.Sprintf("退出码 %d", exitCode)
+	}
+	if !log.Cut && idle(worker, tail) {
+		return Signal{Kind: SignalNoStart, Reason: "零步骤出错退出（" + code + "，原因不明）", Evidence: oneLine(text)}
+	}
+	return Signal{Kind: SignalTransient, Reason: "做过事之后出错退出（" + code + "），按临时错误重试", Evidence: oneLine(text)}
+}
+
+// quotaSignal：报文是额度用尽时给出信号，读得出恢复时刻的带上。
+func quotaSignal(report string, now time.Time) (Signal, bool) {
+	if report == "" || !(quotaMarkRE.MatchString(report) || http429RE.MatchString(report)) {
+		return Signal{}, false
+	}
+	s := Signal{Kind: SignalQuota, Reason: "额度用尽", Evidence: oneLine(report)}
+	if t, ok := resetAt(report, now); ok {
+		s.ResetAt = t.UnixMilli()
+		s.Reason = "额度用尽，" + t.Local().Format("01-02 15:04") + " 恢复"
+	}
+	return s, true
 }
 
 // idle：这一轮一步没做——日志里没有一次工具调用，也没说一句话（按 Trace 的分段数）。
-// 工具不带解析（通用命令行）的数不出步骤，不算；尾巴读满 TailBytes 的日志前面还有东西（可能是一条超长的工具输出被截了头），也不算。
+// 工具不带解析（通用命令行）的数不出步骤，不算；日志比读到的尾巴长的（LogTail.Cut）由调用方排除。
 func idle(worker, tail string) bool {
-	if !Traceable(worker) || len(tail) >= TailBytes {
+	if !Traceable(worker) {
 		return false
 	}
 	p := NewParser(worker)
@@ -241,22 +263,22 @@ func idle(worker, tail string) bool {
 	return len(p.t.Segments) == 0
 }
 
-// endedOK：日志里最后的收尾事件是正常收尾（之前的报错已被越过）。
-func endedOK(tail string) bool {
+// lastEnding：日志里最后的收尾事件，ended 为假表示没有收尾事件；ok 表示正常收尾（之前的报错已被越过）。
+func lastEnding(tail string) (ended, ok bool) {
 	lines := strings.Split(tail, "\n")
 	for i := len(lines) - 1; i >= 0; i-- {
 		e := parseEvent(lines[i])
 		switch {
 		case e == nil:
 		case e.str("type") == "result":
-			return e["is_error"] == false
+			return true, e["is_error"] == false
 		case e.str("event") == "result":
-			return e.obj("result").str("status") == "SUCCESS"
+			return true, e.obj("result").str("status") == "SUCCESS"
 		case e.str("type") == "turn.completed", e.str("type") == "turn.failed":
-			return e.str("type") == "turn.completed"
+			return true, e.str("type") == "turn.completed"
 		}
 	}
-	return false
+	return false, false
 }
 
 // matchLine 是 text 里第一处命中 re 的那一行；没命中为空。

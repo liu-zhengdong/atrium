@@ -352,11 +352,12 @@ func TestClassify(t *testing.T) {
 		{"codex --json 额度", 1, `{"type":"turn.started"}` + "\n" + `{"type":"turn.failed","error":{"message":"You've hit your usage limit. Try again in ~5 min."}}`, SignalQuota, now.Add(5 * time.Minute)},
 		{"claude 额度", 1, `{"type":"result","is_error":true,"result":"Claude AI usage limit reached|resets 3pm (UTC)"}`, SignalQuota, time.Date(2026, 9, 29, 15, 0, 0, 0, time.UTC)},
 		{"429", 1, "Error: HTTP/1.1 429 Too Many Requests\nretry-after: 30\n", SignalQuota, now.Add(30 * time.Second)},
-		{"正文提到额度不算", 1, `{"type":"assistant","message":{"content":[{"type":"text","text":"usage limit reached"}]}}`, SignalNone, time.Time{}},
+		{"正文提到额度不算", 1, `{"type":"assistant","message":{"content":[{"type":"text","text":"usage limit reached"}]}}`, SignalTransient, time.Time{}},
 		{"退出码 0 不判额度", 0, "Error: usage limit reached\n", SignalNone, time.Time{}},
+		// 认不出的出错退出不按措辞分：数不出步骤（通用命令行）或做过事的都按临时错误重试
 		{"网络", 1, "Error: fetch failed\n", SignalTransient, time.Time{}},
 		{"过载事件", 1, `{"type":"error","error":{"name":"APIError","data":{"message":"Overloaded"}}}`, SignalTransient, time.Time{}},
-		{"5xx", 1, "error: status 503 Service Unavailable\n", SignalTransient, time.Time{}},
+		{"容量不足", 1, `{"type":"turn.failed","error":{"message":"Selected model is at capacity. Please try a different model."}}`, SignalTransient, time.Time{}},
 		{"grok 没登录", 1, "Not signed in\n", SignalSetup, time.Time{}},
 		{"claude 没登录", 1, `{"type":"result","is_error":true,"result":"Invalid API key · Please run /login"}`, SignalSetup, time.Time{}},
 		// t415 现场 h3 上 kimi 没登录的原文：报错之后还跟着一行 libuv 崩溃，退出码是 Windows 的 0xC0000409
@@ -373,7 +374,7 @@ func TestClassify(t *testing.T) {
 		{"拉起子进程 ENOENT", 1, "Error: spawn codex ENOENT\n    at ChildProcess._handle.onexit (node:internal/child_process:285:19)\n", SignalSetup, time.Time{}},
 		{"Go 找不到可执行文件", 1, `exec: "codex": executable file not found in $PATH` + "\n", SignalSetup, time.Time{}},
 		{"退出码 0 不判缺运行环境", 0, "zsh: command not found: rg\n", SignalNone, time.Time{}},
-		{"读不到文件不算缺运行环境", 1, "Error: ENOENT: no such file or directory, open 'a.txt'\n", SignalNone, time.Time{}},
+		{"读不到文件不算缺运行环境", 1, "Error: ENOENT: no such file or directory, open 'a.txt'\n", SignalTransient, time.Time{}},
 		// t330 现场 agy 里 Claude 模型撞额度的原文（#543）
 		{"agy Claude 模型额度", 1, "API error (attempt 5): RESOURCE_EXHAUSTED (code 429): Individual quota reached. Resets in 2h57m45s\n", SignalQuota, now.Add(2*time.Hour + 57*time.Minute + 45*time.Second)},
 		// t349、t352 现场 agy+gemini-3.8-flash-high 的收尾：没有 RESOURCE_EXHAUSTED、没有恢复时刻
@@ -382,21 +383,23 @@ func TestClassify(t *testing.T) {
 		{"quota 在后", 1, "Error: You exceeded your current quota, please check your plan\n", SignalQuota, time.Time{}},
 		{"下划线连写", 1, `{"type":"error","error":{"code":"quota_exceeded"}}`, SignalQuota, time.Time{}},
 		{"限定词 limit 在前", 1, "Error: Rate limit hit\n", SignalQuota, time.Time{}},
-		{"上下文 limit 不算额度", 1, "Error: context limit reached\n", SignalNone, time.Time{}},
-		{"单词里的 hit 不算", 1, "Error: whitelist quota config missing\n", SignalNone, time.Time{}},
+		{"上下文 limit 不算额度", 1, "Error: context limit reached\n", SignalTransient, time.Time{}},
+		{"单词里的 hit 不算", 1, "Error: whitelist quota config missing\n", SignalTransient, time.Time{}},
 		{"agy 结果事件里的额度", 1, `{"event":"result","result":{"status":"ERROR","error":"RESOURCE_EXHAUSTED (code 429): Individual quota reached. Resets in 12m"}}`, SignalQuota, now.Add(12 * time.Minute)},
 		// t342 现场 agy 不认不带强度的模型名的原文（#563）
 		{"agy 模型名无效", 1, `invalid model selection (--model "gemini-3.8-flash" --effort "")` + "\n", SignalModel, time.Time{}},
 		{"claude 模型不存在", 1, `{"type":"result","is_error":true,"result":"There's an issue with the selected model (claude-nope). It may not exist or you may not have access to it."}`, SignalModel, time.Time{}},
 		{"codex 模型不支持", 1, "ERROR: The 'gpt-nope' model is not supported when using Codex with a ChatGPT account.\n", SignalModel, time.Time{}},
 		{"退出码 0 不判模型名", 0, "invalid model selection\n", SignalNone, time.Time{}},
-		{"继续跟进不判临时错误", ExitUnknown, "Error: fetch failed\n", SignalNone, time.Time{}},
+		{"继续跟进、没有报错收尾不判", ExitUnknown, "Error: fetch failed\n", SignalNone, time.Time{}},
+		{"继续跟进、报错收尾照判", ExitUnknown, `{"type":"turn.failed","error":{"message":"stream disconnected before completion"}}`, SignalTransient, time.Time{}},
+		{"继续跟进、报错收尾是额度", ExitUnknown, `{"type":"turn.failed","error":{"message":"You've hit your usage limit. Try again in ~5 min."}}`, SignalQuota, now.Add(5 * time.Minute)},
 		{"之后正常收尾", 1, "Error: fetch failed\n" + `{"type":"result","is_error":false,"stop_reason":"end_turn"}`, SignalNone, time.Time{}},
 		{"思考耗尽", 0, `{"type":"step_finish","part":{"reason":"length","tokens":{"reasoning":32000,"output":0}}}`, SignalThinking, time.Time{}},
 		{"长度用尽但有正文", 0, `{"type":"step_finish","part":{"reason":"length","tokens":{"reasoning":100,"output":900}}}`, SignalNone, time.Time{}},
 	}
 	for _, c := range cases {
-		s := Classify(c.code, "", c.tail, now)
+		s := Classify(c.code, "", LogTail{Text: c.tail}, now)
 		if s.Kind != c.kind {
 			t.Errorf("%s：得到 %+v", c.name, s)
 		}
@@ -431,26 +434,27 @@ func TestClassifyNoStart(t *testing.T) {
 		name, worker string
 		code         int
 		tail, kind   string
+		cut          bool
 	}{
-		{"opencode UnknownError 零步骤", "opencode+deepseek-v4.1-flash", 1, unknown, SignalNoStart},
+		{"opencode UnknownError 零步骤", "opencode+deepseek-v4.1-flash", 1, unknown, SignalNoStart, false},
 		// t392 codex+gpt-6-sol 在 h3、h1 各一次退出码 1：原日志没拿到，按 codex 的事件写成开了线程、一步没做
-		{"codex 零步骤退出码 1", "codex+gpt-6-sol", 1, `{"type":"thread.started","thread_id":"0199a213-81c0-7800-8aa1-bbab2a035a53"}` + "\n" + `{"type":"turn.started"}` + "\n", SignalNoStart},
-		{"日志是空的", "codex+gpt-6-sol", 1, "", SignalNoStart},
-		{"干了活之后退出码 1", "opencode+deepseek-v4.1-flash", 1, read("testdata/opencode-sample.jsonl") + unknown, SignalNone},
-		{"agy 做了 23 步后退出码 1", "agy+gemini-3.8-flash-high", 1, read("testdata/agy-t349.jsonl"), SignalNone},
-		{"退出码 0 不判", "opencode+deepseek-v4.1-flash", 0, unknown, SignalNone},
-		{"继续跟进拿不到退出码不判", "opencode+deepseek-v4.1-flash", ExitUnknown, unknown, SignalNone},
-		{"通用命令行数不出步骤不判", "mycli", 1, "boom\n", SignalNone},
-		{"尾巴读满、开头被截的不判", "opencode+deepseek-v4.1-flash", 1, strings.Repeat("x", TailBytes) + "\n" + unknown, SignalNone},
-		{"认得出的原因照原因判", "opencode+deepseek-v4.1-flash", 1, `{"type":"error","error":{"name":"APIError","data":{"message":"Overloaded"}}}`, SignalTransient},
+		{"codex 零步骤退出码 1", "codex+gpt-6-sol", 1, `{"type":"thread.started","thread_id":"0199a213-81c0-7800-8aa1-bbab2a035a53"}` + "\n" + `{"type":"turn.started"}` + "\n", SignalNoStart, false},
+		{"日志是空的", "codex+gpt-6-sol", 1, "", SignalNoStart, false},
+		{"干了活之后退出码 1 按临时错误重试", "opencode+deepseek-v4.1-flash", 1, read("testdata/opencode-sample.jsonl") + unknown, SignalTransient, false},
+		{"agy 做了 23 步后退出码 1 按临时错误重试", "agy+gemini-3.8-flash-high", 1, read("testdata/agy-t349.jsonl"), SignalTransient, false},
+		{"退出码 0 不判", "opencode+deepseek-v4.1-flash", 0, unknown, SignalNone, false},
+		{"继续跟进拿不到退出码不判", "opencode+deepseek-v4.1-flash", ExitUnknown, unknown, SignalNone, false},
+		{"通用命令行数不出步骤，按临时错误重试", "mycli", 1, "boom\n", SignalTransient, false},
+		{"日志比尾巴长、尾巴里数不出步骤，按临时错误重试", "opencode+deepseek-v4.1-flash", 1, unknown, SignalTransient, true},
+		{"认得出的原因照原因判", "opencode+deepseek-v4.1-flash", 1, `{"type":"result","is_error":true,"result":"Invalid API key · Please run /login"}`, SignalSetup, false},
 	}
 	for _, c := range cases {
-		s := Classify(c.code, c.worker, c.tail, now)
+		s := Classify(c.code, c.worker, LogTail{Text: c.tail, Cut: c.cut}, now)
 		if s.Kind != c.kind {
 			t.Errorf("%s：得到 %+v", c.name, s)
 		}
 	}
-	if s := Classify(1, "opencode+deepseek-v4.1-flash", unknown, now); !strings.Contains(s.Evidence, "UnknownError") || !strings.Contains(s.Reason, "退出码 1") {
+	if s := Classify(1, "opencode+deepseek-v4.1-flash", LogTail{Text: unknown}, now); !strings.Contains(s.Evidence, "UnknownError") || !strings.Contains(s.Reason, "退出码 1") {
 		t.Errorf("证据应是那行报错、原因带退出码：%+v", s)
 	}
 	// 从日志尾巴一路判到标记：三段现场样本都标「工具+模型@机器」且到期解除，干了活的不标
@@ -466,9 +470,66 @@ func TestClassifyNoStart(t *testing.T) {
 	}
 	for _, c := range marks {
 		w, _ := ParseWorker(c.worker)
-		m, ok := MarkOf(Classify(1, c.worker, c.tail, now), w, "h1", now)
+		m, ok := MarkOf(Classify(1, c.worker, LogTail{Text: c.tail}, now), w, "h1", now)
 		if ok != c.ok || (ok && (m.Target() != c.target || m.Until != now.Add(Hold).UnixMilli())) {
 			t.Errorf("%s：%v %+v", c.worker, ok, m)
+		}
+	}
+}
+
+// 退出时挑哪条报错来判：从日志文件经 Tail 读尾巴再判，覆盖两种挑错行——出错事件之后的收尾噪音、尾巴开头截断的半行。
+func TestClassifyPicksReport(t *testing.T) {
+	now := time.Date(2026, 9, 30, 14, 21, 0, 0, time.UTC)
+	dir := t.TempDir()
+	read := func(f string) string {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+	// codex 做过事、退出时打的收尾噪音（t744 现场那一行的写法）
+	noise := "2026-09-30T14:21:07.512345Z ERROR codex_core::session: failed to record rollout items: thread 0199e0a1-5c2d-7a13-9f4e-3b8d2c6a1e70 not found\n"
+	worked := read("testdata/codex-sample.jsonl")
+	failed := func(msg string) string {
+		return `{"type":"error","message":"` + msg + `"}` + "\n" + `{"type":"turn.failed","error":{"message":"` + msg + `"}}` + "\n" + noise
+	}
+	// t696：一条超长的工具输出跨过尾巴开头，截断的半行里有额度字样，之后没有别的报错行
+	long := `{"type":"item.completed","item":{"id":"item_9","type":"command_execution","command":"cat signals.go","aggregated_output":"` +
+		strings.Repeat("a", TailBytes-40) + ` Error: rate limit exceeded ` + strings.Repeat("b", 60) + `","exit_code":0,"status":"completed"}}` + "\n"
+	cases := []struct {
+		name, worker, log string
+		code              int
+		kind, evidence    string
+		cut               bool
+		reset             time.Time
+	}{
+		// t744 第 1 次拉起（codex@h1）日志末尾：容量报错之后是收尾噪音
+		{"t744 容量报错被收尾噪音跟着", "codex+gpt-6-sol", read("testdata/codex-t744-run1-tail.txt"), 1, SignalTransient, "at capacity", false, time.Time{}},
+		{"t696 截断半行里的额度字样不算", "codex+gpt-6-sol", worked + long + `{"type":"turn.started"}` + "\n", 1, SignalTransient, "", true, time.Time{}},
+		{"额度报错被收尾噪音跟着", "codex+gpt-6-sol", worked + failed("You've hit your usage limit. Try again in ~90 min."), 1, SignalQuota, "usage limit", false, now.Add(90 * time.Minute)},
+		{"没登录被收尾噪音跟着", "codex+gpt-6-sol", worked + failed("Not signed in. Please run codex login."), 1, SignalSetup, "Not signed in", false, time.Time{}},
+		{"模型名无效被收尾噪音跟着", "codex+gpt-6-sol", failed("The 'gpt-nope' model is not supported when using Codex with a ChatGPT account."), 1, SignalModel, "gpt-nope", false, time.Time{}},
+		{"截断之后仍认额度", "codex+gpt-6-sol", long + failed("You've hit your usage limit. Try again in ~90 min."), 1, SignalQuota, "usage limit", true, now.Add(90 * time.Minute)},
+	}
+	for i, c := range cases {
+		path := filepath.Join(dir, fmt.Sprintf("run-%d.log", i))
+		if err := os.WriteFile(path, []byte(c.log), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		log, err := Tail(path, TailBytes)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if log.Cut != c.cut || strings.Contains(log.Text, "aaaa") {
+			t.Errorf("%s：截断 %v，要 %v；开头半行应已丢掉", c.name, log.Cut, c.cut)
+		}
+		s := Classify(c.code, c.worker, log, now)
+		if s.Kind != c.kind || !strings.Contains(s.Evidence, c.evidence) || strings.Contains(s.Evidence, "rollout") || strings.Contains(s.Evidence, "rate limit") {
+			t.Errorf("%s：得到 %+v", c.name, s)
+		}
+		if !c.reset.IsZero() && s.ResetAt != c.reset.UnixMilli() {
+			t.Errorf("%s：恢复时刻 %v，应为 %v", c.name, time.UnixMilli(s.ResetAt).UTC(), c.reset)
 		}
 	}
 }

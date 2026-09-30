@@ -248,16 +248,15 @@ func Level(h Holder, now int64) int {
 type Signal string
 
 const (
-	SigNone      Signal = ""
-	SigTransient Signal = "transient" // 供应商临时错误：重试或换人
-	SigThinking  Signal = "thinking"  // 思考耗尽：换人
-	SigQuota     Signal = "quota"     // 额度用尽：标记账号、换人
-	SigError     Signal = "error"     // 执行者报错退出
-	SigDone      Signal = "done"      // 执行者正常收尾
+	SigNone     Signal = ""
+	SigThinking Signal = "thinking" // 思考耗尽：换人
+	SigQuota    Signal = "quota"    // 额度用尽：标记账号、换人
+	SigError    Signal = "error"    // 执行者报错退出
+	SigDone     Signal = "done"     // 执行者正常收尾
 )
 
 // Retryable：这类信号换人或重试就可能过去。
-func (s Signal) Retryable() bool { return s == SigTransient || s == SigThinking || s == SigQuota }
+func (s Signal) Retryable() bool { return s == SigThinking || s == SigQuota }
 
 // Obs 是巡检一轮对一个进程的观察。
 type Obs struct {

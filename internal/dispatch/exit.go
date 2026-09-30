@@ -24,7 +24,7 @@ func (d *dispatcher) exited(ctx context.Context, p *proc, code int) error {
 	if t.Status != ledger.Running || t.Stage != ledger.StageNone || last == nil || last.N != p.run.N {
 		return recordExit(ctx, db, p.task, p.run, workers.Exit{N: p.run.N, Reason: "任务已停止或进入下一阶段"})
 	}
-	tail, err := workers.Tail(p.run.Log, workers.TailBytes)
+	log, err := workers.Tail(p.run.Log, workers.TailBytes)
 	if err != nil && !os.IsNotExist(err) {
 		return err
 	}
@@ -41,18 +41,18 @@ func (d *dispatcher) exited(ctx context.Context, p *proc, code int) error {
 		return err
 	}
 	same, switches, tried := tries(runs)
-	sig := workers.Classify(code, p.run.Worker, tail, time.Now())
+	sig := workers.Classify(code, p.run.Worker, log, time.Now())
 	if p.lost {
 		sig = workers.Signal{Kind: workers.SignalTransient, Reason: "远程执行者退出不明"}
 	}
 	session := p.adapter.SessionOf(head)
-	route := RouteExit(ExitInput{Code: code, Signal: sig, Ending: p.adapter.Ended(tail), StopFor: p.stopReason(),
+	route := RouteExit(ExitInput{Code: code, Signal: sig, Ending: p.adapter.Ended(log.Text), StopFor: p.stopReason(),
 		Same: same, Switches: switches, Pending: len(pending), CanResume: p.adapter.CanResume() && session != ""})
 	marked, err := markUnavailable(ctx, db, p.run, sig)
 	if err != nil {
 		return err
 	}
-	if reply := p.adapter.LastReply(tail); reply != "" {
+	if reply := p.adapter.LastReply(log.Text); reply != "" {
 		if err := ledger.Record(ctx, db, p.task, gates.KindResult, actor, reply); err != nil {
 			return err
 		}

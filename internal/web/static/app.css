@@ -387,3 +387,6 @@ details.full .result{margin-top:8px;font-size:13px;color:var(--ink2)}
 .dl{display:inline-flex;align-items:center;gap:8px;margin-top:4px;padding:8px 14px;border-radius:8px;background:var(--raise);color:var(--ink)}
 .dl:hover{background:var(--hover)}
 @media (max-width:760px){.dhead [data-wide]{display:none}} /* 窄屏抽屉本来就占满 */
+
+[data-atrium-logo]{display:inline-flex;align-items:center;gap:10px;flex:none}
+.logo-status{font-size:12px;font-weight:400;color:var(--ink2)}

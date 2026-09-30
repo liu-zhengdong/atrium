@@ -109,8 +109,8 @@ func (w *web) local(h http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 		// 脚本只许本站文件；样式许行内 style（额度条宽度、树缩进是算出来的，docx 预览自带样式），页面里的文字一律转义后才拼进 HTML；
-		// 图片许 data:（docx 预览把内嵌图片转成 data: 地址）。资料原文另设自己的 CSP（见 material.go）。
-		rw.Header().Set("Content-Security-Policy", "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; frame-ancestors 'none'")
+		// 图片许 data:（docx 内嵌图）与 blob:（断线时留在页面内的 logo 动画）。资料原文另设自己的 CSP（见 material.go）。
+		rw.Header().Set("Content-Security-Policy", "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; frame-ancestors 'none'")
 		rw.Header().Set("X-Content-Type-Options", "nosniff")
 		rw.Header().Set("Referrer-Policy", "no-referrer")
 		h(rw, req)

@@ -622,3 +622,39 @@ func TestDeptHeadAndTaskLinks(t *testing.T) {
 		}
 	}
 }
+
+// 上线提示只看 shipped 上交，已确认仍算，普通上交与任务结束不算。
+func TestNavShippedID(t *testing.T) {
+	ctx := context.Background()
+	db, err := store.Open(filepath.Join(t.TempDir(), "atrium.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	read := func(want int64) {
+		t.Helper()
+		nav, err := loadNav(ctx, db)
+		if err != nil || nav.ShippedID != want {
+			t.Fatalf("shipped_id=%d，want=%d，err=%v", nav.ShippedID, want, err)
+		}
+	}
+	emit := func(kind string) {
+		t.Helper()
+		if err := events.Emit(ctx, db, events.Event{Kind: events.LeaderEscalate, Target: "a1", Body: map[string]any{"kind": kind}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	read(0)
+	emit("stuck")
+	read(0)
+	emit("shipped")
+	read(2)
+	if _, err := db.ExecContext(ctx, `UPDATE events SET acked_at = 1 WHERE id = 2`); err != nil {
+		t.Fatal(err)
+	}
+	read(2)
+	emit("cross")
+	read(2)
+	emit("shipped")
+	read(4)
+}

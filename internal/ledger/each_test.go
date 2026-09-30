@@ -123,6 +123,52 @@ func TestEachTaskBadWorkspace(t *testing.T) {
 	}
 }
 
+func TestEachTaskNotNowRetries(t *testing.T) {
+	ctx := context.Background()
+	db, err := store.Open(filepath.Join(t.TempDir(), "db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	task, err := ledger.Add(ctx, db, ledger.NewTask{Title: "away"}, "u1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	round := func() error {
+		return ledger.EachTask(ctx, db, "dispatch.pump", []ledger.Task{task}, func(x ledger.Task) string { return x.ID }, func(ledger.Task) error {
+			calls++
+			if calls == 1 {
+				return fmt.Errorf("远程执行者拉起失败：%w", app.NotNow(fmt.Errorf("h2 这会儿没在领指令，下一轮再试")))
+			}
+			return nil
+		})
+	}
+	if err := round(); err != nil {
+		t.Fatal(err)
+	}
+	if err := round(); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 2 {
+		t.Fatalf("下一轮应再试，调用 %d 次", calls)
+	}
+	got, err := ledger.Get(ctx, db, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != ledger.Todo {
+		t.Fatalf("状态被改了：%s", got.Status)
+	}
+	var n int
+	if err := db.QueryRow(`SELECT count(*) FROM task_events WHERE task=? AND kind=?`, task.ID, ledger.KindLoopError).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Fatalf("不应记失败：%d", n)
+	}
+}
+
 func TestEachTaskInfrastructure(t *testing.T) {
 	for _, kind := range []string{"closed", "sql", "cancel", "global", "timeout"} {
 		t.Run(kind, func(t *testing.T) {

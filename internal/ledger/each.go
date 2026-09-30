@@ -17,6 +17,7 @@ const KindLoopError = "loop_error"
 // 读取列表只取原始字段；解析登记、检查暂停与执行动作都放在 run 内。
 // 出错的未结束任务转受阻并沿用 Apply 的处理人通知；已结束任务只记经历。
 // 同一操作失败后不再自动重试，直到该任务有新的状态事件（重新分派任务/放行等）。
+// app.NotNow（远程机器这会儿没在领指令）不是失败：不转受阻、不记经历，下一轮再试。
 // 标记存在任务经历中，服务重启仍有效，不增加表、内存缓存或重启机制。
 func EachTask[T any](ctx context.Context, db *store.DB, operation string, items []T, id func(T) string, run func(T) error) error {
 	return app.Each(ctx, db, items, func(item T) error {

@@ -142,14 +142,15 @@ func RepoAllowed(repos []string, repo string) bool {
 	return false
 }
 
-// fit 判这台能不能接：never 接不了，later 接得了但现在满或太忙。pinned 是用户 --host 指定的（不看仓库）。
+// fit 判这台能不能接：never 接不了，later 这会儿不行（满、太忙，或远程暂时不在）。pinned 是用户 --host 指定的（不看仓库）。
 func fit(c Candidate, n Need, pinned bool) (ok bool, later bool, reason string) {
 	if c.Kind == "remote" {
 		switch c.Conn {
 		case ConnPending, ConnExpired:
 			return false, false, c.ID + " 还没接入"
 		case ConnOffline:
-			return false, false, c.ID + " 离线"
+			// 心跳断了或服务重启后还没重连。机器还是这台，等它回来再派，不转受阻。
+			return false, true, c.ID + " 离线"
 		}
 	}
 	if c.Kind == "remote" && n.LocalOnly != "" {
@@ -200,7 +201,7 @@ func utilization(c Candidate) float64 {
 
 func crowded(c Candidate) bool { return c.Busy != "" || (c.Max > 0 && c.Running >= c.Max) }
 
-// Choose 挑机器：指定了只看那台（接不了拒绝，满了排队）；否则在能接的里挑最空的，一样空本机优先；
+// Choose 挑机器：指定了只看那台（接不了拒绝，满了或暂时不在就排队）；否则在能接的里挑最空的，一样空本机优先；
 // 紧急的先挑不满不忙的；暂停的一律不选；远程只自动接登记过的仓库；都满时排队，本机的原因优先。
 func Choose(cands []Candidate, n Need, pinned string) Choice {
 	if pinned != "" {

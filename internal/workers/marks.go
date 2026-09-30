@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/liu-zhengdong/atrium/internal/api"
+	"github.com/liu-zhengdong/atrium/internal/events"
 	"github.com/liu-zhengdong/atrium/internal/store"
 )
 
@@ -41,15 +42,23 @@ func (m Mark) Target() string {
 // Covers：这条标记挡住这个执行者（不论机器）——同一工具，标记没写模型或模型相同。
 func (m Mark) Covers(s Spec) bool { return m.Tool == s.Tool && (m.Model == "" || m.Model == s.Model) }
 
-// Text 是给人看的一句：原因与什么时候恢复。
+// Text 是给人看的一句：原因与什么时候恢复（等人处理的写怎么处理）。
 func (m Mark) Text() string {
 	if m.Until > 0 {
 		return m.Reason + "，" + time.UnixMilli(m.Until).Local().Format("01-02 15:04") + " 恢复"
 	}
-	if m.Kind == MarkProbe {
-		return m.Reason + "，自检跑通后自动解除"
+	return m.Reason + "，" + m.Fix()
+}
+
+// Fix 是等人处理（until=0）的标记怎么处理：「等你」的副行与投秘书的事件都用它。
+func (m Mark) Fix() string {
+	switch m.Kind {
+	case MarkProbe:
+		return "修好后自检跑通自动解除，或 atrium workers edit --clear " + m.Target()
+	case SignalModel:
+		return "改对模型名后 atrium workers edit --clear " + m.Target()
 	}
-	return m.Reason + "，等人处理后 atrium workers edit --clear " + m.Target()
+	return "登录或装好运行环境后 atrium workers edit --clear " + m.Target()
 }
 
 // MarkOf 把退出信号翻成不可用标记（纯函数）：额度用尽标「工具+模型」到报文里的恢复时刻（读不出按 QuotaHold）；
@@ -82,32 +91,70 @@ func Blocked(marks []Mark, tool, model, host string) (Mark, bool) {
 	return Mark{}, false
 }
 
-// SetMark 记一条标记（同一「工具+模型@机器」覆盖），顺手删掉已到期的。
-func SetMark(ctx context.Context, q store.Querier, m Mark) error {
+// SetMark 记一条标记（同一「工具+模型@机器」覆盖），顺手删掉已到期的；新出现等人处理的，同一事务里投秘书（见 settle）。
+func SetMark(ctx context.Context, db *store.DB, m Mark) error {
+	return db.Tx(ctx, func(tx *sql.Tx) error { return setMark(ctx, tx, m) })
+}
+
+// setMark 是标记的唯一写入：退出信号（SetMark）与机器自检（SyncProbes）都经这里。
+func setMark(ctx context.Context, q store.Querier, m Mark) error {
 	if _, err := q.ExecContext(ctx, `DELETE FROM worker_marks WHERE until > 0 AND until <= ?`, m.Since); err != nil {
 		return err
 	}
-	_, err := q.ExecContext(ctx, `INSERT INTO worker_marks (tool, model, host, kind, reason, evidence, until, since)
+	var prev *Mark
+	var p Mark
+	err := q.QueryRowContext(ctx, `SELECT tool, model, host, kind, reason, evidence, until, since FROM worker_marks
+		WHERE tool = ? AND model = ? AND host = ?`, m.Tool, m.Model, m.Host).
+		Scan(&p.Tool, &p.Model, &p.Host, &p.Kind, &p.Reason, &p.Evidence, &p.Until, &p.Since)
+	switch {
+	case err == nil:
+		prev = &p
+	case !store.IsNotFound(err):
+		return err
+	}
+	m, write, fresh := settle(prev, m)
+	if !write {
+		return nil
+	}
+	if _, err := q.ExecContext(ctx, `INSERT INTO worker_marks (tool, model, host, kind, reason, evidence, until, since)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (tool, model, host) DO UPDATE SET kind = excluded.kind,
 		reason = excluded.reason, evidence = excluded.evidence, until = excluded.until, since = excluded.since`,
-		m.Tool, m.Model, m.Host, m.Kind, m.Reason, m.Evidence, m.Until, m.Since)
-	return err
+		m.Tool, m.Model, m.Host, m.Kind, m.Reason, m.Evidence, m.Until, m.Since); err != nil {
+		return err
+	}
+	if !fresh {
+		return nil
+	}
+	return events.Emit(ctx, q, events.Event{Kind: events.WorkerDown, Target: events.Secretary, Level: events.Act,
+		Key: "worker:" + m.Target(), Body: map[string]any{"target": m.Target(), "reason": m.Reason, "next": m.Fix()}})
+}
+
+// settle 判定写一条标记（纯函数）。prev 是同一「工具+模型@机器」此刻有效的标记，没有为 nil。
+//   - write：自检标记不覆盖别的种类（没登录、额度用尽……已经挡着，也不该随自检跑通一起解除）。
+//   - fresh：新出现一条等人处理（until=0）的标记，要推给秘书；同一目标已有同一种等人处理的只是刷新，不算新，
+//     并沿用原来的 since（「等你」按它算等了多久）。额度用尽这类会自己恢复的不推。
+func settle(prev *Mark, m Mark) (out Mark, write, fresh bool) {
+	if m.Kind == MarkProbe && prev != nil && prev.Kind != MarkProbe {
+		return m, false, false
+	}
+	if m.Until != 0 {
+		return m, true, false
+	}
+	if prev != nil && prev.Until == 0 && prev.Kind == m.Kind {
+		m.Since = prev.Since
+		return m, true, false
+	}
+	return m, true, true
 }
 
 // SyncProbes 按一台机器这一轮的自检结果改标记：failed 里的工具记（或刷新）MarkProbe，这台上其余工具的 MarkProbe 解除。
-// 这台上这个工具已有别的标记（没登录、额度用尽……）时不覆盖：它已经挡着，也不该随自检跑通一起解除。
 func SyncProbes(ctx context.Context, db *store.DB, host string, failed []Mark, now int64) error {
 	return db.Tx(ctx, func(tx *sql.Tx) error {
-		if _, err := tx.ExecContext(ctx, `DELETE FROM worker_marks WHERE until > 0 AND until <= ?`, now); err != nil {
-			return err
-		}
 		tools := []string{}
 		for _, m := range failed {
 			tools = append(tools, m.Tool)
-			if _, err := tx.ExecContext(ctx, `INSERT INTO worker_marks (tool, model, host, kind, reason, evidence, until, since)
-				VALUES (?, '', ?, ?, ?, ?, 0, ?) ON CONFLICT (tool, model, host) DO UPDATE SET reason = excluded.reason,
-				evidence = excluded.evidence WHERE worker_marks.kind = ?`,
-				m.Tool, host, MarkProbe, m.Reason, m.Evidence, now, MarkProbe); err != nil {
+			m.Model, m.Host, m.Kind, m.Until, m.Since = "", host, MarkProbe, 0, now
+			if err := setMark(ctx, tx, m); err != nil {
 				return err
 			}
 		}

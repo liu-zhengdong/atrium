@@ -9,6 +9,7 @@ const icon = {
   accept: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="7" cy="7" r="4"/><path d="M10 10l3.5 3.5"/></svg>',
   stuck: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M8 4v5"/><circle cx="8" cy="11.8" r=".6" fill="currentColor"/></svg>',
   escalate: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M8 13V3.5M4 7.5l4-4 4 4"/></svg>',
+  worker: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="2.5" y="3" width="11" height="8" rx="1.5"/><path d="M6 14h4M8 11v3"/></svg>',
   check: '<svg class="check" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 8.5 6.5 12 13 4.5"/></svg>',
   repeat: '<svg class="rep" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12.5 6.5A4.8 4.8 0 0 0 3.6 5.2M3.5 9.5a4.8 4.8 0 0 0 8.9 1.3"/><path d="M3.3 2.6v2.8h2.8M12.7 13.4v-2.8H9.9"/></svg>',
   chev: '<svg class="chev" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M6 3.5 10.5 8 6 12.5"/></svg>',
@@ -168,12 +169,13 @@ function renderToday(d) {
   const rank = new Map();
   d.running.forEach(r => rank.has(r.group) || rank.set(r.group, rank.size));
   const live = [...d.running].sort(sortMode === "部门" ? (a, b) => rank.get(a.group) - rank.get(b.group) : (a, b) => a.at - b.at);
+  // 执行者不可用没有抽屉，点开到执行者页看详情
   const asks = d.asks.length ? `<div class="asks">${d.asks.map(a => `
-      <button class="ask ${esc(a.kind)}" data-open="${esc(a.id)}">
+      <a class="ask ${esc(a.kind)}" href="${a.kind === "worker" ? "#legion" : esc(hashWith(a.id))}">
         <span class="kind">${icon[a.kind]}</span>
         <span class="body"><span class="t">${esc(a.title)}</span><span class="s">${esc(a.sub)}</span></span>
         <span class="meta">${esc(a.dept_name || "")}<br>${esc(ago(a.at))}前</span>
-      </button>`).join("")}</div>` : `<div class="empty">没有等你的事</div>`;
+      </a>`).join("")}</div>` : `<div class="empty">没有等你的事</div>`;
   $("#page").innerHTML = `
     <h1 class="hello">今天</h1>
     ${todayNote(d)}

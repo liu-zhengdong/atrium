@@ -2,12 +2,14 @@ package workers
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/liu-zhengdong/atrium/internal/events"
 	"github.com/liu-zhengdong/atrium/internal/store"
 )
 
@@ -496,7 +498,110 @@ func TestSyncProbes(t *testing.T) {
 			t.Errorf("第 %d 步：%s", i+1, got)
 		}
 	}
-	if got := (Mark{Kind: MarkProbe, Reason: "自检 codex --version 退出码 1"}).Text(); got != "自检 codex --version 退出码 1，自检跑通后自动解除" {
+	if got := (Mark{Tool: "codex", Host: "h1", Kind: MarkProbe, Reason: "自检 codex --version 退出码 1"}).Text(); got != "自检 codex --version 退出码 1，修好后自检跑通自动解除，或 atrium workers edit --clear codex@h1" {
 		t.Error(got)
+	}
+}
+
+// 新出现一条等人处理的标记才推给秘书；同一种刷新、自检碰上别的标记、会自己恢复的都不推。
+func TestSettle(t *testing.T) {
+	setup := Mark{Kind: SignalSetup, Reason: "没登录", Since: 1}
+	probe := Mark{Kind: MarkProbe, Reason: "自检 kimi --version 退出码 1", Since: 1}
+	quota := Mark{Kind: SignalQuota, Reason: "额度用尽", Until: 9, Since: 1}
+	cases := []struct {
+		name         string
+		prev         *Mark
+		next         Mark
+		write, fresh bool
+	}{
+		{"没有标记时新记等人处理的", nil, setup, true, true},
+		{"没有标记时新记自检不过", nil, probe, true, true},
+		{"额度用尽不推", nil, quota, true, false},
+		{"同一种等人处理的刷新不算新", &setup, Mark{Kind: SignalSetup, Reason: "缺运行环境", Since: 5}, true, false},
+		{"自检每轮刷新不算新", &probe, Mark{Kind: MarkProbe, Reason: "自检 kimi --version 退出码 2", Since: 5}, true, false},
+		{"自检不覆盖没登录", &setup, probe, false, false},
+		{"自检不覆盖额度用尽", &quota, probe, false, false},
+		{"额度用尽之后没登录算新", &quota, setup, true, true},
+		{"自检不过之后查出没登录算新", &probe, setup, true, true},
+		{"模型名无效换成没登录算新", &Mark{Kind: SignalModel, Reason: "模型名无效"}, setup, true, true},
+	}
+	for _, c := range cases {
+		out, write, fresh := settle(c.prev, c.next)
+		if write != c.write || fresh != c.fresh {
+			t.Errorf("%s：write=%v fresh=%v", c.name, write, fresh)
+		}
+		if keep := write && !fresh && c.next.Until == 0; keep && out.Since != c.prev.Since {
+			t.Errorf("%s：刷新应沿用原来的 since，得 %d", c.name, out.Since)
+		}
+	}
+}
+
+// 推给秘书的事件：新出现一条推一条（去重键按目标），刷新与额度用尽不推；秘书确认后解除再出现，再推一条。
+func TestMarkEvents(t *testing.T) {
+	ctx := context.Background()
+	db, err := store.Open(filepath.Join(t.TempDir(), "a.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	now := time.Now().UnixMilli()
+	list := func() string {
+		rows, err := db.QueryContext(ctx, `SELECT target, level, key, count, body FROM events WHERE kind = ? ORDER BY id`, events.WorkerDown)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer rows.Close()
+		var out []string
+		for rows.Next() {
+			var target, level, key, body string
+			var n int
+			rows.Scan(&target, &level, &key, &n, &body)
+			out = append(out, fmt.Sprintf("%s %s %s %d %s", target, level, key, n, body))
+		}
+		return strings.Join(out, " | ")
+	}
+	kimi := Mark{Tool: "kimi", Host: "h3", Kind: SignalSetup, Reason: "没登录", Since: now}
+	one := `secretary act worker:kimi@h3 1 {"next":"登录或装好运行环境后 atrium workers edit --clear kimi@h3","reason":"没登录","target":"kimi@h3"}`
+	steps := []struct {
+		name string
+		do   func() error
+		want string
+	}{
+		{"额度用尽不推", func() error {
+			return SetMark(ctx, db, Mark{Tool: "kimi", Model: "k2", Host: "h3", Kind: SignalQuota, Reason: "额度用尽", Until: now + 3600_000, Since: now})
+		}, ""},
+		{"没登录推一条", func() error { return SetMark(ctx, db, kimi) }, one},
+		{"再记一次同样的不推", func() error { return SetMark(ctx, db, kimi) }, one},
+		{"自检碰上没登录不覆盖也不推", func() error {
+			return SyncProbes(ctx, db, "h3", []Mark{{Tool: "kimi", Reason: "自检 kimi --version 退出码 1"}}, now)
+		}, one},
+		{"确认、解除后再没登录，再推一条", func() error {
+			if _, err := db.ExecContext(ctx, `UPDATE events SET acked_at = ?`, now); err != nil {
+				return err
+			}
+			if _, err := ClearMarks(ctx, db, "kimi@h3"); err != nil {
+				return err
+			}
+			return SetMark(ctx, db, kimi)
+		}, one + " | " + one},
+	}
+	for _, s := range steps {
+		if err := s.do(); err != nil {
+			t.Fatal(err)
+		}
+		if got := list(); got != s.want {
+			t.Errorf("%s：%s", s.name, got)
+		}
+	}
+	// 自检不过的每轮刷新，只推第一次。
+	for range 3 {
+		if err := SyncProbes(ctx, db, "h1", []Mark{{Tool: "codex", Reason: "自检 codex --version 退出码 1"}}, now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var n int
+	db.QueryRowContext(ctx, `SELECT count(*) FROM events WHERE key = 'worker:codex@h1' AND count = 1`).Scan(&n)
+	if n != 1 {
+		t.Errorf("自检标记应只推一条：%d", n)
 	}
 }

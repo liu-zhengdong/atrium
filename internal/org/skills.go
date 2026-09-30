@@ -1,8 +1,10 @@
 package org
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"io/fs"
 	"net/url"
@@ -21,7 +23,8 @@ import (
 )
 
 // 技能：一类活怎么干——SKILL.md（做法）、附属文件（文本或截图等二进制）、优先执行者、交付要查什么、要的凭据。
-// 每次修改追加一版，文件在 skills/<名字>/r<rev>/；派活只在提示词里附 SKILL.md 的路径（SkillPaths）。
+// 每次修改追加一版，文件在 skills/<名字>/r<rev>/，同时写成 skills-current/<名字>/ 下的当前版；
+// 派活只在提示词里附当前版 SKILL.md 的路径（Skill.Path）。
 // 大小上限（单个文件 MaxSkillFile、合计 MaxSkillTotal）在上限表。
 const (
 	maxSkillFiles = 16
@@ -42,7 +45,7 @@ type Skill struct {
 	Secrets   []string `json:"secrets"`
 	CreatedBy string   `json:"created_by"`
 	CreatedAt int64    `json:"created_at"`
-	Path      string   `json:"path"`           // SKILL.md 的绝对路径
+	Path      string   `json:"path"`           // 当前版 SKILL.md 的绝对路径
 	Body      string   `json:"body,omitempty"` // 只在看单个技能时给
 	Others    []string `json:"others,omitempty"`
 }
@@ -177,7 +180,7 @@ func scanSkill(s interface{ Scan(...any) error }, data string) (Skill, error) {
 	var workers, checks, secrets string
 	err := s.Scan(&k.Name, &k.Rev, &k.Summary, &k.Files, &workers, &checks, &secrets, &k.CreatedBy, &k.CreatedAt)
 	k.Workers, k.Checks, k.Secrets = splitCSV(workers), splitCSV(checks), splitCSV(secrets)
-	k.Path = filepath.Join(skillDir(data, k.Name, k.Rev), "SKILL.md")
+	k.Path = filepath.Join(currentSkillDir(data, k.Name), "SKILL.md")
 	return k, err
 }
 
@@ -188,18 +191,6 @@ func GetSkill(ctx context.Context, q store.Querier, data, name string) (Skill, e
 		return Skill{}, api.NotFound("技能 %s 不存在", name).WithNext("atrium skill ls")
 	}
 	return k, err
-}
-
-// SkillPaths 是派活附给执行者的技能路径（SKILL.md 的绝对路径；附属文件在同一目录）。任务没挂技能时为空。
-func SkillPaths(ctx context.Context, q store.Querier, data, skill string) ([]string, error) {
-	if skill == "" {
-		return nil, nil
-	}
-	k, err := GetSkill(ctx, q, data, skill)
-	if err != nil {
-		return nil, err
-	}
-	return []string{k.Path}, nil
 }
 
 // Skills 列全部技能的最新版（按名字）。
@@ -240,6 +231,53 @@ func ReadSkillFiles(dir string) (map[string][]byte, error) {
 		return nil
 	})
 	return files, err
+}
+
+// publishSkill 把一版的文件写成技能的当前版：内容变了的才覆盖写，删掉这版没有的文件。
+// 原地改而不是整个目录换掉——执行者可能正开着里面的文件。
+func publishSkill(data, name string, files map[string][]byte) error {
+	dir := currentSkillDir(data, name)
+	old, err := ReadSkillFiles(dir)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	for p, c := range files {
+		if was, ok := old[p]; ok && bytes.Equal(was, c) {
+			continue
+		}
+		if err := writeFile(filepath.Join(dir, filepath.FromSlash(p)), c, 0o600); err != nil {
+			return err
+		}
+	}
+	for p := range old {
+		if _, ok := files[p]; !ok {
+			f := filepath.Join(dir, filepath.FromSlash(p))
+			if err := os.Remove(f); err != nil {
+				return err
+			}
+			for d := filepath.Dir(f); d != dir && os.Remove(d) == nil; d = filepath.Dir(d) { // 空了的子目录一并删
+			}
+		}
+	}
+	return nil
+}
+
+// publishSkills 按库里各技能的最新版写一遍当前版（服务启动时）：当前版目录是从库和版本目录推出来的。
+func publishSkills(ctx context.Context, q store.Querier, data string) error {
+	list, err := Skills(ctx, q, data)
+	if err != nil {
+		return err
+	}
+	for _, k := range list {
+		files, err := ReadSkillFiles(skillDir(data, k.Name, k.Rev))
+		if err != nil {
+			return err
+		}
+		if err := publishSkill(data, k.Name, files); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // SaveSkill 建技能或追加一版。
@@ -318,6 +356,9 @@ func SaveSkill(ctx context.Context, db *store.DB, data string, in SkillInput, ac
 				return err
 			}
 		}
+		if err := publishSkill(data, in.Name, files); err != nil {
+			return err
+		}
 		for r := old; r >= 1; r-- {
 			d := skillDir(data, in.Name, r)
 			if _, err := os.Stat(d); err != nil {
@@ -357,6 +398,9 @@ func ShowSkill(ctx context.Context, q store.Querier, data, name string) (Skill, 
 
 func skillRoutes(r *api.Router, env *app.Env) {
 	db, data := env.DB, env.Paths.Data
+	if err := publishSkills(context.Background(), db, data); err != nil {
+		env.Log.Error("写技能当前版失败", "err", err)
+	}
 	r.Handle("GET /api/skills", func(q *api.Req) (any, error) { return Skills(q.Context(), db, data) })
 	r.Handle("GET /api/skills/{name}", func(q *api.Req) (any, error) {
 		return ShowSkill(q.Context(), db, data, q.PathValue("name"))

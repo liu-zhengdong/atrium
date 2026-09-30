@@ -155,6 +155,61 @@ func openDB(t *testing.T) (*store.DB, string) {
 	return db, dir
 }
 
+// 技能之间的相对链接：派活给的是当前版 SKILL.md 的路径，拼上 ../<另一技能>/… 按真实文件系统读到对方的当前版。
+func TestSkillLinksResolve(t *testing.T) {
+	db, data := openDB(t)
+	ctx := context.Background()
+	save := func(name string, files map[string]string) Skill {
+		t.Helper()
+		in := SkillInput{Name: name, Files: map[string][]byte{}}
+		for p, c := range files {
+			in.Files[p] = []byte(c)
+		}
+		k, err := SaveSkill(ctx, db, data, in, "u1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return k
+	}
+	a := save("a", map[string]string{"SKILL.md": "写作本身按 [b](../b/SKILL.md)，口味见 [x](../b/refs/x.md)"})
+	save("b", map[string]string{"SKILL.md": "b 第一版", "refs/x.md": "口味一"})
+	// 不经 filepath.Join（它按字面消掉 ..），把相对路径原样接在 SKILL.md 所在目录后面交给文件系统。
+	read := func(rel string) string {
+		t.Helper()
+		raw, err := os.ReadFile(filepath.Dir(a.Path) + string(filepath.Separator) + filepath.FromSlash(rel))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(raw)
+	}
+	if got := read("../b/SKILL.md"); got != "b 第一版" {
+		t.Fatalf("../b/SKILL.md：%q", got)
+	}
+	if got := read("../b/refs/x.md"); got != "口味一" {
+		t.Fatalf("../b/refs/x.md：%q", got)
+	}
+	save("b", map[string]string{"SKILL.md": "b 第二版"})
+	if got := read("../b/SKILL.md"); got != "b 第二版" {
+		t.Fatalf("b 改版后应读到新版：%q", got)
+	}
+	if _, err := os.Stat(filepath.Join(currentSkillDir(data, "b"), "refs")); !os.IsNotExist(err) {
+		t.Fatal("新版没有的附属文件应从当前版删掉")
+	}
+	if k, _ := GetSkill(ctx, db, data, "a"); k.Path != a.Path {
+		t.Fatalf("派活路径不随版本变：%s → %s", a.Path, k.Path)
+	}
+	// 服务启动时按库里的最新版写当前版（导入的、这次改动之前存的技能都只有版本目录）。
+	if err := os.RemoveAll(filepath.Join(data, "skills-current")); err != nil {
+		t.Fatal(err)
+	}
+	if err := publishSkills(ctx, db, data); err != nil {
+		t.Fatal(err)
+	}
+	if got := read("../b/SKILL.md"); got != "b 第二版" {
+		t.Fatalf("启动时重写当前版：%q", got)
+	}
+}
+
 // 报告连图片传目录：标题是相对目录的路径，隐藏项跳过（网页预览按这个路径找图）。
 func TestReadLocalMaterialsDir(t *testing.T) {
 	dir := t.TempDir()
@@ -208,10 +263,7 @@ func TestResourcesStore(t *testing.T) {
 	if _, err := os.Stat(skillDir(data, "fix-bug", 2)); !os.IsNotExist(err) {
 		t.Fatal("超过保留版数的旧目录应删掉")
 	}
-	if paths, err := SkillPaths(ctx, db, data, "fix-bug"); err != nil || len(paths) != 1 || !strings.HasSuffix(paths[0], filepath.Join("r12", "SKILL.md")) {
-		t.Fatalf("派活路径：%v %v", paths, err)
-	}
-	if _, err := SkillPaths(ctx, db, data, "nope"); code(err) != "not_found" {
+	if _, err := GetSkill(ctx, db, data, "nope"); code(err) != "not_found" {
 		t.Fatal("没有的技能派活应报错")
 	}
 

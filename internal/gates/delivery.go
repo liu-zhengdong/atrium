@@ -130,6 +130,10 @@ func Origin(ctx context.Context, r Runner, repo string) (string, error) {
 // deliveryOf 查齐事实（本机仓库的 origin、工作目录根的 choice.json，关卡时再查工作树有没有改动）后按 pick 选交付方式。
 // 过了关卡还在走的（审阅、验收）都有改动：没改动的按 message 交，没有这两步。
 func (g *Gate) deliveryOf(ctx context.Context, t ledger.Task, atGate bool) (Delivery, error) {
+	// 审阅只交服务已记下的回复，不查执行者机器上的工作树或 choice.json。
+	if _, review, err := Last(ctx, g.DB, t.ID, KindReviewOf); err != nil || review {
+		return deliverMessage, err
+	}
 	switch {
 	case t.Repo != "":
 		origin, err := Origin(ctx, g.R, t.Repo)

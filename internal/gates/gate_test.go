@@ -12,6 +12,7 @@ import (
 
 	"github.com/liu-zhengdong/atrium/internal/gates"
 	"github.com/liu-zhengdong/atrium/internal/gates/fakegh"
+	"github.com/liu-zhengdong/atrium/internal/hosts"
 	"github.com/liu-zhengdong/atrium/internal/ledger"
 	"github.com/liu-zhengdong/atrium/internal/org"
 	"github.com/liu-zhengdong/atrium/internal/pause"
@@ -368,7 +369,15 @@ func TestReview(t *testing.T) {
 			w := c.reviewer
 			ledger.SetFacts(e.ctx, e.db, rt.ID, ledger.Facts{Worker: &w}, "dispatch")
 			ledger.Record(e.ctx, e.db, rt.ID, gates.KindResult, "dispatch", c.result)
-			ledger.Record(e.ctx, e.db, rt.ID, gates.KindWorktree, "dispatch", `{"host":"h1","dir":"`+filepath.ToSlash(t.TempDir())+`"}`)
+			// 代理查询明确报错：旧路径会读 choice.json 并把审阅转受阻。
+			host, remoteDir := e.remoteAgent()
+			if err := os.Mkdir(filepath.Join(remoteDir, "choice.json"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := hosts.Ask(e.ctx, host, hosts.Query{Dir: remoteDir, File: "choice.json"}); err == nil {
+				t.Fatal("远程查询应返回读取目录的错误")
+			}
+			ledger.Record(e.ctx, e.db, rt.ID, gates.KindWorktree, "dispatch", `{"host":"`+host+`","dir":"`+filepath.ToSlash(remoteDir)+`"}`)
 			e.exit(rt.ID)
 			e.sweep()
 			if got := e.get(rt.ID); got.Status != ledger.Done {

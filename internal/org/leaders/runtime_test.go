@@ -1,10 +1,14 @@
 package leaders
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"github.com/liu-zhengdong/atrium/internal/cli"
 	"io"
 	"log/slog"
+	"net"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -304,6 +308,29 @@ func TestEscalate(t *testing.T) {
 	}
 }
 
+func TestNotify(t *testing.T) {
+	env, h, srv := fixture(t)
+	ctx := context.Background()
+	tok, err := h.issue("a2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &api.Client{Base: srv.URL, Token: tok}
+	for _, task := range []string{"", "t1"} {
+		var out Escalation
+		if err := client.Do(ctx, "POST", "/api/escalations", EscalateIn{Kind: "notify", Note: "将调整测试应用配置", Task: task}, &out); err != nil || out.To != org.Secretary {
+			t.Fatalf("notify 应越过 a1 直达秘书：%+v %v", out, err)
+		}
+	}
+	var target, level string
+	if err := env.DB.QueryRowContext(ctx, `SELECT target, level FROM events WHERE kind = ? ORDER BY id DESC LIMIT 1`, events.LeaderEscalate).Scan(&target, &level); err != nil {
+		t.Fatal(err)
+	}
+	if target != org.Secretary || level != events.Act {
+		t.Fatalf("秘书须能领取知会：%s %s", target, level)
+	}
+}
+
 // fakeLauncher 记下每次唤醒；ack 为真时模拟负责人确认了这批事件。
 type fakeLauncher struct {
 	h     *hub
@@ -437,5 +464,54 @@ func TestWakeEnabled(t *testing.T) {
 	env := func(v string) func(string) string { return func(string) string { return v } }
 	if !wakeEnabled(def.Data, env("")) || wakeEnabled(t.TempDir(), env("")) || !wakeEnabled(t.TempDir(), env("1")) {
 		t.Fatal("只在缺省数据目录或 ATRIUM_LEADER_WAKE=1 时唤醒")
+	}
+}
+
+// 隔离 HTTP 实例，执行真实 CLI 解析、负责人认证、上报与秘书领取。
+func TestNotifyCLI(t *testing.T) {
+	env, h, srv := fixture(t)
+	ctx := context.Background()
+	tok, err := h.issue("a2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := config.WriteService(env.Paths, config.ServiceInfo{PID: 1, Port: srv.Listener.Addr().(*net.TCPAddr).Port}); err != nil {
+		t.Fatal(err)
+	}
+	tb := cli.NewTable("atrium", "隔离验证")
+	tb.Group("leader", "负责人")
+	commands(tb)
+	events.Commands(tb)
+	vars := map[string]string{"ATRIUM_DATA": env.Paths.Data, "ATRIUM_LEADER_TOKEN": tok}
+	run := func(args ...string) (int, string) {
+		var output bytes.Buffer
+		code := tb.Main(ctx, args, cli.Env{Stdout: &output, Stderr: &output, Getenv: func(k string) string { return vars[k] }})
+		t.Logf("atrium %s\n%s", strings.Join(args, " "), output.String())
+		return code, output.String()
+	}
+	code, output := run("leader", "escalate", "将调整测试应用配置", "--kind", "notify", "--task", "t1", "--json")
+	if code != 0 || !strings.Contains(output, `"to":"secretary"`) {
+		t.Fatalf("notify: %d %s", code, output)
+	}
+	// 切到隔离用户令牌，以秘书订阅领取。
+	if err := os.WriteFile(env.Paths.Token(), []byte("user"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	delete(vars, "ATRIUM_LEADER_TOKEN")
+	code, output = run("events", "wait", "--as", "secretary", "--timeout", "0", "--json")
+	if code != 0 {
+		t.Fatalf("秘书领取：%d %s", code, output)
+	}
+	var receipt struct{ Result []events.Row }
+	if err := json.Unmarshal([]byte(output), &receipt); err != nil {
+		t.Fatal(err)
+	}
+	if len(receipt.Result) != 1 || receipt.Result[0].Target != org.Secretary || !strings.Contains(string(receipt.Result[0].Body), "notify") {
+		t.Fatalf("秘书应收到 notify：%s", output)
+	}
+	vars["ATRIUM_LEADER_TOKEN"] = tok
+	code, output = run("leader", "escalate", "非法类型", "--kind", "help", "--json")
+	if code == 0 || !strings.Contains(output, `"code":"usage"`) {
+		t.Fatalf("非法 kind 未拒绝：%d %s", code, output)
 	}
 }

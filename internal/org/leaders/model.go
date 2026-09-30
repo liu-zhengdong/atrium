@@ -26,11 +26,12 @@ const (
 	maxNote     = 2000
 )
 
-// Kinds 是上报的三类。
+// Kinds 是负责人上报的类别。
 var Kinds = []struct{ Key, Label string }{
 	{"cross", "需要别的部门配合"},
 	{"beyond", "越过权限或底线"},
 	{"stuck", "无法解决"},
+	{"notify", "知会用户"},
 }
 
 func kindLabel(k string) string {
@@ -60,7 +61,7 @@ func CheckEscalate(in EscalateIn) error {
 		return api.Usage("--kind: 只能是 %s", strings.Join(keys, "、"))
 	}
 	if strings.TrimSpace(in.Note) == "" {
-		return api.Usage("<说明>: 不能为空：写清要上面做什么")
+		return api.Usage("<说明>: 不能为空：写清上报的事")
 	}
 	if n := utf8.RuneCountInString(in.Note); n > maxNote {
 		return api.Usage("<说明>: 最多 %d 字，收到 %d 字", maxNote, n)
@@ -266,11 +267,12 @@ func Prompt(in PromptInput) string {
 	w("- 可以：动你负责的部门及其下属的任务、要点、资料、定时任务，改介绍；在下属负责人管的区域里建、改、裁撤部门，登记新负责人时用 leader add <名字> --org oN 一步绑定部门，或用 org edit oN --leader <aN|-> 撤换、清除。直接下属负责人最多 %d 位，同一位可管多个部门。管辖分派任务部门（%s）的负责人还能改执行者档案、解除不可用标记（atrium workers edit，--clear 解除）。", org.MaxDirectLeaders, ProfileDept)
 	w("- 不可以：在自己直接管的地方改结构，或动管辖之外的部门。需要建分工时用 atrium leader escalate <要建什么、为什么> --kind beyond 上报；上一层收到后自己动手建（即审批），或回复不同意。不能停机或操作服务。")
 	w("")
-	w("## 上报（发给 %s；只有这三类才上报，其余自己处理）", in.Upstream)
+	w("## 上报（cross、beyond、stuck 发给 %s；notify 直达秘书，其余自己处理）", in.Upstream)
 	w("完成结果自动发回任务分派人；自己建、自己收的任务在网页今天页的完成列表查看。")
 	for _, k := range Kinds {
 		w("- %s %s → atrium leader escalate 说明 --kind %s [--task tN]", k.Key, k.Label, k.Key)
 	}
+	w("- notify：将要动用户在用的应用或配置前，先经秘书知会用户。发完继续派活，不需要回复、不等拍板；知会不增加操作权限。")
 	w("- 下层上报给你、你也要向上级上报的：atrium leader escalate 你的意见 --kind 同类 --event 编号（上面能看到原文），再确认原事件")
 	w("")
 	w("## 收尾")

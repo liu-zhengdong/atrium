@@ -317,7 +317,8 @@ func loadAsks(ctx context.Context, q store.Querier, ix *orgIndex) ([]Ask, error)
 // escalations 是负责人上报到秘书这层（往上没有负责人）、要处理、还没确认的事件。
 func escalations(ctx context.Context, q store.Querier, ix *orgIndex) ([]Ask, error) {
 	rows, err := q.QueryContext(ctx, `SELECT COALESCE(task, ''), COALESCE(department, ''), body, updated_at FROM events
-		WHERE kind = ? AND target = ? AND level = ? AND acked_at IS NULL ORDER BY id LIMIT 200`, events.LeaderEscalate, org.Secretary, events.Act)
+		WHERE kind = ? AND target = ? AND level = ? AND acked_at IS NULL
+		AND COALESCE(json_extract(body, '$.kind'), '') != 'notify' ORDER BY id LIMIT 200`, events.LeaderEscalate, org.Secretary, events.Act)
 	if err != nil {
 		return nil, err
 	}

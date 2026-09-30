@@ -373,6 +373,13 @@ func TestRoutes(t *testing.T) {
 	if len(today.Asks) != 0 {
 		t.Errorf("有负责人时不该递到等你：%+v", today.Asks)
 	}
+	// notify 不进「等你」，由秘书转告。
+	events.Emit(ctx, db, events.Event{Kind: events.LeaderEscalate, Target: org.Secretary,
+		Body: map[string]any{"from": a.ID, "kind": "notify", "note": "将调整应用配置"}})
+	read("today", &today)
+	if len(today.Asks) != 0 {
+		t.Fatalf("知会不应待拍板：%+v", today.Asks)
+	}
 	// 负责人上报到秘书这层、还没确认的，进「等你」。
 	events.Emit(ctx, db, events.Event{Kind: events.LeaderEscalate, Task: task.ID, Dept: sub.ID, Target: org.Secretary,
 		Body: map[string]any{"from": a.ID, "label": "无法解决", "note": "证书要你签"}})

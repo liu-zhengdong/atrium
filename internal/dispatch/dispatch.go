@@ -617,7 +617,7 @@ func (d *dispatcher) launch(ctx context.Context, t ledger.Task, o launchOpts) er
 			return err
 		}
 		run.PID, run.RemoteRun, run.Dir = pid, rr, rdir
-		wait = d.remoteWaiter(t.ID, rr)
+		wait = d.remoteWaiter(p, rr)
 	} else {
 		cmdWait, pid, stdin, err := startLocal(o.W.Spec.Tool, req, extra, conn{fmt.Sprintf("http://127.0.0.1:%d", d.env.Port), token}, run.Log, prompt, n)
 		if err != nil {
@@ -709,14 +709,18 @@ func startLocal(tool string, req workers.Request, extra map[string]string, c con
 	}, cmd.Process.Pid, stdin, nil
 }
 
-func (d *dispatcher) remoteWaiter(task string, rr int) func() int {
+func (d *dispatcher) remoteWaiter(p *proc, rr int) func() int {
 	return func() int {
-		code, err := waitRemote(context.Background(), d.env, task, rr)
+		exit, err := waitRemote(context.Background(), d.env, p.task, rr)
 		if err != nil {
-			d.env.Log.Error("等远程执行者退出失败", "task", task, "err", err)
+			d.env.Log.Error("等远程执行者退出失败", "task", p.task, "err", err)
 			return workers.ExitUnknown
 		}
-		return code
+		p.lost = exit.Lost
+		if exit.Code == nil {
+			return workers.ExitUnknown
+		}
+		return *exit.Code
 	}
 }
 
@@ -851,6 +855,9 @@ func (d *dispatcher) exited(ctx context.Context, p *proc, code int) error {
 	}
 	same, switches, tried := tries(runs)
 	sig := workers.Classify(code, p.run.Worker, tail, time.Now())
+	if p.lost {
+		sig = workers.Signal{Kind: workers.SignalTransient, Reason: "远程执行者退出不明"}
+	}
 	session := p.adapter.SessionOf(head)
 	route := RouteExit(ExitInput{Code: code, Signal: sig, Ending: p.adapter.Ended(tail), StopFor: p.stopReason(),
 		Same: same, Switches: switches, Pending: len(pending), CanResume: p.adapter.CanResume() && session != ""})
@@ -1008,6 +1015,9 @@ func readHead(path string, n int) (string, error) {
 // adopt 接管服务重启前在跑的执行者：本机进程还活着就跟着等（查存活），已经没了就按日志收尾；远程的等代理报退出。
 func (d *dispatcher) adopt(ctx context.Context) error {
 	db := d.env.DB
+	if err := hosts.RecoverLaunches(ctx, db); err != nil {
+		return err
+	}
 	list, err := ledger.List(ctx, db, ledger.Filter{Status: []ledger.Status{ledger.Running}, Limit: 500})
 	if err != nil {
 		return err
@@ -1029,7 +1039,7 @@ func (d *dispatcher) adopt(ctx context.Context) error {
 		}
 		p := &proc{task: t.ID, run: *run, adapter: w.Adapter, remote: run.Host != LocalHost, pending: map[string]bool{}, done: make(chan struct{})}
 		if p.remote {
-			d.track(p, d.remoteWaiter(t.ID, run.RemoteRun))
+			d.track(p, d.remoteWaiter(p, run.RemoteRun))
 			continue
 		}
 		pid := run.PID

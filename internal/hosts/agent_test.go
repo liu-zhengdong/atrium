@@ -328,7 +328,7 @@ func TestReconnectReconcile(t *testing.T) {
 	stop()
 	// 账上说 t9 在这台跑，代理却不知道：重连时按退出不明收尾。
 	g.task("t9")
-	g.env.DB.Exec(`INSERT INTO host_runs (task, host, run, log_file, started_at) VALUES ('t9', ?, 1, 'x', 0)`, host)
+	g.env.DB.Exec(`INSERT INTO host_runs (task, host, run, pid, log_file, started_at) VALUES ('t9', ?, 1, 4242, 'x', 0)`, host)
 	_, stop2, _ := g.start(dir)
 	defer stop2()
 	if e := waitExit(t, g.env, "t9", 1); !e.Lost {

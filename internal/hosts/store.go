@@ -376,9 +376,9 @@ func getRun(ctx context.Context, q store.Querier, task string) (runRow, error) {
 	return r, err
 }
 
-// openRuns 是账上在这台机器上还没退出的运行（重连对账用）。
+// openRuns 只对账已回执的运行；pid=0 的轮次由 Launch 收尾。
 func openRuns(ctx context.Context, q store.Querier, host string) ([]RunRef, error) {
-	rows, err := q.QueryContext(ctx, `SELECT task, run FROM host_runs WHERE host = ? AND exited_at IS NULL ORDER BY task LIMIT 1000`, host)
+	rows, err := q.QueryContext(ctx, `SELECT task, run FROM host_runs WHERE host = ? AND pid > 0 AND exited_at IS NULL ORDER BY task LIMIT 1000`, host)
 	if err != nil {
 		return nil, err
 	}
@@ -401,3 +401,9 @@ func finishRun(ctx context.Context, q store.Querier, r RunRef, e Exit) error {
 }
 
 func validLogFile(p string) bool { return p != "" && !strings.ContainsRune(p, 0) }
+
+// RecoverLaunches 在派活启动前收尾旧进程未回执的轮次；其内存指令队列已不存在。
+func RecoverLaunches(ctx context.Context, q store.Querier) error {
+	_, err := q.ExecContext(ctx, `UPDATE host_runs SET exit_lost = 1, exited_at = ? WHERE pid = 0 AND exited_at IS NULL`, store.Now())
+	return err
+}

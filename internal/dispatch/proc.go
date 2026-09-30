@@ -17,6 +17,7 @@ type proc struct {
 	run     workers.Run
 	adapter *workers.Driver
 	remote  bool
+	lost    bool // 只由等待退出的 goroutine 写入并用于收尾
 
 	mu      sync.Mutex
 	stdin   *os.File        // 即时捎话的写端；nil 表示没有或已关

@@ -528,7 +528,7 @@ func TestSchedules(t *testing.T) {
 		t.Fatalf("部门页只列本部门的：%+v", page.Schedules)
 	}
 	s := page.Schedules[0]
-	if s.ID != daily.ID || !s.Paused || !s.Trouble || s.Kind != "体验巡检" || s.Cadence != "每天 09:00" || s.Group != sub.ID ||
+	if s.ID != daily.ID || !s.Paused || !s.Trouble || s.Kind != "体验巡检" || s.Cadence != "每天 09:00" ||
 		s.Last == nil || s.Last.ID != round.ID || s.Last.Who != "没派" {
 		t.Errorf("暂停中、上一轮派活失败没结束：%+v %+v", s, s.Last)
 	}

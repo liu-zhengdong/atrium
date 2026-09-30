@@ -79,6 +79,16 @@ a.quiet{color:inherit}a.quiet:hover{color:var(--ink)}
 .section h2 .sort{margin-left:auto;font-size:12px;color:var(--ink3);display:inline-flex;align-items:center;gap:4px}
 .section h2 .sort svg{width:12px;height:12px}
 .section h2 .sort:hover{color:var(--ink)}
+/* 今天页：节标题是一级标签（比行重），件数跟在后面；四节逐级 subgrid 共用一套列，列宽取全页最宽的那格，节与节之间对齐 */
+.today{display:grid;grid-template-columns:16px minmax(0,1fr) auto auto auto;column-gap:12px}
+.today>.section,.today .rows,.today .row{grid-column:1/-1;display:grid;grid-template-columns:subgrid}
+.today .section>:not(.rows){grid-column:1/-1}
+.today .section h2{font-size:15px;font-weight:600;color:var(--ink);margin-bottom:6px}
+.today h2 .n{font-size:13px;font-weight:400;color:var(--ink3)}
+.today .row .time{width:auto;min-width:40px}
+.row .dept{color:var(--ink3);font-size:13px;white-space:nowrap}
+.today .facts{margin:4px 0 0}
+.today .empty{padding:9px 0;text-align:left} /* 空态和一行一样高：没有内容的节不比有一条时更占地方 */
 
 .asks{display:flex;flex-direction:column;gap:8px}
 .ask{display:flex;align-items:center;gap:14px;padding:14px 16px;border-radius:12px;background:var(--raise);text-align:left;width:100%}
@@ -97,7 +107,6 @@ a.quiet{color:inherit}a.quiet:hover{color:var(--ink)}
 .rows{display:flex;flex-direction:column}
 .dept-h{display:flex;align-items:baseline;gap:8px;padding:14px 0 4px;font-size:13px;color:var(--ink2)}
 .dept-h:first-child{padding-top:0}
-.dept-h a:hover{color:var(--ink)}
 .row{display:grid;grid-template-columns:16px minmax(0,1fr) auto auto;align-items:center;gap:12px;padding:9px 10px;margin:0 -10px;border-radius:8px;cursor:pointer}
 .row:hover{background:var(--raise)}
 .row .title{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -264,6 +273,10 @@ table.perf{width:100%;border-collapse:collapse;font-size:13px}
   .row .time{display:none} /* 窄屏留行尾标签（等 tN、卡住）不留时间：状态比多久前更要紧 */
   .row.sched:not(.trouble) .who{display:none} /* 周期任务：下一轮比多久一轮要紧，用下一轮顶替标签；出了问题留问题 */
   .row.sched:not(.trouble) .time{display:block}
+  .today{grid-template-columns:16px minmax(0,1fr) auto} /* 今天页窄屏只留时间；部门、谁在抽屉里看，出了问题的周期任务留问题 */
+  .today .row .dept,.today .row .who{display:none}
+  .today .row .time{display:block}
+  .today .row.trouble .who{display:block}.today .row.trouble .time{display:none}
   .accts{grid-template-columns:auto 1fr;row-gap:4px}
   .acct .r{grid-column:2;text-align:left}
 }

@@ -57,12 +57,24 @@ func Remove(ctx context.Context, clone, dir, branch string, run Runner) error {
 		}
 		clone = common
 	}
-	list, err := run(ctx, "", "git", "--git-dir", clone, "worktree", "list", "--porcelain")
+	target, err := resolvedPath(dir)
 	if err != nil {
 		return err
 	}
-	for _, line := range strings.Split(list, "\n") {
-		if path, ok := strings.CutPrefix(line, "worktree "); ok && filepath.Clean(strings.TrimSpace(path)) == filepath.Clean(dir) {
+	list, err := run(ctx, "", "git", "--git-dir", clone, "worktree", "list", "--porcelain", "-z")
+	if err != nil {
+		return err
+	}
+	for _, field := range strings.Split(list, "\x00") {
+		path, ok := strings.CutPrefix(field, "worktree ")
+		if !ok {
+			continue
+		}
+		registered, err := resolvedPath(path)
+		if err != nil {
+			return err
+		}
+		if registered == target {
 			if _, err := run(ctx, "", "git", "--git-dir", clone, "worktree", "remove", "--force", dir); err != nil {
 				return err
 			}
@@ -76,6 +88,28 @@ func Remove(ctx context.Context, clone, dir, branch string, run Runner) error {
 		_, err = run(ctx, "", "git", "--git-dir", clone, "branch", "-D", branch)
 	}
 	return err
+}
+
+// resolvedPath 统一 Git 登记与调用方路径里的符号链接。目录已消失时仍解析存活的祖先，
+// 使 /var 与 /private/var 这类别名下的残留登记也能删除。
+func resolvedPath(path string) (string, error) {
+	path = filepath.Clean(path)
+	resolved, err := filepath.EvalSymlinks(path)
+	if err == nil {
+		return resolved, nil
+	}
+	if !os.IsNotExist(err) {
+		return "", err
+	}
+	parent := filepath.Dir(path)
+	if parent == path {
+		return "", err
+	}
+	resolved, err = resolvedPath(parent)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(resolved, filepath.Base(path)), nil
 }
 
 // Base 在重建时优先接回已推送的任务分支；不存在时从默认基线重新开始。

@@ -15,16 +15,24 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/watch"
 )
 
-// 本文件是网页的纯判定：任务在五步里走到哪、行首行尾怎么写。当前等待对象用 watch.HolderOf，不在这里另判。
+// 本文件是网页的纯判定：任务在步骤条里走到哪、行首行尾怎么写。当前等待对象用 watch.HolderOf，不在这里另判。
 
-// Steps 是任务详情的五步。
-var Steps = []string{"分派任务", "执行", "验收", "合入", "上线"}
+// allSteps 是有仓库的任务要走的五步。
+var allSteps = []string{"分派任务", "执行", "验收", "合入", "上线"}
 
-// step 返回任务当前在第几步（0 起）；done 的任务返回 len(Steps)（全部走完）。
+// stepsOf 是任务详情的步骤条：没有仓库的交付不经 PR，只到「验收」。
+func stepsOf(t ledger.Task) []string {
+	if t.Repo == "" {
+		return allSteps[:3]
+	}
+	return allSteps
+}
+
+// step 返回任务当前在第几步（0 起）；done 的任务返回步数（全部走完）。
 func step(t ledger.Task) int {
 	switch t.Status {
 	case ledger.Done:
-		return len(Steps)
+		return len(stepsOf(t))
 	case ledger.Draft, ledger.Todo, ledger.Queued:
 		return 0
 	}

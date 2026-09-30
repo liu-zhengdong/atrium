@@ -199,6 +199,10 @@ func TestPrompt(t *testing.T) {
 			t.Errorf("提示词缺 %q", want)
 		}
 	}
+	if !strings.Contains(p, "在等什么、合完要做什么，写进那件任务的备注（task note tN）") || !strings.Contains(p, "备忘只留跨任务") ||
+		strings.Contains(p, "在等什么、下次先看什么）写进备忘") {
+		t.Errorf("收尾要把在等的事写进任务备注，备忘只留跨任务的提示：\n%s", p)
+	}
 	if !strings.Contains(p, "收。\n\n## 用户的全局原则\n\n先给结论\n\n## 技能索引（Atrium 全部技能）\n\n- web：网页\n\n## 你负责的部门") {
 		t.Errorf("全局原则、技能索引要在开场之后、部门与要点之前：\n%s", p)
 	}

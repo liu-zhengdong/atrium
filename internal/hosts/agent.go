@@ -76,7 +76,7 @@ func writeSecret(path string, v any) error {
 		return err
 	}
 	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, raw, 0o600); err != nil {
+	if err := platform.WritePrivateFile(tmp, raw); err != nil {
 		return err
 	}
 	return os.Rename(tmp, path)
@@ -99,7 +99,7 @@ func ReadAgentConfig(dir string) (AgentConfig, error) {
 }
 
 func SaveAgentConfig(dir string, c AgentConfig) error {
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	if err := platform.PrivateDir(dir); err != nil {
 		return err
 	}
 	return writeSecret(filepath.Join(dir, "agent.json"), c)

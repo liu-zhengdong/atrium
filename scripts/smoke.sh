@@ -43,11 +43,17 @@ killpid() {
   if [ -n "$win" ]; then taskkill //F //T //FI "PID eq $1" //FI "IMAGENAME eq ${bin##*/}" >/dev/null 2>&1 || true
   else kill "$1" 2>/dev/null || true; fi
 }
-# private <文件>：只有本人能读。Unix 看权限位 600；Windows 看 ACL 里没有 Everyone、Users、Authenticated Users（SDDL 里的 WD、BU、AU）。
+# private <文件>：Unix 看 600；Windows 逐条核对 ACL，只允许本人、SYSTEM、管理员。
 private() {
   if [ -z "$win" ]; then [ "$(stat -f %Lp "$1" 2>/dev/null || stat -c %a "$1")" = 600 ]; return; fi
-  local sddl="$work/acl.$RANDOM" acl
-  icacls "$(cygpath -w "$1")" //save "$(cygpath -w "$sddl")" >/dev/null && acl=$(iconv -f UTF-16LE -t UTF-8 "$sddl") && ! grep -qE ';;;(WD|BU|AU)\)' <<<"$acl"
+  ATRIUM_ACL_TARGET="$(cygpath -w "$1")" powershell.exe -NoProfile -NonInteractive -Command '
+    $acl = Get-Acl -LiteralPath $env:ATRIUM_ACL_TARGET
+    $allowed = @([System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value, "S-1-5-18", "S-1-5-32-544")
+    if (-not $acl.AreAccessRulesProtected) { exit 1 }
+    foreach ($rule in $acl.Access) {
+      if ($rule.AccessControlType -eq "Allow" -and $rule.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value -notin $allowed) { exit 1 }
+    }
+  '
 }
 # 技能检查那一段要用 pnpm、ffmpeg（造小样、跑检查）与无头浏览器（运行时自己找，找不到时任务转受阻并写明）。
 for c in jq pnpm ffmpeg ffprobe; do command -v "$c" >/dev/null || fail "缺 $c：冒烟要用它"; done

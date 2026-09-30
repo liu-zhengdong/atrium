@@ -111,6 +111,12 @@ func TestUnitsAndPlan(t *testing.T) {
 	}
 	for _, c := range cases {
 		got, err := PlanMaterial("o1", existing, c.in)
+		if c.code == "" {
+			c.want.bin = 0
+			for _, f := range c.want.files {
+				c.want.bin += f.Size
+			}
+		}
 		if code(err) != c.code || (c.code == "" && !reflect.DeepEqual(got, c.want)) {
 			t.Errorf("%s：%+v %v", c.name, got, err)
 		}
@@ -493,7 +499,7 @@ func TestPrinciples(t *testing.T) {
 	}
 }
 
-// 目录资料：一条、正文与附属文件按相对路径取，附属的图片计入部门二进制总量。
+// 目录资料：一条、正文与附属文件按相对路径取，全部文件计入部门原始字节总量。
 func TestMaterialDir(t *testing.T) {
 	db, data := openDB(t)
 	ctx := context.Background()
@@ -520,7 +526,7 @@ func TestMaterialDir(t *testing.T) {
 	}
 	counts, _ := Counts(ctx, db, dept.ID)
 	for _, c := range counts {
-		if (c.Key == "material_bin" && c.Used != MB(len(png))) || (c.Key == "materials" && c.Used != 22) {
+		if (c.Key == "material_bin" && c.Used != MB(m.Size)) || (c.Key == "materials" && c.Used != 22) {
 			t.Fatalf("用量：%+v", c)
 		}
 	}
@@ -630,14 +636,14 @@ func TestMaterialSVGUnits(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			wantUnits, wantBin := 2, len(svg)
+			wantUnits, wantBin := 2, len(svg)+len([]byte("正文"))
 			binary := !strings.HasSuffix(name, ".txt")
 			if !binary {
 				wantUnits += len([]rune(string(svg)))
-				wantBin = 0
+				wantBin = len(svg) + len([]byte("正文"))
 			}
-			if m.Units != wantUnits || m.binBytes() != wantBin {
-				t.Fatalf("计量：%+v，二进制字节 %d", m, m.binBytes())
+			if m.Units != wantUnits || m.rawBytes() != wantBin {
+				t.Fatalf("计量：%+v，原始字节 %d", m, m.rawBytes())
 			}
 			f, p, err := m.File(name)
 			if err != nil {

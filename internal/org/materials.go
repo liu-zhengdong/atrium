@@ -12,7 +12,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/liu-zhengdong/atrium/internal/api"
 	"github.com/liu-zhengdong/atrium/internal/app"
@@ -22,8 +21,9 @@ import (
 
 // 资料：部门的知识分两层——一份「总览」（每次附给负责人，≤MaxOverview 字）与按需取的细节。
 // 一个文件或一个目录是一条资料：目录里的入口文件（报告、README……）是正文，其余是附属文件，按相对路径存，正文里的相对引用在这条资料内部解析。
-// 图片扩展名（含 SVG）按二进制计量，其余合法 UTF-8、无 NUL 的内容按字计量。
-// 整个部门没归档的资料：文本合计 ≤MaxMaterial 字，二进制合计 ≤MaxMaterialBin MB，单个文件 ≤MaxMaterialFile MB（附属文件一样算）。
+// Units：图片（含 SVG）与非文本不计字；其余合法 UTF-8、无 NUL 的内容按 rune 计字。
+// HTML/HTM 只计去掉 style、script、注释、标签后的正文（解码实体、忽略文本段首尾空白）；HTML 与 Markdown 的 data URI 不计字。
+// 整个部门没归档的资料：正文合计 ≤MaxMaterial 字，所有原始文件合计 ≤MaxMaterialBin MB（含剥掉的部分），单个文件 ≤MaxMaterialFile MB。
 // 内容在 materials/<mN>/r<rev>/<相对路径>。加资料永远新建一条；给已有资料加一版要显式指明 mN，不按名字猜。
 const (
 	maxMaterialNote  = 200
@@ -34,15 +34,6 @@ const (
 	// MaxMaterialBody 是资料上传接口的请求体上限，也是所有接口里最大的（负责人权限判定先读全请求体，按它读）。
 	MaxMaterialBody = maxMaterialRequest/3*4 + 1<<20
 )
-
-// Units 纯函数：图片扩展名（复用 imageExts）不折算字数；其余文本（合法 UTF-8、无 NUL）按字（rune）数。
-// 图片与非文本内容字数记 0，另按字节数计入二进制总量。
-func Units(name string, content []byte) (units int, binary bool) {
-	if !imageExts[strings.ToLower(path.Ext(name))] && IsText(content) {
-		return utf8.RuneCount(content), false
-	}
-	return 0, true
-}
 
 type Material struct {
 	ID         string             `json:"id"`
@@ -94,13 +85,11 @@ func firstPath(fs []MaterialFileInfo) string {
 	return fs[0].Path
 }
 
-// binBytes 是资料里二进制文件的合计字节，计入部门二进制总量。
-func (m Material) binBytes() int {
+// rawBytes 汇总资料原始字节。
+func (m Material) rawBytes() int {
 	n := 0
 	for _, f := range m.Files {
-		if f.Binary {
-			n += f.Size
-		}
+		n += f.Size
 	}
 	return n
 }
@@ -126,11 +115,11 @@ type materialSlot struct {
 	id, kind, title, note string
 	entry                 string
 	files                 []MaterialFileInfo
-	units, bin, rev       int // bin：二进制文件合计字节
+	units, bin, rev       int // bin：原始文件合计字节
 }
 
 func slotOf(m Material) materialSlot {
-	return materialSlot{id: m.ID, kind: m.Kind, title: m.Title, note: m.Note, units: m.Units, bin: m.binBytes(), rev: m.Rev}
+	return materialSlot{id: m.ID, kind: m.Kind, title: m.Title, note: m.Note, units: m.Units, bin: m.rawBytes(), rev: m.Rev}
 }
 
 var imageExts = map[string]bool{".png": true, ".jpg": true, ".jpeg": true, ".gif": true, ".webp": true, ".avif": true, ".bmp": true, ".svg": true}
@@ -232,11 +221,8 @@ func PlanMaterial(dept string, existing []materialSlot, in MaterialInput) (mater
 		}
 		units, binary := Units(f.Name, f.Content)
 		s.files = append(s.files, MaterialFileInfo{Path: f.Name, Size: len(f.Content), Units: units, Binary: binary})
-		if binary {
-			s.bin += len(f.Content)
-		} else {
-			s.units += units
-		}
+		s.bin += len(f.Content)
+		s.units += units
 	}
 	slices.SortFunc(s.files, func(a, b MaterialFileInfo) int { return strings.Compare(a.Path, b.Path) })
 	var err error
@@ -244,7 +230,7 @@ func PlanMaterial(dept string, existing []materialSlot, in MaterialInput) (mater
 		return s, err
 	}
 	if s.kind == "overview" {
-		if s.bin > 0 {
+		if s.files[0].Binary {
 			return s, api.Usage("总览要是文本文件：%s 不是", s.entry)
 		}
 		if s.units > MaxOverview {
@@ -254,7 +240,7 @@ func PlanMaterial(dept string, existing []materialSlot, in MaterialInput) (mater
 	return s, checkTotals(dept, existing, s)
 }
 
-// checkTotals 纯判定：部门现有资料换上（或加上）s 之后，文本与二进制合计是否超限。
+// checkTotals 纯判定：部门现有资料换上（或加上）s 之后，正文与原始字节合计是否超限。
 func checkTotals(dept string, existing []materialSlot, s materialSlot) error {
 	text, bin := s.units, s.bin
 	for _, e := range existing {
@@ -536,11 +522,6 @@ type MaterialContent struct {
 
 func materialRoutes(r *api.Router, env *app.Env) {
 	db, data := env.DB, env.Paths.Data
-	if n, err := mergeFlatMaterials(context.Background(), db, data); err != nil {
-		env.Log.Error("整理旧资料失败", "err", err)
-	} else if n > 0 {
-		env.Log.Info("按文件平铺的旧资料已合并", "groups", n)
-	}
 	r.Handle("GET /api/materials", func(q *api.Req) (any, error) {
 		v := q.URL.Query()
 		return Materials(q.Context(), db, data, MaterialFilter{Org: v.Get("node"), Archived: v.Get("archived") == "1"})
@@ -649,7 +630,7 @@ func materialAmount(m Material) string {
 	if len(m.Files) > 1 {
 		parts = append(parts, fmt.Sprintf("%d 个文件", len(m.Files)))
 	}
-	bin := m.binBytes()
+	bin := m.rawBytes()
 	if m.Units > 0 || bin == 0 {
 		parts = append(parts, fmt.Sprintf("%d 字", m.Units))
 	}
@@ -674,7 +655,7 @@ func materialLine(m Material) string {
 func materialCommands(t *cli.Table) {
 	t.Group("material", "资料")
 	t.Add(cli.Command{Path: "material add", Args: "<oN|mN> <文件或目录>",
-		Summary: fmt.Sprintf("在部门 oN 新建一条资料，或给资料 mN 加一版（总览 ≤%d 字，部门文本合计 ≤%d 字；单个文件 ≤%d MB，部门二进制合计 ≤%d MB）",
+		Summary: fmt.Sprintf("在部门 oN 新建一条资料，或给资料 mN 加一版（总览 ≤%d 字，部门文本合计 ≤%d 字；单个文件 ≤%d MB，部门原始字节合计 ≤%d MB）",
 			MaxOverview, MaxMaterial, MaxMaterialFile, MaxMaterialBin),
 		Detail: fmt.Sprintf(`传文件：这个文件是一条资料，标题是文件名。
 传目录：整个目录是一条资料（跳过点开头的隐藏项），标题是目录名。正文按顺序认 report.md、README.md、index.html，

@@ -64,11 +64,8 @@ func mergedSlot(g []flatRow) (keep flatRow, s materialSlot) {
 	s = materialSlot{kind: "detail", note: g[0].note}
 	for _, r := range g {
 		s.files = append(s.files, MaterialFileInfo{Path: r.title, Size: r.size, Units: r.units, Binary: r.binary})
-		if r.binary {
-			s.bin += r.size
-		} else {
-			s.units += r.units
-		}
+		s.bin += r.size
+		s.units += r.units
 	}
 	slices.SortFunc(s.files, func(a, b MaterialFileInfo) int { return strings.Compare(a.Path, b.Path) })
 	s.entry, _ = PickEntry(s.files, "")

@@ -408,7 +408,7 @@ func importMaterials(ctx context.Context, old *sql.DB, tx *sql.Tx, depts map[str
 		}
 		src := filepath.Join(oldData, "materials", ref, fmt.Sprintf("v%d", m.version))
 		var files []org.MaterialFileInfo
-		size, n, bin := 0, 0, 0
+		size, n := 0, 0
 		for _, e := range entries {
 			if !safeRel(e.Path) {
 				return fmt.Errorf("资料 %s 清单里有不安全的路径 %q", ref, e.Path)
@@ -426,11 +426,7 @@ func importMaterials(ctx context.Context, old *sql.DB, tx *sql.Tx, depts map[str
 			}
 			files = append(files, org.MaterialFileInfo{Path: e.Path, Size: len(content), Units: u, Binary: binary})
 			size += len(content)
-			if binary {
-				bin += len(content)
-			} else {
-				n += u
-			}
+			n += u
 		}
 		entry, err := org.PickEntry(files, "")
 		if err != nil {
@@ -456,7 +452,7 @@ func importMaterials(ctx context.Context, old *sql.DB, tx *sql.Tx, depts map[str
 			order = append(order, dept)
 		}
 		units[dept] += n
-		bins[dept] += bin
+		bins[dept] += size
 		it.Imported++
 	}
 	for _, d := range order {
@@ -464,7 +460,7 @@ func importMaterials(ctx context.Context, old *sql.DB, tx *sql.Tx, depts map[str
 			rep.Over = append(rep.Over, fmt.Sprintf("资料文本总量超过每部门 %d 字：%s %d", org.MaxMaterial, d, units[d]))
 		}
 		if bins[d] > org.MaxMaterialBin<<20 {
-			rep.Over = append(rep.Over, fmt.Sprintf("二进制资料超过每部门 %d MB：%s %d MB", org.MaxMaterialBin, d, org.MB(bins[d])))
+			rep.Over = append(rep.Over, fmt.Sprintf("资料原始字节超过每部门 %d MB：%s %d MB", org.MaxMaterialBin, d, org.MB(bins[d])))
 		}
 	}
 	add(rep, it)

@@ -29,7 +29,7 @@ const (
 	MaxOverview      = 3000  // 部门资料总览（字）
 	MaxMaterial      = 50000 // 部门资料文本总量（字；二进制不计，见 Units）
 	MaxMaterialFile  = 20    // 单个资料文件（MB）
-	MaxMaterialBin   = 200   // 部门二进制资料总量（MB）
+	MaxMaterialBin   = 200   // 部门资料原始字节总量（MB）
 	MinOptions       = 3     // 每份选项单至少几项
 	MaxOptions       = 5     // 每份选项单至多几项
 	MaxChoices       = 5     // 每部门待拍板的选项单
@@ -70,8 +70,8 @@ var Limits = []Limit{
 		"归档过时的（atrium material archive mN），或把一块知识下沉到子部门", "atrium material ls --node {dept}"},
 	{"material_file", "单个资料文件", MaxMaterialFile, "MB", "加资料的人",
 		"压缩或拆小；大文件放仓库或外部存储，资料里只写它是什么、在哪", "atrium material ls --node {dept}"},
-	{"material_bin", "部门二进制资料总量", MaxMaterialBin, "MB", "部门负责人",
-		"归档过时的图片等二进制资料（atrium material archive mN）", "atrium material ls --node {dept}"},
+	{"material_bin", "部门资料原始字节总量", MaxMaterialBin, "MB", "部门负责人",
+		"归档过时的资料（atrium material archive mN）", "atrium material ls --node {dept}"},
 	{"options", "每份选项单", MaxOptions, "项", "出选项单的人", "只留最值得的几项", "atrium choice ls"},
 	{"choices", "每部门待拍板的选项单", MaxChoices, "份", "用户", "先拍板或放弃已有的（atrium choice pick cN <第几项> 或 --none）", "atrium choice ls"},
 	{"schedules", "每部门周期任务", MaxSchedules, "条", "部门负责人", "合并相近的、删掉不值的（atrium schedule rm sN）", "atrium schedule ls --node {dept}"},
@@ -177,7 +177,7 @@ func Counts(ctx context.Context, q store.Querier, dept string) ([]Count, error) 
 		add("materials", `SELECT COALESCE(sum(units), 0) FROM materials m WHERE department = ? AND archived_at IS NULL
 			AND rev = (SELECT max(rev) FROM materials WHERE id = m.id)`, dept)
 		add("material_bin", `SELECT COALESCE(sum(f.size), 0) FROM materials m JOIN material_files f ON f.id = m.id AND f.rev = m.rev
-			WHERE m.department = ? AND m.archived_at IS NULL AND f.binary AND m.rev = (SELECT max(rev) FROM materials WHERE id = m.id)`, dept)
+			WHERE m.department = ? AND m.archived_at IS NULL AND m.rev = (SELECT max(rev) FROM materials WHERE id = m.id)`, dept)
 		add("choices", `SELECT count(*) FROM choices WHERE department = ? AND status = 'open'`, dept)
 		add("schedules", `SELECT count(*) FROM schedules WHERE department = ?`, dept)
 		add("secrets", `SELECT count(*) FROM secrets WHERE department = ?`, dept)

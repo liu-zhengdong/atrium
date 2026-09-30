@@ -303,7 +303,7 @@ const (
 	RuleMemo                      // 自己的备忘（由 memo 路由按身份判）
 	RuleEventsAck                 // 确认事件：只能是发给自己的
 	RuleEscalate                  // 上报
-	RuleWorkerProfile             // 改执行者档案、解除不可用标记：管辖包含档案所属部门
+	RuleWorkerProfile             // 改执行者档案、解除不可用标记、补算用量：管辖包含档案所属部门
 )
 
 // RuleFor 纯判定：负责人令牌碰到这条路由（Go 路由模式，如 "POST /api/tasks/{id}/notes"）时的规则。默认拒绝。
@@ -347,7 +347,7 @@ func RuleFor(pattern string) Rule {
 		return RuleEventsAck
 	case path == "/api/escalations" && method == "POST":
 		return RuleEscalate
-	case method == "POST" && (path == "/api/workers/edit" || path == "/api/workers/clear"):
+	case method == "POST" && (path == "/api/workers/edit" || path == "/api/workers/clear" || path == "/api/workers/recount"):
 		return RuleWorkerProfile
 	}
 	return RuleDeny

@@ -15,6 +15,8 @@ type UsageSpec struct {
 	CacheWrite string `yaml:"cache_write,omitempty" json:"cache_write,omitempty"`
 	Cost       string `yaml:"cost,omitempty" json:"cost,omitempty"`
 	Currency   string `yaml:"currency,omitempty" json:"currency,omitempty"` // 工具报的花费货币；写了 cost 才要
+	// InputHasCacheRead：工具的 input 含缓存读（OpenAI 口径，如 trae），取数时扣掉，统一成输入不含缓存读。
+	InputHasCacheRead bool `yaml:"input_includes_cache_read,omitempty" json:"input_includes_cache_read,omitempty"`
 }
 
 var (
@@ -45,6 +47,9 @@ func (r Rules) usageProblems() []string {
 	}
 	if n == 0 {
 		out = append(out, "usage 至少写一个 token 或花费字段")
+	}
+	if s.InputHasCacheRead && (s.Input == "" || s.CacheRead == "") {
+		out = append(out, "usage.input_includes_cache_read 要同时写 input 与 cache_read")
 	}
 	if s.Cost != "" {
 		if len(s.Currency) != 3 || strings.ToUpper(s.Currency) != s.Currency || strings.Trim(s.Currency, "ABCDEFGHIJKLMNOPQRSTUVWXYZ") != "" {
@@ -94,6 +99,15 @@ func readUsage(e event, spec UsageSpec) (Usage, bool) {
 	take(spec.Output, &u.Output)
 	take(spec.CacheRead, &u.CacheRead)
 	take(spec.CacheWrite, &u.CacheWrite)
+	if spec.InputHasCacheRead && u.Input != nil {
+		// 缓存读读不到或大于输入，扣不出普通输入，按读不到记。
+		if u.CacheRead == nil || *u.CacheRead > *u.Input {
+			u.Input = nil
+		} else {
+			n := *u.Input - *u.CacheRead
+			u.Input = &n
+		}
+	}
 	if spec.Cost != "" {
 		if c := pathCost(e, spec.Cost); c != nil {
 			u.Cost, u.Currency, ok = c, spec.Currency, true

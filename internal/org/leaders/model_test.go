@@ -102,6 +102,7 @@ func TestRuleFor(t *testing.T) {
 		"POST /api/tasks/{id}/merge/ignore": RuleTaskRef,
 		"POST /api/workers/edit":            RuleWorkerProfile,
 		"POST /api/workers/clear":           RuleWorkerProfile,
+		"POST /api/workers/recount":         RuleWorkerProfile,
 	}
 	for p, want := range cases {
 		if got := RuleFor(p); got != want {

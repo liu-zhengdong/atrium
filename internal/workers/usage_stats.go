@@ -19,7 +19,10 @@ type UsageMetric struct {
 }
 
 func usageStats(ls []Attempt) []UsageMetric {
-	out := []UsageMetric{{Name: "输入"}, {Name: "输出"}, {Name: "缓存读"}, {Name: "缓存写"}}
+	var out []UsageMetric
+	for _, name := range usageNames {
+		out = append(out, UsageMetric{Name: name})
+	}
 	values := make([][]float64, 4)
 	for _, a := range ls {
 		for i, n := range []*int64{a.Usage.Input, a.Usage.Output, a.Usage.CacheRead, a.Usage.CacheWrite} {

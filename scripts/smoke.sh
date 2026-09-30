@@ -181,7 +181,7 @@ out=$(json skill ls fix-bug); has '.result.others == ["refs/a.md"] and (.result.
 printf '部门是什么' >"$work/overview.md"; printf 'abc' >"$work/detail.md"
 out=$(json material add o2 "$work/overview.md" --overview --note 总览); has '.result[0].id == "m1" and .result[0].kind == "overview"'
 out=$(json material add o2 "$work/detail.md" --note 细节); has '.result[0].id == "m2"'
-out=$(json material add o2 "$work/detail.md" --note 改了); has '.result[0].id == "m2" and .result[0].rev == 2'
+out=$(json material add o2 "$work/detail.md"); has '.result[0].id == "m2" and .result[0].rev == 2 and .result[0].note == "细节"'
 out=$(json material ls m1); has '(.result.content|@base64d) == "部门是什么"'
 [ "$("$bin" material ls m2)" = abc ] || fail "material ls mN 应输出原文"
 out=$(json material archive m2); has '.result.archived_at != null'

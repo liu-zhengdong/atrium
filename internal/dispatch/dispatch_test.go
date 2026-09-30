@@ -160,7 +160,7 @@ func TestBuildPrompt(t *testing.T) {
 	p := BuildPrompt(PromptInput{Task: "t3", Title: "修登录", Detail: "详述", Points: []string{"k1（o1）简洁——整体更简单"},
 		Skill: "/data/skills/fix/SKILL.md", Profile: "先跑相关测试", Tells: []string{"改用 A 方案"}, Bounces: []string{"没有 PR"},
 		Repo: "a/b", Branch: "task-t3", Guide: "不要用 git stash"})
-	for _, want := range []string{"# 任务 t3：修登录", "- k1（o1）简洁——整体更简单", "/data/skills/fix/SKILL.md", "先跑相关测试",
+	for _, want := range []string{"# 任务 t3：修登录", "- k1（o1）简洁——整体更简单", "/data/skills/fix/SKILL.md", "先跑相关测试", "atrium material ls mN 取全文",
 		"- 改用 A 方案", "- 没有 PR", "分支 task-t3", "端到端验证", "隔离实例", "凭据不打印", "## 这个仓库的约定", "不要用 git stash"} {
 		if !strings.Contains(p, want) {
 			t.Errorf("提示词缺 %q：\n%s", want, p)

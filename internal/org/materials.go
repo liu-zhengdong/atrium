@@ -44,6 +44,7 @@ type Material struct {
 	ID         string `json:"id"`
 	Rev        int    `json:"rev"`
 	Org        string `json:"org"`
+	OrgName    string `json:"org_name"`
 	Kind       string `json:"kind"` // overview 或 detail
 	Title      string `json:"title"`
 	Note       string `json:"note"`
@@ -72,6 +73,7 @@ type MaterialInput struct {
 // MaterialPlan 纯判定用：部门现有资料（最新版、没归档的）。
 type materialSlot struct {
 	id, kind, title  string
+	note             string // 已有资料的说明：追加一版没给 --note 时沿用
 	units, size, rev int
 	binary           bool
 }
@@ -114,7 +116,7 @@ func PlanMaterials(dept string, existing []materialSlot, in MaterialInput) ([]ma
 		slot := materialSlot{kind: kind, title: f.Name, units: units, size: len(f.Content), binary: binary}
 		for _, e := range existing {
 			if e.kind == kind && (kind == "overview" || e.title == f.Name) {
-				slot.id, slot.rev = e.id, e.rev
+				slot.id, slot.rev, slot.note = e.id, e.rev, e.note
 				tally(e, -1)
 			}
 		}
@@ -132,12 +134,15 @@ func PlanMaterials(dept string, existing []materialSlot, in MaterialInput) ([]ma
 
 const materialCols = `id, rev, department, kind, title, note, file, size, units, binary, archived_at, created_by, created_at`
 
+// materialSelect 读资料：materialCols 加所属部门名称（表别名 m）。
+const materialSelect = `SELECT ` + materialCols + `, (SELECT name FROM departments WHERE departments.id = m.department) FROM materials m`
+
 func scanMaterial(s interface{ Scan(...any) error }, data string) (Material, error) {
 	var m Material
 	var file string
 	var archived sql.NullInt64
 	err := s.Scan(&m.ID, &m.Rev, &m.Org, &m.Kind, &m.Title, &m.Note, &file, &m.Size, &m.Units, &m.Binary, &archived,
-		&m.CreatedBy, &m.CreatedAt)
+		&m.CreatedBy, &m.CreatedAt, &m.OrgName)
 	if archived.Valid {
 		m.ArchivedAt = &archived.Int64
 	}
@@ -162,7 +167,7 @@ func Materials(ctx context.Context, q store.Querier, data string, f MaterialFilt
 	if f.Org != "" {
 		where, args = append(where, "department = ?"), append(args, f.Org)
 	}
-	rows, err := q.QueryContext(ctx, `SELECT `+materialCols+` FROM materials m WHERE `+strings.Join(where, " AND ")+
+	rows, err := q.QueryContext(ctx, materialSelect+` WHERE `+strings.Join(where, " AND ")+
 		` ORDER BY department, kind = 'detail', title LIMIT ?`, append(args, ReadCap+1)...)
 	if err != nil {
 		return nil, err
@@ -184,9 +189,9 @@ func Materials(ctx context.Context, q store.Querier, data string, f MaterialFilt
 
 // GetMaterial 取一份资料的某一版（rev 为 0 取最新）。
 func GetMaterial(ctx context.Context, q store.Querier, data, id string, rev int) (Material, error) {
-	query, args := `SELECT `+materialCols+` FROM materials WHERE id = ? ORDER BY rev DESC LIMIT 1`, []any{id}
+	query, args := materialSelect+` WHERE id = ? ORDER BY rev DESC LIMIT 1`, []any{id}
 	if rev > 0 {
-		query, args = `SELECT `+materialCols+` FROM materials WHERE id = ? AND rev = ?`, []any{id, rev}
+		query, args = materialSelect+` WHERE id = ? AND rev = ?`, []any{id, rev}
 	}
 	m, err := scanMaterial(q.QueryRowContext(ctx, query, args...), data)
 	if store.IsNotFound(err) {
@@ -225,7 +230,7 @@ func AddMaterials(ctx context.Context, db *store.DB, data string, in MaterialInp
 	if in.Overview && len(in.Files) != 1 {
 		return nil, api.Usage("--overview: 总览只能是一个文件")
 	}
-	if err := checkText("note", in.Note, maxMaterialNote, true); err != nil {
+	if err := checkText("note", in.Note, maxMaterialNote, false); err != nil {
 		return nil, err
 	}
 	for _, f := range in.Files {
@@ -244,11 +249,18 @@ func AddMaterials(ctx context.Context, db *store.DB, data string, in MaterialInp
 		}
 		existing := make([]materialSlot, len(cur))
 		for i, m := range cur {
-			existing[i] = materialSlot{id: m.ID, kind: m.Kind, title: m.Title, units: m.Units, size: m.Size, binary: m.Binary, rev: m.Rev}
+			existing[i] = materialSlot{id: m.ID, kind: m.Kind, title: m.Title, note: m.Note, units: m.Units, size: m.Size, binary: m.Binary, rev: m.Rev}
 		}
 		plan, err := PlanMaterials(in.Org, existing, in)
 		if err != nil {
 			return err
+		}
+		for i, s := range plan {
+			if strings.TrimSpace(in.Note) != "" {
+				plan[i].note = in.Note
+			} else if s.id == "" {
+				return api.Usage("--note: %s 是新资料，要写它里面有什么、什么时候用", s.title)
+			}
 		}
 		for i, s := range plan {
 			f := in.Files[i]
@@ -259,7 +271,7 @@ func AddMaterials(ctx context.Context, db *store.DB, data string, in MaterialInp
 			}
 			file := path.Base(f.Name)
 			if _, err := tx.ExecContext(ctx, `INSERT INTO materials (`+materialCols+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
-				s.id, s.rev+1, in.Org, s.kind, f.Name, in.Note, file, s.size, s.units, s.binary, actor, store.Now()); err != nil {
+				s.id, s.rev+1, in.Org, s.kind, f.Name, s.note, file, s.size, s.units, s.binary, actor, store.Now()); err != nil {
 				return err
 			}
 			if err := writeFile(materialFile(data, s.id, s.rev+1, file), f.Content, 0o600); err != nil {
@@ -441,7 +453,7 @@ func materialCommands(t *cli.Table) {
 一次最多 %d 个文件、%d 层、合计 %d MB。同一部门里标题相同就是给那份资料追加一版。`, maxMaterialFiles, maxMaterialDepth, maxMaterialRequest>>20),
 		Flags: []cli.Flag{
 			{Name: "overview", Bool: true, Help: "这是部门总览（每次附给负责人；一个部门一份）"},
-			{Name: "note", Value: "文字", Help: "这份资料是什么、什么时候用（必填）"},
+			{Name: "note", Value: "文字", Help: "资料里有什么、什么时候用；不写这一版改了什么。新建必填，给已有资料追加一版时可省，省了沿用上一版的说明"},
 		},
 		Run: func(c *cli.Ctx) error {
 			dept, err := c.Arg(0, "<oN>")
@@ -480,7 +492,7 @@ func materialCommands(t *cli.Table) {
 			}
 			return c.Done(list, b.String(), "atrium material ls --node "+dept)
 		}})
-	t.Add(cli.Command{Path: "material ls", Read: true, Args: "[mN]", Summary: "列资料与部门用量；给 mN 取这一份的内容",
+	t.Add(cli.Command{Path: "material ls", Read: true, Args: "[mN]", Summary: "按部门列资料（--node 只看一个部门及用量）；给 mN 取这一份的内容",
 		Flags: []cli.Flag{
 			{Name: "node", Value: "oN", Help: "只看这个部门的"},
 			{Name: "archived", Bool: true, Help: "只看已归档的"},
@@ -516,7 +528,11 @@ func materialCommands(t *cli.Table) {
 				}
 				fmt.Fprintf(&b, "部门 %s：总览 %d/%d 字，合计 %d/%d 字\n", n, overview, MaxOverview, total, MaxMaterial)
 			}
-			for _, m := range list {
+			for i, m := range list {
+				// 不限部门时按部门分组，部门号和名称作小标题（列表已按部门排序）
+				if c.Str("node") == "" && (i == 0 || list[i-1].Org != m.Org) {
+					fmt.Fprintf(&b, "%s %s\n", m.Org, m.OrgName)
+				}
 				b.WriteString("  " + materialLine(m) + "\n")
 			}
 			if len(list) == 0 {

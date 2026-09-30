@@ -27,7 +27,8 @@ func TestTable(t *testing.T) {
 		t.Errorf("命令 %d 条，超过上限 60", visible)
 	}
 	// 执行者连着用户的服务时只能跑只读命令：看的与改的分成两条，看的那条标 Read。
-	for path, read := range map[string]bool{"quota": true, "quota set": false, "workers": true, "workers edit": false} {
+	for path, read := range map[string]bool{"quota": true, "quota set": false, "workers": true, "workers edit": false,
+		"material ls": true, "material add": false} {
 		c, rest := Table().Lookup(strings.Fields(path))
 		if c == nil || len(rest) != 0 || c.Read != read {
 			t.Errorf("%s 应为 Read=%v", path, read)

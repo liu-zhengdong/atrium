@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/liu-zhengdong/atrium/internal/api"
+	"github.com/liu-zhengdong/atrium/internal/config"
 	"github.com/liu-zhengdong/atrium/internal/platform"
 	"github.com/liu-zhengdong/atrium/internal/quota"
 	"github.com/liu-zhengdong/atrium/internal/release/selfupdate"
@@ -51,23 +52,15 @@ type AgentConfig struct {
 	Env    map[string]string `json:"env,omitempty"`
 }
 
-// AgentDir 是代理数据目录：ATRIUM_AGENT_DATA，缺省 ~/.atrium-agent。
+// AgentDir 与服务、status 共用数据目录解析。
 func AgentDir(getenv func(string) string) (string, error) {
-	if d := strings.TrimSpace(getenv("ATRIUM_AGENT_DATA")); d != "" {
-		return filepath.Abs(d)
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(home, ".atrium-agent"), nil
+	p, err := config.Resolve(getenv)
+	return p.Data, err
 }
 
-// AgentIsolated：数据目录不是缺省的 ~/.atrium-agent（测试、冒烟起的代理），与服务的 config.Paths.Isolated 同一条规则；
-// 隔离的代理不读本机额度。装成服务的代理跑的是 --data 缺省目录，算正式。
+// AgentIsolated 与服务使用同一目录判定；隔离代理不读本机额度。
 func AgentIsolated(dir string) bool {
-	def, err := AgentDir(func(string) string { return "" })
-	return err != nil || filepath.Clean(def) != filepath.Clean(dir)
+	return (config.Paths{Data: dir}).Isolated()
 }
 
 func writeSecret(path string, v any) error {

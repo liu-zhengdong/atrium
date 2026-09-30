@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -25,9 +26,8 @@ import (
 // 技能：一类活怎么干——SKILL.md（做法）、附属文件（文本或截图等二进制）、优先执行者、交付要查什么、要的凭据。
 // 每次修改追加一版，文件在 skills/<名字>/r<rev>/，同时写成 skills-current/<名字>/ 下的当前版；
 // 派活只在提示词里附当前版 SKILL.md 的路径（Skill.Path）。
-// 大小上限（单个文件 MaxSkillFile、合计 MaxSkillTotal）在上限表。
+// 大小与每层项数的上限（单个文件 MaxSkillFile、合计 MaxSkillTotal、每层 MaxSkillLayer）在上限表；文件总数不设限。
 const (
-	maxSkillFiles = 16
 	maxSkillDepth = 3
 	keepSkillRevs = 10 // 每个技能留最近几版
 	maxSummary    = 120
@@ -72,7 +72,7 @@ func CheckSkillName(name string) error {
 	return nil
 }
 
-// CheckSkillFiles 纯判定：必须有 SKILL.md（文本，≤6KB）；文件数、路径深度、单个文件与合计大小有限。附属文件可以是二进制。
+// CheckSkillFiles 纯判定：必须有 SKILL.md（文本，≤6KB），其余见 CheckSkillShape。附属文件可以是二进制。
 func CheckSkillFiles(name string, files map[string][]byte) error {
 	body, ok := files["SKILL.md"]
 	if !ok {
@@ -84,21 +84,50 @@ func CheckSkillFiles(name string, files map[string][]byte) error {
 	if len(body) > MaxSkillBody {
 		return Full("skill_body", "", len(body))
 	}
-	if len(files) > maxSkillFiles {
-		return api.Usage("技能最多 %d 个文件，收到 %d 个：合并附属文件", maxSkillFiles, len(files))
-	}
-	total := 0
+	sizes := make(map[string]int, len(files))
 	for p, c := range files {
+		sizes[p] = len(c)
+	}
+	return CheckSkillShape(name, sizes)
+}
+
+// CheckSkillShape 纯判定：技能各文件（相对路径 → 字节数）的路径与层深、单个与合计大小、每一层的项数。
+// 只看路径和大小，命令行读本地目录时在读内容之前先用它判（readLocalSkill），服务端经 CheckSkillFiles 用同一份。
+func CheckSkillShape(name string, sizes map[string]int) error {
+	layers := map[string]map[string]bool{} // 目录（根为空串）→ 直接的文件与子文件夹
+	total := 0
+	for p, n := range sizes {
 		if err := CheckRelPath("files", p, maxSkillDepth); err != nil {
 			return err
 		}
-		if len(c) > MaxSkillFile<<20 {
-			return TooBig("skill_file", p, len(c))
+		if n > MaxSkillFile<<20 {
+			return TooBig("skill_file", p, n)
 		}
-		total += len(c)
+		total += n
+		for dir, rest := "", p; ; {
+			head, tail, more := strings.Cut(rest, "/")
+			if layers[dir] == nil {
+				layers[dir] = map[string]bool{}
+			}
+			layers[dir][head] = true
+			if !more {
+				break
+			}
+			dir, rest = dir+head+"/", tail
+		}
 	}
 	if total > MaxSkillTotal<<20 {
 		return TooBig("skill_total", name, total)
+	}
+	for _, dir := range slices.Sorted(maps.Keys(layers)) {
+		if n := len(layers[dir]); n > MaxSkillLayer {
+			where := " " + dir + " "
+			if dir == "" {
+				where = "根目录"
+			}
+			l := LimitOf("skill_layer")
+			return api.Limit(l.Next, "技能 %s 的%s有 %d 项（直接的文件与子文件夹），每层上限 %d 项：%s", name, where, n, l.Max, l.Fix)
+		}
 	}
 	return nil
 }
@@ -439,20 +468,17 @@ func skillRoutes(r *api.Router, env *app.Env) {
 }
 
 // readLocalSkill 把命令行给的 SKILL.md 文件或技能目录读成「相对路径 → 内容」（跳过隐藏文件与目录）。
-func readLocalSkill(path string) (map[string][]byte, error) {
+// 先只列路径和大小按 CheckSkillShape 判，过了才读内容：给错目录或目录超大时不整个读进内存。
+func readLocalSkill(name, path string) (map[string][]byte, error) {
 	st, err := os.Stat(path)
 	if err != nil {
 		return nil, api.Usage("读不到 %s：%v", path, err)
 	}
+	local := map[string]string{} // 相对路径 → 本地文件
+	sizes := map[string]int{}
 	if !st.IsDir() {
-		raw, err := os.ReadFile(path)
-		if err != nil {
-			return nil, err
-		}
-		return map[string][]byte{"SKILL.md": raw}, nil
-	}
-	files := map[string][]byte{}
-	err = filepath.WalkDir(path, func(p string, d fs.DirEntry, err error) error {
+		local["SKILL.md"], sizes["SKILL.md"] = path, int(st.Size())
+	} else if err := filepath.WalkDir(path, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -465,18 +491,29 @@ func readLocalSkill(path string) (map[string][]byte, error) {
 		if d.IsDir() {
 			return nil
 		}
-		if len(files) >= maxSkillFiles {
-			return api.Usage("%s 里文件超过 %d 个", path, maxSkillFiles)
-		}
-		raw, err := os.ReadFile(p)
+		info, err := d.Info()
 		if err != nil {
 			return err
 		}
 		rel, _ := filepath.Rel(path, p)
-		files[filepath.ToSlash(rel)] = raw
+		rel = filepath.ToSlash(rel)
+		local[rel], sizes[rel] = p, int(info.Size())
 		return nil
-	})
-	return files, err
+	}); err != nil {
+		return nil, err
+	}
+	if err := CheckSkillShape(name, sizes); err != nil {
+		return nil, err
+	}
+	files := make(map[string][]byte, len(local))
+	for rel, p := range local {
+		raw, err := os.ReadFile(p)
+		if err != nil {
+			return nil, err
+		}
+		files[rel] = raw
+	}
+	return files, nil
 }
 
 func skillCommands(t *cli.Table) {
@@ -498,7 +535,7 @@ func skillCommands(t *cli.Table) {
 			}
 			in := SkillInput{Name: name}
 			if len(c.Args) > 1 {
-				if in.Files, err = readLocalSkill(c.Args[1]); err != nil {
+				if in.Files, err = readLocalSkill(name, c.Args[1]); err != nil {
 					return err
 				}
 				if err := CheckSkillFiles(name, in.Files); err != nil { // 先在本地判，超了不必上传

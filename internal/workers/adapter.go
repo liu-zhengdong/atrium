@@ -409,9 +409,9 @@ func kimiAdapter() *Driver {
 // grok --prompt-file：单轮提示词从文件读，--always-approve、--cwd、--reasoning-effort；没写模型用服务端缺省。
 func grokAdapter() *Driver {
 	a := &Driver{Tool: "grok", Exe: "grok", Efforts: []string{"low", "medium", "high"},
-		Tell: TellRestart}
+		Tell: TellRestart, JSON: true, read: readGrok}
 	a.build = func(in Request) (Launch, error) {
-		args := []string{"--prompt-file", in.PromptFile}
+		args := []string{"--prompt-file", in.PromptFile, "--output-format", "streaming-messages-json"}
 		if in.Model != "" {
 			args = append(args, "-m", in.Model)
 		}

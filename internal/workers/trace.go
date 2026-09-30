@@ -123,7 +123,7 @@ func (p *Parser) Trace() Trace {
 	return t
 }
 
-// ReadTrace 读整份日志攒成经过；最后没写完的半行不读，日志还没有时为空。
+// ReadTrace 读整份日志攒成经过；纯文本保留末尾半行，JSON 工具等整行写完再读，日志还没有时为空。
 func ReadTrace(worker, path string) (Trace, error) {
 	p := NewParser(worker)
 	f, err := os.Open(path)
@@ -138,6 +138,9 @@ func ReadTrace(worker, path string) (Trace, error) {
 	for {
 		line, err := r.ReadString('\n')
 		if err == io.EOF {
+			if p.read == nil {
+				p.Line(line)
+			}
 			return p.Trace(), nil
 		}
 		if err != nil {
@@ -199,7 +202,7 @@ func (p *Parser) end(summary string, ms int64) {
 // 步骤要点取输入里的哪些项：先「什么」（搜索词、网址、说明），后「在哪」（路径）。
 var (
 	stepWhat  = []string{"pattern", "query", "Query", "url", "Url", "description"}
-	stepWhere = []string{"file_path", "filePath", "path", "AbsolutePath", "TargetFile", "DirectoryPath", "SearchPath", "notebook_path"}
+	stepWhere = []string{"file_path", "filePath", "path", "AbsolutePath", "TargetFile", "target_file", "DirectoryPath", "SearchPath", "notebook_path"}
 )
 
 // step 把非 shell 的工具步骤写成「工具名 要点」（view_file internal/README.md），路径去掉工作目录前缀；输入里没有这些项才给整段参数。

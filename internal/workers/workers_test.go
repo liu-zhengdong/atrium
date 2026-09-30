@@ -65,7 +65,7 @@ func TestBuild(t *testing.T) {
 		{tool: "opencode", in: in("p/m", "low"), want: []string{"run", "--format", "json", "--auto", "-m", "p/m", "--variant", "low"}},
 		{tool: "kimi", in: in("k2", ""), want: []string{"-p", "请先完整读取任务说明文件 " + pf + "，然后按文件内容执行。", "-m", "k2"}},
 		{tool: "kimi", in: in("", "high"), bad: "不接受思考强度"},
-		{tool: "grok", in: in("g", "low"), want: []string{"--prompt-file", pf, "-m", "g", "--reasoning-effort", "low", "--always-approve", "--cwd", dir}},
+		{tool: "grok", in: in("g", "low"), want: []string{"--prompt-file", pf, "--output-format", "streaming-messages-json", "-m", "g", "--reasoning-effort", "low", "--always-approve", "--cwd", dir}},
 		{tool: "agy", in: in("gemini-3.8-flash", "high"), want: []string{"--input-format", "stream-json", "--output-format", "stream-json", "--model", "gemini-3.8-flash", "--effort", "high"}},
 		{tool: "agy", in: in("claude-opus", "high"), bad: "不接受思考强度"},
 		{tool: "cursor", in: in("gpt-5.3-codex-fast", "high"), want: []string{"-p", "--workspace", dir, "--model", "gpt-5.3-codex-high-fast"}},

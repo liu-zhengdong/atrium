@@ -22,6 +22,7 @@ func TestNamedOnlyWorker(t *testing.T) {
 	}
 	defer db.Close()
 	env := &app.Env{DB: db, Paths: config.Paths{Data: dir}}
+	testLocalHost(t, env)
 	oldSpares := spares
 	spares = func(context.Context, *app.Env) (map[string]Spare, error) { return map[string]Spare{}, nil }
 	t.Cleanup(func() { spares = oldSpares })

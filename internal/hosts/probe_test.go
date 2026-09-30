@@ -56,14 +56,18 @@ func TestProbe(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	probeTools, probeTimeout = Tools, 2*time.Second
-	defer func() { probeTools, probeTimeout = nil, 20*time.Second }()
+	probeEnabled, probeTimeout = true, 2*time.Second
+	defer func() { probeEnabled, probeTimeout = false, 20*time.Second }()
 	env := map[string]string{"PATH": bin, "HOSTS_FAKE_WORKER": "probe"}
 	if runtime.GOOS == "windows" {
 		env = map[string]string{"PATH": bin, "PATHEXT": ".EXE", "HOSTS_FAKE_WORKER": "probe", "SYSTEMROOT": os.Getenv("SYSTEMROOT")}
 	}
 	start := time.Now()
-	got := Probe(context.Background(), env)
+	report := Probe(context.Background(), env, []workers.Tool{{Name: "custom-cli", Exe: "codex"}, {Name: "opencode", Exe: "opencode"}, {Name: "claude", Exe: "claude"}})
+	if !report.CLIs["custom-cli"].Installed || len(report.CLIs) != 1 {
+		t.Fatalf("仅实测跑通的自定义命令可用：%+v", report)
+	}
+	got := report.Failed
 	if time.Since(start) > 10*time.Second {
 		t.Errorf("各工具并行跑、超时就结束：用了 %s", time.Since(start))
 	}
@@ -78,6 +82,46 @@ func TestProbe(t *testing.T) {
 	}
 }
 
+func TestAgentCLIProbe(t *testing.T) {
+	g := newRig(t)
+	ctx := context.Background()
+	src := "---\nprotocol: cli\ncommand: custom-command\nargs: [\"{prompt}\"]\n---\n"
+	if _, err := workers.SaveProfile(ctx, g.env.DB, "harness/custom-cli", workers.Edit{Source: &src}, "u1"); err != nil {
+		t.Fatal(err)
+	}
+	a, stop, _ := g.agent(t.TempDir())
+	defer stop()
+	c := &api.Client{Base: g.server.URL, Token: a.Cfg.Token}
+	var tools []workers.Tool
+	if err := c.Do(ctx, "GET", "/api/agent/tools", nil, &tools); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, tool := range tools {
+		if tool.Name == "custom-cli" && tool.Exe == "custom-command" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("代理目录缺少档案命令：%+v", tools)
+	}
+	for _, available := range []bool{true, false} {
+		report := ProbeReport{CLIs: map[string]CLI{}}
+		if available {
+			report.CLIs["custom-cli"] = CLI{Installed: true}
+		} else {
+			report.Failed = []ProbeFailure{{Tool: "custom-cli", Reason: "自检失败"}}
+		}
+		if err := c.Do(ctx, "POST", "/api/agent/probe", report, nil); err != nil {
+			t.Fatal(err)
+		}
+		choice, err := Pick(ctx, g.env, Need{Tool: "custom-cli"}, a.Cfg.Host)
+		if err != nil || (choice.Kind == "run") != available {
+			t.Fatalf("available=%v：%+v %v", available, choice, err)
+		}
+	}
+}
+
 // 代理报上来的自检结果：不过的记成「工具@机器」不可用、挑机器跳过、workers 看得到原因；再报跑通就解除；不认识的工具名丢掉。
 func TestAgentProbeRoute(t *testing.T) {
 	g := newRig(t)
@@ -87,7 +131,7 @@ func TestAgentProbeRoute(t *testing.T) {
 	host := a.Cfg.Host
 	hostClient := &api.Client{Base: g.server.URL, Token: a.Cfg.Token}
 	report := func(failed []ProbeFailure) {
-		if err := hostClient.Do(ctx, "POST", "/api/agent/probe", map[string]any{"failed": failed}, nil); err != nil {
+		if err := hostClient.Do(ctx, "POST", "/api/agent/probe", ProbeReport{CLIs: map[string]CLI{"codex": {Installed: true}}, Failed: failed}, nil); err != nil {
 			t.Fatal(err)
 		}
 	}

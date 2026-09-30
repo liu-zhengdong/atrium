@@ -27,11 +27,11 @@ func f(p float64) *float64 { return &p }
 func TestPick(t *testing.T) {
 	base := func() []Fact {
 		return []Fact{
-			{ID: "claude+opus", Tool: "claude", Account: "claude", Trust: "medium", MaxRisk: "medium", Installed: true},
-			{ID: "codex+gpt", Tool: "codex", Account: "codex", Trust: "medium", MaxRisk: "medium", Installed: true},
-			{ID: "opencode+m", Tool: "opencode", Account: "opencode", Trust: "unknown", MaxRisk: "low", Installed: true, Exclusive: true},
-			{ID: "kimi", Tool: "kimi", Account: "kimi", Installed: false},
-			{ID: "grok", Tool: "grok", Account: "grok", Installed: true, Refusal: "档案 max_risk=low，低于任务 risk=medium"},
+			{ID: "claude+opus", Tool: "claude", Account: "claude", Trust: "medium", MaxRisk: "medium"},
+			{ID: "codex+gpt", Tool: "codex", Account: "codex", Trust: "medium", MaxRisk: "medium"},
+			{ID: "opencode+m", Tool: "opencode", Account: "opencode", Trust: "unknown", MaxRisk: "low", Exclusive: true},
+			{ID: "kimi", Tool: "kimi", Account: "kimi", Unavailable: "没有可用主机"},
+			{ID: "grok", Tool: "grok", Account: "grok", Refusal: "档案 max_risk=low，低于任务 risk=medium"},
 		}
 	}
 	cases := []struct {
@@ -60,7 +60,7 @@ func TestPick(t *testing.T) {
 			fs[1].Preferred = 1
 			return PickInput{Risk: "low", Facts: fs, Spares: map[string]Spare{"claude": {Percent: f(90)}}}
 		}(), want: "codex+gpt", reason: "技能指定"},
-		{name: "没人能接", in: PickInput{Risk: "medium", Facts: base()[3:]}, reason: "没有能接的执行者（kimi：没装"},
+		{name: "没人能接", in: PickInput{Risk: "medium", Facts: base()[3:]}, reason: "没有能接的执行者（kimi：没有可用主机"},
 		{name: "近 5 次启动失败 2 次往后排", in: PickInput{Risk: "low", Facts: func() []Fact { b := base(); b[0].Fails = 2; return b }()},
 			want: "codex+gpt", reason: "claude+opus 近 5 次拉起启动失败 2 次，排在后面"},
 		{name: "失败 1 次不影响", in: PickInput{Risk: "low", Facts: func() []Fact { b := base(); b[0].Fails = 1; return b }()},
@@ -354,6 +354,7 @@ func TestViewIsolated(t *testing.T) {
 	if err := os.WriteFile(env.Paths.Token(), []byte("test-user-token"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	testLocalHost(t, env)
 	oldSpares := spares
 	spares = func(context.Context, *app.Env) (map[string]Spare, error) { return map[string]Spare{}, nil }
 	t.Cleanup(func() { spares = oldSpares })
@@ -530,7 +531,7 @@ func TestPickDurationDisplayOnly(t *testing.T) {
 	median, longest := int64(600000), int64(3000000)
 	stat := workers.Stat{MedianMS: &median, MaxMS: &longest}
 	v := Pick(PickInput{Risk: "low", Facts: []Fact{
-		{ID: "slow", Installed: true, Stat: stat}, {ID: "fast", Installed: true},
+		{ID: "slow", Stat: stat}, {ID: "fast"},
 	}})
 	if v.Recommended != "slow" || v.Candidates[0].Stat.Timing() != stat.Timing() {
 		t.Fatalf("用时只展示，不改推荐：%+v", v)

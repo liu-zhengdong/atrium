@@ -300,7 +300,7 @@ func (d *dispatcher) choose(ctx context.Context, t ledger.Task, o Options, exclu
 	for _, a := range o.Avoid {
 		exclude[a] = true
 	}
-	v, err := d.view(ctx, t, o.Risk, exclude)
+	v, err := d.view(ctx, t, o.Risk, exclude, o.Host)
 	if err != nil {
 		return w, false, err
 	}

@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -694,18 +695,24 @@ func (a *Agent) reportQuota(ctx context.Context) {
 // reportProbes 上线时自检一轮、之后每 ProbeEvery 一轮（用执行者同一份环境），报给服务；没报上每分钟重试。
 func (a *Agent) reportProbes(ctx context.Context) {
 	env := platform.WorkerEnv(runtime.GOOS, a.Env)
-	var failed []ProbeFailure
+	var report ProbeReport
 	var due time.Time
+	var previous []workers.Tool
 	sent := false
 	for {
-		if now := time.Now(); !now.Before(due) {
-			failed, due, sent = Probe(ctx, env), now.Add(ProbeEvery), false
-			if ctx.Err() != nil {
-				return
-			}
+		now := time.Now()
+		var tools []workers.Tool
+		if err := a.client.Do(ctx, "GET", "/api/agent/tools", nil, &tools); err != nil {
+			a.Log.Debug("读取工具目录失败", "err", err)
+		} else if !now.Before(due) || !slices.Equal(previous, tools) {
+			report, due, sent = Probe(ctx, env, tools), now.Add(ProbeEvery), false
+			previous = tools
 		}
-		if !sent {
-			err := a.call(ctx, "/api/agent/probe", map[string]any{"failed": failed}, nil)
+		if ctx.Err() != nil {
+			return
+		}
+		if !sent && !due.IsZero() {
+			err := a.call(ctx, "/api/agent/probe", report, nil)
 			if sent = err == nil; !sent {
 				a.Log.Debug("自检结果没报上", "err", err)
 			}

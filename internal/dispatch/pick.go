@@ -20,8 +20,7 @@ type Fact struct {
 	MaxRisk     string
 	Refusal     string // 档案是否接受自动派活（workers.Rules.Refusal）
 	Problem     string // 档案写得不对、模型与强度不搭
-	Installed   bool
-	Unavailable string // 本机上接不了活的原因：不可用标记（workers.Blocked）或看出没登录
+	Unavailable string // 没有符合任务条件的可用主机，或隔离实例不允许
 	Exclusive   bool
 	Preferred   int          // 技能里的优先顺序（1 起）；0 不是
 	Stat        workers.Stat // 近 StatWindow 次表现，仅供展示
@@ -102,9 +101,6 @@ func Pick(in PickInput) PickView {
 		c := Candidate{ID: f.ID, Trust: f.Trust, MaxRisk: f.MaxRisk, Fails: f.Fails, Stat: f.Stat}
 		if f.Problem != "" {
 			c.Refusals = append(c.Refusals, f.Problem)
-		}
-		if !f.Installed {
-			c.Refusals = append(c.Refusals, "没装："+f.Tool+" 不在 PATH 上")
 		}
 		if f.Unavailable != "" {
 			c.Refusals = append(c.Refusals, f.Unavailable)

@@ -41,7 +41,7 @@ func TestConnection(t *testing.T) {
 
 func TestChoose(t *testing.T) {
 	yes, no := true, false
-	local := Candidate{ID: "h1", Kind: "local", Conn: ConnLocal, Max: 2}
+	local := Candidate{ID: "h1", Kind: "local", Conn: ConnLocal, Max: 2, CLIs: map[string]CLI{"codex": {Installed: true}}}
 	remote := Candidate{ID: "h2", Kind: "remote", Conn: ConnOnline, Max: 4, Repos: []string{"a/b"},
 		CLIs: map[string]CLI{"codex": {Installed: true, LoggedIn: &yes}, "claude": {Installed: true, LoggedIn: &no}}}
 	with := func(c Candidate, f func(*Candidate)) Candidate { f(&c); return c }

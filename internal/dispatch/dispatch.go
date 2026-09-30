@@ -286,7 +286,7 @@ func (d *dispatcher) choose(ctx context.Context, t ledger.Task, o Options, exclu
 		if err != nil {
 			return w, false, err
 		}
-		if why := w.Rules.Refusal(o.Risk); why != "" {
+		if why := w.Rules.Refusal(o.Risk, false); why != "" {
 			return w, false, api.Conflict("%s 接不了：%s", w.ID, why)
 		}
 		busy, err := busyTools(ctx, d.env.DB)
@@ -362,7 +362,7 @@ func (d *dispatcher) view(ctx context.Context, t ledger.Task, risk string, exclu
 		}
 		seen[r.ID] = true
 		f := Fact{ID: r.ID, Tool: r.Spec.Tool, Model: r.Spec.Model, Account: accountOf(r.Spec.Tool), Trust: r.Rules.EffectiveTrust(),
-			MaxRisk: r.Rules.EffectiveMaxRisk(), Refusal: r.Rules.Refusal(risk), Installed: workers.Installed(r.Adapter),
+			MaxRisk: r.Rules.EffectiveMaxRisk(), Refusal: r.Rules.Refusal(risk, true), Installed: workers.Installed(r.Adapter),
 			Exclusive: r.Adapter.Exclusive, Stat: workers.Count(stats[workers.Combo(r.ID)]), Fails: workers.Fails(stats[workers.Combo(r.ID)], ShakyWindow)}
 		if _, builtin := workers.Builtin(r.Spec.Tool); iso && builtin {
 			f.Unavailable = "隔离实例（ATRIUM_DATA 不是缺省目录）不自动挑内置工具"

@@ -20,6 +20,7 @@ import (
 // Row 是 workers 列表的一行。
 type Row struct {
 	ID        string   `json:"id"`
+	Auto      bool     `json:"auto"`
 	Trust     string   `json:"trust"`
 	MaxRisk   string   `json:"max_risk"`
 	Installed bool     `json:"installed"`
@@ -102,7 +103,7 @@ func List(ctx context.Context, q store.Querier) ([]Row, error) {
 		seen[r.ID] = true
 		combo := Combo(r.ID)
 		counted[combo] = true
-		out = append(out, Row{ID: r.ID, Trust: r.Rules.EffectiveTrust(), MaxRisk: r.Rules.EffectiveMaxRisk(),
+		out = append(out, Row{ID: r.ID, Auto: r.Rules.EffectiveAuto(), Trust: r.Rules.EffectiveTrust(), MaxRisk: r.Rules.EffectiveMaxRisk(),
 			Installed: Installed(r.Adapter), Layers: r.Layers, Stat: Count(stats[combo]), Recent: recentOutcomes(stats[combo]), Marks: marksOf(marks, r.Spec)})
 	}
 	// 拉起过、目录里没有的组合（写死派过的）也列出来，统计不丢。
@@ -252,8 +253,11 @@ func Commands(t *cli.Table) {
 					continue
 				}
 				inst := ""
+				if !r.Auto {
+					inst = "  只点名"
+				}
 				if !r.Installed {
-					inst = "  没装"
+					inst += "  没装"
 				}
 				fmt.Fprintf(&b, "%s  trust=%s  max_risk=%s%s  %s\n", r.ID, r.Trust, r.MaxRisk, inst, r.Stat)
 				writeMarks(&b, r.Marks)
@@ -265,7 +269,7 @@ func Commands(t *cli.Table) {
 		Flags: []cli.Flag{
 			{Name: "clear", Value: "工具[+模型][@机器]", Help: "解除不可用标记（额度用尽、没登录、缺运行环境、模型名无效、零步骤出错退出；自检不过的下次自检跑通自动解除，还不过会再标上）；没写模型或机器就解除这个工具在全部模型或机器上的"},
 			{Name: "file", Value: "路径", Help: "整份替换这层档案：--- 包住的 YAML 规则 + 正文（正文附进提示词）"},
-			{Name: "set", Value: "键=值", Multi: true, Help: "改一条规则（值按 YAML：trust=medium、checks=[pr_exists]）"},
+			{Name: "set", Value: "键=值", Multi: true, Help: "改一条规则（值按 YAML：auto=false（只点名）、trust=medium、checks=[pr_exists]）"},
 			{Name: "unset", Value: "键", Multi: true, Help: "删一条规则"},
 			{Name: "delete", Bool: true, Help: "删掉这层档案"},
 		},

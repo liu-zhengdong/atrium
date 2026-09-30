@@ -310,7 +310,7 @@ func TestResolveAndRefusal(t *testing.T) {
 	if r.ID != "claude+sonnet" || r.Rules.EffectiveMaxRisk() != "low" {
 		t.Fatalf("只写工具：%+v", r)
 	}
-	if r.Rules.Refusal("medium") == "" || r.Rules.Refusal("low") != "" {
+	if r.Rules.Refusal("medium", true) == "" || r.Rules.Refusal("low", true) != "" {
 		t.Fatal("trust=low 只接 low")
 	}
 	// 只写工具、档案没写 model：有别名缺省的补上（claude 的 opus 在上面被 harness 盖掉，这里看 cursor 的 auto），

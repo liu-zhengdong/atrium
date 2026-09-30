@@ -195,7 +195,7 @@ func Enqueue(ctx context.Context, env *app.Env, id string, o Options, actor stri
 		if err := r.Check(); err != nil {
 			return t, err
 		}
-		if why := r.Rules.Refusal(o.Risk); why != "" {
+		if why := r.Rules.Refusal(o.Risk, false); why != "" {
 			return t, api.Conflict("%s 接不了：%s", r.ID, why).WithNext("atrium task run " + id + " --dry-run --risk " + o.Risk)
 		}
 		o.Worker = r.ID

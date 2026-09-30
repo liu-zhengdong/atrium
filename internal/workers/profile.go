@@ -24,6 +24,7 @@ var (
 
 // Rules 是档案 frontmatter 的规则。三层叠加后以最具体的一层为准（整项覆盖，checks 写 [] 表示不加查）。
 type Rules struct {
+	Auto        *bool          `yaml:"auto,omitempty" json:"auto,omitempty"` // nil：缺省参与自动挑人
 	Trust       string         `yaml:"trust,omitempty" json:"trust,omitempty"`
 	MaxRisk     string         `yaml:"max_risk,omitempty" json:"max_risk,omitempty"`
 	Checks      []string       `yaml:"checks,omitempty" json:"checks,omitempty"` // nil：没写（关卡用缺省）；空：不加查
@@ -60,18 +61,6 @@ func (r Rules) EffectiveMaxRisk() string {
 		return "medium"
 	}
 	return "low"
-}
-
-// Refusal：这份档案接不接这个风险的活；能接返回空。纯函数。
-func (r Rules) Refusal(risk string) string {
-	if max := r.EffectiveMaxRisk(); RiskLevel(max) < RiskLevel(risk) {
-		why := "档案 max_risk=" + max
-		if r.MaxRisk == "" {
-			why = fmt.Sprintf("档案没写 max_risk，trust=%s 只接到 %s", r.EffectiveTrust(), max)
-		}
-		return fmt.Sprintf("%s，低于任务 risk=%s", why, risk)
-	}
-	return ""
 }
 
 // Profile 是一层档案的原文与解析结果。

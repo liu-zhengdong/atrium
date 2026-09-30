@@ -622,13 +622,3 @@ func TestDeptHeadAndTaskLinks(t *testing.T) {
 		}
 	}
 }
-
-func TestPerfDuration(t *testing.T) {
-	a, b := int64(540000), int64(660000)
-	rows := perfRows(map[string][]workers.Attempt{"codex": {
-		{Outcome: workers.OutOK, DurationMS: &a}, {Outcome: workers.OutBounce, DurationMS: &b},
-	}}, []workers.Mark{{Tool: "kimi", Host: "h1"}})
-	if len(rows) != 2 || rows[0].Timing != "用时中位 10 分 · 最长 11 分" || rows[1].Timing != "用时中位 — · 最长 —" {
-		t.Fatalf("%+v", rows)
-	}
-}

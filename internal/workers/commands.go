@@ -32,6 +32,8 @@ type Row struct {
 
 // Detail 是 workers <名字> 的内容：给执行者标识看叠加结果，给档案名看原文。
 type Detail struct {
+	Timing string `json:"timing"` // 用时说明，与命令行共用 Stat.Timing
+
 	Trust    string    `json:"trust,omitempty"` // 生效值，与目录相同
 	MaxRisk  string    `json:"max_risk,omitempty"`
 	Resolved *Resolved `json:"resolved,omitempty"`
@@ -175,7 +177,7 @@ func Show(ctx context.Context, q store.Querier, name string) (Detail, error) {
 		}
 		layers = append(layers, *p)
 	}
-	return Detail{Trust: r.Rules.EffectiveTrust(), MaxRisk: r.Rules.EffectiveMaxRisk(), Resolved: &r, Stat: &st, Attempts: ls, Marks: marksOf(marks, r.Spec), Layers: layers}, nil
+	return Detail{Timing: st.Timing(), Trust: r.Rules.EffectiveTrust(), MaxRisk: r.Rules.EffectiveMaxRisk(), Resolved: &r, Stat: &st, Attempts: ls, Marks: marksOf(marks, r.Spec), Layers: layers}, nil
 }
 
 func asAPI(err error, target **api.Error) bool {

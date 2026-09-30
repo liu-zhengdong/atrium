@@ -307,6 +307,7 @@ function renderWorker(d) {
     ${rules.limits && Object.keys(rules.limits).length ? `<dt>限制</dt><dd>${esc(JSON.stringify(rules.limits))}</dd>` : ""}
     ${rules.endpoint ? `<dt>端点</dt><dd>${esc(rules.endpoint)}（${esc(rules.endpoint_api || "")}）</dd>` : ""}</dl>
     <section class="worker-section"><h4>拉起</h4><p class="quiet">${st.launches ? `近 ${st.launches} 次：交付 ${st.ok} · 被交回 ${st.bounce} · 额度 ${st.quota} · 起不来 ${st.setup} · 其他失败 ${st.fail}` : "还没有拉起记录"}</p>
+    <p class="quiet">${esc(d.timing)}</p>
     ${outcomePips((d.attempts || []).map(a => a.outcome))}
     <div class="worker-runs">${(d.attempts || []).map(a => `<div><div class="run-ref"><span class="quiet">${date(a.at)} ${clock(a.at)}</span><a href="#today/${esc(a.task)}">${esc(a.task)}</a> 第 ${a.n} 次 ${esc(a.worker)}@${esc(a.host)}${a.model ? `（${esc(a.model)}）` : ""}</div><span class="run-outcome ${a.outcome === "ok" ? "quiet" : "mark"}">${esc(outName[a.outcome])}${a.reason && a.outcome !== "ok" ? "：" + esc(a.reason) : ""}</span></div>`).join("")}</div></section>
     <section class="worker-section"><h4>正文</h4><div class="worker-body">${esc(r.body || "没有正文")}</div></section>

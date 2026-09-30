@@ -17,6 +17,7 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/cli"
 	"github.com/liu-zhengdong/atrium/internal/importer"
 	"github.com/liu-zhengdong/atrium/internal/store"
+	"github.com/liu-zhengdong/atrium/internal/workers"
 )
 
 //go:embed static
@@ -53,6 +54,9 @@ func (w *web) routes(r *api.Router, env *app.Env) {
 	w.data(r, "GET /ui/api/today", func(req *http.Request) (any, error) { return loadToday(req.Context(), env.DB, time.Now()) })
 	w.data(r, "GET /ui/api/legion", func(req *http.Request) (any, error) {
 		return loadLegion(req.Context(), env, store.Now())
+	})
+	w.data(r, "GET /ui/api/worker", func(req *http.Request) (any, error) {
+		return workers.Show(req.Context(), env.DB, req.URL.Query().Get("name"))
 	})
 	w.data(r, "GET /ui/api/dept/{id}", func(req *http.Request) (any, error) {
 		id, err := ref(req, "o")

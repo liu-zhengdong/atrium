@@ -87,12 +87,14 @@ const deptName = id => nav.depts.find(d => d.id === id)?.name || id;
 /* 地址 */
 function parseHash() {
   const segs = location.hash.slice(1).split("/").filter(Boolean);
+  if (segs[0] === "legion") return { page: "legion", tab: "", open: segs.length > 1 ? decodeURIComponent(segs.slice(1).join("/")) : null };
   let open = null;
   if (segs.length && /^[tcsam][1-9]\d*$/.test(segs[segs.length - 1])) open = segs.pop();
   return { page: segs[0] || "today", tab: segs[1] || "", open };
 }
 function hashWith(open) {
   const { page, tab } = parseHash();
+  if (page === "legion") return "#legion" + (open ? "/" + encodeURIComponent(open) : "");
   return "#" + [page, tab, open].filter(Boolean).join("/");
 }
 
@@ -275,17 +277,40 @@ function renderLegion(d) {
     <div class="s">${esc(h.status)} · ${h.busy}/${h.slots} 在用</div>
     <div class="slots">${Array.from({ length: Math.min(h.slots, 32) }, (_, i) => `<i class="${i < h.busy ? "on" : ""}"></i>`).join("")}</div></div>`).join("")}</div>`
     : `<div class="empty">还没有登记机器</div>`;
-  const outName = { ok: "交付", bounce: "被交回", quota: "额度", setup: "起不来", fail: "其他失败" };
-  const markText = m => `${m.host} ${m.reason} · ${m.until ? day(m.until) + " " + clock(m.until) + " 恢复" : m.kind === "probe" ? "自检跑通后自动解除" : "等人处理"}`;
-  const perf = d.perf.length ? `<div class="tablewrap"><table class="perf"><tr><th>组合</th><th>近 ${d.window} 次拉起，新的在左</th><th>交付</th><th>用时</th></tr>${d.perf.map(p => `
-    <tr><td>${esc(p.combo)}${p.marks.map(m => `<span class="mark" title="${esc(m.evidence || "")}">${esc(markText(m))}</span>`).join("")}</td><td><span class="pips runs">${p.recent.map(o => `<i class="${o}" title="${outName[o]}"></i>`).join("")}</span></td><td class="num">${p.launches ? p.ok + "/" + p.launches : ""}</td><td>${esc(p.timing)}</td></tr>`).join("")}</table>
-    <div class="legend"><i class="ok"></i>交付<i class="bounce"></i>被交回<i class="fail"></i>没拉起来（额度、起不来、其他）</div></div>`
-    : `<div class="empty">还没有拉起记录</div>`;
+  const catalog = d.workers.filter(p => !p.problem), extra = d.workers.filter(p => p.problem);
+  const combos = comboRows(catalog, d.window) + (extra.length ? `<details class="combo-extra"><summary>${icon.chev}不在目录里 ${extra.length} 个</summary>${comboRows(extra, d.window)}</details>` : "");
   $("#page").innerHTML = `<h1 class="hello">执行者</h1>
   <p class="pulse-line">派活按额度富余挑人${reserve ? `，斜线部分是给你自己留的 ${reserve}%` : ""}。</p>
   <section class="section"><h2>额度</h2>${accts}</section>
   <section class="section"><h2>机器</h2>${hosts}</section>
-  <section class="section"><h2>表现</h2>${perf}</section>`;
+  <section class="section"><h2>组合</h2>${combos}</section>`;
+}
+
+const outName = { ok: "交付", bounce: "被交回", quota: "额度", setup: "起不来", fail: "其他失败" };
+const trustName = v => ({ high: "高", medium: "中", low: "低", unknown: "未知" }[v] || "未知");
+const markText = m => `${m.host} ${m.reason} · ${m.until ? day(m.until) + " " + clock(m.until) + " 恢复" : m.kind === "probe" ? "自检跑通后自动解除" : "等人处理"}`;
+const workerMarks = marks => (marks || []).map(m => `<div class="mark" title="${esc(m.evidence || "")}">不可用 ${esc(markText(m))}</div>`).join("");
+const outcomePips = recent => `<span class="pips runs">${(recent || []).map(o => `<i class="${esc(o)}" title="${esc(outName[o])}"></i>`).join("")}</span>`;
+function comboRows(rows, window) {
+  return `<div class="combos">${rows.map(p => `<a class="combo-row" href="#legion/${encodeURIComponent(p.id)}">
+    <span class="combo-name">${esc(p.id)}${workerMarks(p.marks)}</span><span class="trust">${p.trust ? trustName(p.trust) : ""}</span>
+    <span title="近 ${window} 次拉起，新的在左">${p.stat.launches ? outcomePips(p.recent) : '<span class="quiet">还没拉起过</span>'}</span><span class="num">${p.stat.launches ? p.stat.ok + "/" + p.stat.launches : ""}</span></a>`).join("")}
+    <div class="legend"><i class="ok"></i>交付<i class="bounce"></i>被交回<i class="fail"></i>没拉起来（额度、起不来、其他）</div></div>`;
+}
+function renderWorker(d) {
+  const r = d.resolved, rules = r.rules, st = d.stat;
+  drawer(r.id, "组合", `<h3>${esc(r.id)}</h3>${workerMarks(d.marks)}
+    <dl class="facts"><dt>信任</dt><dd>${trustName(d.trust)}</dd><dt>接到</dt><dd>${trustName(d.max_risk)}风险</dd>
+    <dt>模型</dt><dd>${esc(r.cli_model || "不传，跟随工具自带的缺省")}</dd>
+    <dt>档案层</dt><dd>${esc(r.layers.join("、") || "没有档案，全用缺省")}</dd>
+    ${rules.checks ? `<dt>检查</dt><dd>${esc(rules.checks.join("、") || "不加检查")}</dd>` : ""}
+    ${rules.limits && Object.keys(rules.limits).length ? `<dt>限制</dt><dd>${esc(JSON.stringify(rules.limits))}</dd>` : ""}
+    ${rules.endpoint ? `<dt>端点</dt><dd>${esc(rules.endpoint)}（${esc(rules.endpoint_api || "")}）</dd>` : ""}</dl>
+    <section class="worker-section"><h4>拉起</h4><p class="quiet">${st.launches ? `近 ${st.launches} 次：交付 ${st.ok} · 被交回 ${st.bounce} · 额度 ${st.quota} · 起不来 ${st.setup} · 其他失败 ${st.fail}` : "还没有拉起记录"}</p>
+    ${outcomePips((d.attempts || []).map(a => a.outcome))}
+    <div class="worker-runs">${(d.attempts || []).map(a => `<div><div class="run-ref"><span class="quiet">${date(a.at)} ${clock(a.at)}</span><a href="#today/${esc(a.task)}">${esc(a.task)}</a> 第 ${a.n} 次 ${esc(a.worker)}@${esc(a.host)}${a.model ? `（${esc(a.model)}）` : ""}</div><span class="run-outcome ${a.outcome === "ok" ? "quiet" : "mark"}">${esc(outName[a.outcome])}${a.reason && a.outcome !== "ok" ? "：" + esc(a.reason) : ""}</span></div>`).join("")}</div></section>
+    <section class="worker-section"><h4>正文</h4><div class="worker-body">${esc(r.body || "没有正文")}</div></section>
+    <section class="worker-section"><h4>各层原文</h4>${d.layers.map(p => `<details class="layer"><summary>${icon.chev}${esc(p.name)}<span class="quiet">${date(p.updated_at)}</span></summary><pre>${esc(p.source)}</pre><code>atrium workers edit ${esc(p.name)} --file &lt;档案&gt;</code></details>`).join("") || '<p class="quiet">没有档案</p>'}</section>`);
 }
 
 /* 经过：按执行者说的话分段；命令显示原文，点开看完整命令与输出最后 30 行。展开状态跨刷新保留。 */
@@ -592,6 +617,7 @@ function pageOf(page, tab) {
   return { path: "today", head: `<h1 class="hello">今天</h1>`, draw: renderToday };
 }
 function drawerOf(open, page) {
+  if (page === "legion") return { path: "worker?name=" + encodeURIComponent(open), draw: renderWorker };
   if (open[0] === "a") return { path: "dept/" + page, draw: d => renderLeader(d, open) }; // 负责人、资料抽屉用部门页的数据
   if (open[0] === "m") return { path: "dept/" + page, draw: d => renderMaterial(d, open) };
   const [path, draw] = { c: ["choice/", renderChoice], s: ["schedule/", renderSchedule] }[open[0]] || ["task/", renderTask];
@@ -635,7 +661,7 @@ async function route() {
     showPage();
     if (open) showDrawer(open, page);
     if (toDrafts) { toDrafts = false; $("#drafts")?.scrollIntoView({ block: "start" }); }
-    if (open?.[0] === "t" && last.get("task/" + open).live) liveTimer = setTimeout(refresh, 5000); // 执行者在干时日志一直在长，抽屉每 5 秒重取
+    if (page !== "legion" && open?.[0] === "t" && last.get("task/" + open).live) liveTimer = setTimeout(refresh, 5000); // 执行者在干时日志一直在长，抽屉每 5 秒重取
   } catch (err) { if (n === seq) fail(err); }
 }
 function refresh() {

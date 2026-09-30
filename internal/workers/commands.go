@@ -24,18 +24,22 @@ type Row struct {
 	MaxRisk   string   `json:"max_risk"`
 	Installed bool     `json:"installed"`
 	Layers    []string `json:"layers"`
-	Stat      Stat     `json:"stat"` // 近 StatWindow 次拉起按结果数（按「工具+模型」，强度不单列）
+	Recent    []string `json:"recent"` // 每次结果，新的在前
+	Stat      Stat     `json:"stat"`   // 近 StatWindow 次拉起按结果数（按「工具+模型」，强度不单列）
 	Problem   string   `json:"problem,omitempty"`
 	Marks     []Mark   `json:"marks,omitempty"` // 哪几台上此刻不可用
 }
 
 // Detail 是 workers <名字> 的内容：给执行者标识看叠加结果，给档案名看原文。
 type Detail struct {
+	Trust    string    `json:"trust,omitempty"` // 生效值，与目录相同
+	MaxRisk  string    `json:"max_risk,omitempty"`
 	Resolved *Resolved `json:"resolved,omitempty"`
 	Profile  *Profile  `json:"profile,omitempty"`
 	Stat     *Stat     `json:"stat,omitempty"`
 	Attempts []Attempt `json:"attempts,omitempty"` // 近 StatWindow 次有结果的拉起，新的在前
 	Marks    []Mark    `json:"marks,omitempty"`
+	Layers   []Profile `json:"layers"`
 }
 
 // Catalog 列可派的执行者：combos 档案里的组合在前（按名字），再是各工具只写工具名（内置按固定顺序，通用命令行执行者随后）。
@@ -97,7 +101,7 @@ func List(ctx context.Context, q store.Querier) ([]Row, error) {
 		combo := Combo(r.ID)
 		counted[combo] = true
 		out = append(out, Row{ID: r.ID, Trust: r.Rules.EffectiveTrust(), MaxRisk: r.Rules.EffectiveMaxRisk(),
-			Installed: Installed(r.Adapter), Layers: r.Layers, Stat: Count(stats[combo]), Marks: marksOf(marks, r.Spec)})
+			Installed: Installed(r.Adapter), Layers: r.Layers, Stat: Count(stats[combo]), Recent: recentOutcomes(stats[combo]), Marks: marksOf(marks, r.Spec)})
 	}
 	// 拉起过、目录里没有的组合（写死派过的）也列出来，统计不丢。
 	var extra []string
@@ -109,9 +113,18 @@ func List(ctx context.Context, q store.Querier) ([]Row, error) {
 	sort.Strings(extra)
 	for _, w := range extra {
 		s, _ := ParseWorker(w)
-		out = append(out, Row{ID: w, Stat: Count(stats[w]), Problem: "不在目录里（写死派过）", Marks: marksOf(marks, s)})
+		out = append(out, Row{ID: w, Stat: Count(stats[w]), Recent: recentOutcomes(stats[w]), Problem: "不在目录里（写死派过）", Marks: marksOf(marks, s)})
 	}
 	return out, nil
+}
+
+// recentOutcomes 保留 Stats 的结果顺序，供目录行显示。
+func recentOutcomes(ls []Attempt) []string {
+	out := []string{}
+	for _, a := range ls {
+		out = append(out, a.Outcome)
+	}
+	return out
 }
 
 // marksOf 是挡住这个执行者的标记（各台机器上的）。
@@ -151,7 +164,18 @@ func Show(ctx context.Context, q store.Querier, name string) (Detail, error) {
 	}
 	ls := stats[Combo(r.ID)]
 	st := Count(ls)
-	return Detail{Resolved: &r, Stat: &st, Attempts: ls, Marks: marksOf(marks, r.Spec)}, nil
+	layers := []Profile{}
+	for _, name := range r.Layers {
+		p, err := GetProfile(ctx, q, name)
+		if err != nil {
+			return Detail{}, err
+		}
+		if p == nil {
+			return Detail{}, api.NotFound("档案 %s 不存在", name)
+		}
+		layers = append(layers, *p)
+	}
+	return Detail{Trust: r.Rules.EffectiveTrust(), MaxRisk: r.Rules.EffectiveMaxRisk(), Resolved: &r, Stat: &st, Attempts: ls, Marks: marksOf(marks, r.Spec), Layers: layers}, nil
 }
 
 func asAPI(err error, target **api.Error) bool {

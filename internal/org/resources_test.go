@@ -176,6 +176,13 @@ func TestSkillPure(t *testing.T) {
 		}
 	}
 	big := func(mb float64) string { return string(make([]byte, int(mb*(1<<20)))) }
+	// layer 往 files 里加 n 个文件，都在目录 dir 下（dir 为空是根目录）。
+	layer := func(files map[string]string, dir string, n int) map[string]string {
+		for i := range n {
+			files[fmt.Sprintf("%sf%02d.png", dir, i)] = "y"
+		}
+		return files
+	}
 	cases := []struct {
 		name  string
 		files map[string]string
@@ -193,6 +200,10 @@ func TestSkillPure(t *testing.T) {
 		{"截图等二进制收", map[string]string{"SKILL.md": "x", "shots/a.png": big(1.2)}, "", ""},
 		{"单个文件超", map[string]string{"SKILL.md": "x", "a.png": big(MaxSkillFile + 0.5)}, "limit", "a.png 有 5.5 MB，超过上限 5 MB（多 0.5 MB）"},
 		{"合计超", map[string]string{"SKILL.md": "x", "a.png": big(4), "b.png": big(4), "c.png": big(2.5)}, "limit", "web 有 10.5 MB，超过上限 10 MB（多 0.5 MB）"},
+		{"总数过 16、每层不过 12", layer(layer(layer(map[string]string{"SKILL.md": "x"}, "", 9), "taste/good/", 12), "taste/bad/", 12), "", ""},
+		{"某层 13 项", layer(map[string]string{"SKILL.md": "x"}, "taste/", 13), "limit", "技能 web 的 taste/ 有 13 项（直接的文件与子文件夹），每层上限 12 项：按用途收进子文件夹"},
+		{"深层 13 项", layer(map[string]string{"SKILL.md": "x"}, "taste/bad/", 13), "limit", "taste/bad/ 有 13 项"},
+		{"子文件夹也算一项", layer(map[string]string{"SKILL.md": "x", "refs/a.md": "y"}, "", 11), "limit", "技能 web 的根目录有 13 项"},
 	}
 	for _, c := range cases {
 		files := map[string][]byte{}
@@ -269,6 +280,38 @@ func TestSkillLinksResolve(t *testing.T) {
 	}
 	if got := read("../b/SKILL.md"); got != "b 第二版" {
 		t.Fatalf("启动时重写当前版：%q", got)
+	}
+}
+
+// 命令行读技能目录：跳过隐藏项，文件总数不限，某层超了按同一判定报出是哪一层。
+func TestReadLocalSkill(t *testing.T) {
+	write := func(dir string, names ...string) {
+		for _, name := range names {
+			p := filepath.Join(dir, filepath.FromSlash(name))
+			if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(p, []byte("x"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	ok := t.TempDir()
+	write(ok, "SKILL.md", ".git/HEAD", "taste/.DS_Store")
+	for i := range 10 {
+		write(ok, fmt.Sprintf("taste/good/%d.png", i), fmt.Sprintf("taste/bad/%d.png", i))
+	}
+	files, err := readLocalSkill("web", ok)
+	if err != nil || len(files) != 21 || files["taste/bad/9.png"] == nil || files[".git/HEAD"] != nil {
+		t.Fatalf("21 个文件、每层不过 12 应能读，隐藏项跳过：%d %v", len(files), err)
+	}
+	full := t.TempDir()
+	write(full, "SKILL.md")
+	for i := range 13 {
+		write(full, fmt.Sprintf("taste/%d.png", i))
+	}
+	if _, err := readLocalSkill("web", full); code(err) != "limit" || !strings.Contains(err.Error(), "taste/ 有 13 项") {
+		t.Fatalf("某层 13 项应报出是哪一层：%v", err)
 	}
 }
 

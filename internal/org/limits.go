@@ -24,6 +24,7 @@ const (
 	MaxSkillBody     = 6 << 10
 	MaxSkillFile     = 5     // 技能里单个文件（MB；截图等二进制也收）
 	MaxSkillTotal    = 10    // 一个技能全部文件合计（MB）
+	MaxSkillLayer    = 12    // 技能目录里每一层的项数（直接的文件 + 子文件夹）
 	MaxOverview      = 3000  // 部门资料总览（字）
 	MaxMaterial      = 50000 // 部门资料文本总量（字；二进制不计，见 Units）
 	MaxMaterialFile  = 20    // 单个资料文件（MB）
@@ -60,6 +61,8 @@ var Limits = []Limit{
 	{"skill_body", "每份 SKILL.md", MaxSkillBody, "B", "技能作者", "细节挪进技能目录里的附属文件，SKILL.md 只留做法", "atrium skill ls"},
 	{"skill_file", "技能里单个文件", MaxSkillFile, "MB", "技能作者", "压缩或拆小；截图只留说明做法必需的", "atrium skill ls"},
 	{"skill_total", "每个技能文件合计", MaxSkillTotal, "MB", "技能作者", "删掉不必要的附属文件、压缩截图", "atrium skill ls"},
+	{"skill_layer", "技能目录每一层", MaxSkillLayer, "项", "技能作者",
+		"按用途收进子文件夹（如 taste/good、taste/bad），或合并相近的文件", "atrium skill ls"},
 	{"overview", "部门资料总览", MaxOverview, "字", "部门负责人", "总览只留每次都要知道的，细节挪进细节文件", "atrium material ls --node {dept}"},
 	{"materials", "部门资料文本总量", MaxMaterial, "字", "部门负责人",
 		"归档过时的（atrium material archive mN），或把一块知识下沉到子部门", "atrium material ls --node {dept}"},

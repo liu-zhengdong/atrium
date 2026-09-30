@@ -46,7 +46,7 @@ func (p Paths) Isolated() bool {
 	return err != nil || filepath.Clean(def.Data) != filepath.Clean(p.Data)
 }
 
-// Port 读 ATRIUM_PORT；没设时缺省数据目录用 4320，隔离的数据目录回 0（监听时由系统挑空闲端口），
+// Port 读 ATRIUM_PORT；显式设 0 时由系统挑空闲端口；没设时缺省数据目录用 4320，隔离的数据目录回 0（监听时由系统挑空闲端口），
 // 漏设端口的隔离实例不会撞上用户的服务。实际端口写进登记文件，命令行从那里读。
 func Port(p Paths, getenv func(string) string) (int, error) {
 	raw := strings.TrimSpace(getenv("ATRIUM_PORT"))
@@ -57,8 +57,8 @@ func Port(p Paths, getenv func(string) string) (int, error) {
 		return DefaultPort, nil
 	}
 	n, err := strconv.Atoi(raw)
-	if err != nil || n < 1 || n > 65535 {
-		return 0, fmt.Errorf("ATRIUM_PORT 应为 1–65535 的整数，收到 %q", raw)
+	if err != nil || n < 0 || n > 65535 {
+		return 0, fmt.Errorf("ATRIUM_PORT 应为 0–65535 的整数，收到 %q", raw)
 	}
 	return n, nil
 }

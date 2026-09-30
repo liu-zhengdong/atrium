@@ -19,6 +19,10 @@ func TestPort(t *testing.T) {
 		{"隔离目录没设端口交给系统挑", isolated, "", 0, false},
 		{"隔离目录设了端口照用", isolated, "4391", 4391, false},
 		{"缺省目录设了端口照用", def, "4391", 4391, false},
+		{"隔离目录显式自动端口", isolated, "0", 0, false},
+		{"缺省目录显式自动端口", def, "0", 0, false},
+		{"负端口", isolated, "-1", 0, true},
+		{"非整数", isolated, "abc", 0, true},
 		{"端口不合法", isolated, "70000", 0, true},
 	}
 	for _, c := range cases {

@@ -79,21 +79,26 @@ func TestStepHolder(t *testing.T) {
 			t.Errorf("%s/%s：step %d state %s who %s", c.t.Status, c.t.Stage, step(c.t), state(c.t), who(c.t, nil))
 		}
 	}
-	// 没派的写在等谁；别的状态有依赖也不写（排队、在做说明依赖已经完成）。
+	// 没派的写在等谁、哪件等不到了；别的状态有依赖也不写（排队、在做说明依赖已经完成）。
+	dep := func(id string, s ledger.Status) ledger.DepState { return ledger.DepState{ID: id, Status: s} }
+	run7, run9, run12 := dep("t7", ledger.Running), dep("t9", ledger.Todo), dep("t12", ledger.Blocked)
 	waits := []struct {
-		status  ledger.Status
-		waiting []string
-		who     string
+		status ledger.Status
+		deps   []ledger.DepState
+		who    string
 	}{
-		{ledger.Todo, []string{"t7"}, "等 t7"},
-		{ledger.Todo, []string{"t7", "t9"}, "等 t7、t9"},
-		{ledger.Todo, []string{"t7", "t9", "t12"}, "等 3 件"},
-		{ledger.Queued, []string{"t7"}, "排队"},
-		{ledger.Draft, []string{"t7"}, ""},
+		{ledger.Todo, []ledger.DepState{run7}, "等 t7"},
+		{ledger.Todo, []ledger.DepState{run7, dep("t8", ledger.Done), run9}, "等 t7、t9"},
+		{ledger.Todo, []ledger.DepState{run7, run9, run12}, "等 3 件"},
+		{ledger.Todo, []ledger.DepState{dep("t8", ledger.Done)}, "没派"},
+		{ledger.Todo, []ledger.DepState{dep("t6", ledger.Cancelled), dep("t8", ledger.Done)}, "依赖的 t6 已取消"},
+		{ledger.Todo, []ledger.DepState{dep("t6", ledger.Cancelled), dep("t5", ledger.Failed), run7}, "2 件依赖等不到了"},
+		{ledger.Queued, []ledger.DepState{run7}, "排队"},
+		{ledger.Draft, []ledger.DepState{run7}, ""},
 	}
 	for _, c := range waits {
-		if got := who(ledger.Task{Status: c.status}, c.waiting); got != c.who {
-			t.Errorf("%s 等 %v：得到 %q，应为 %q", c.status, c.waiting, got, c.who)
+		if got := who(ledger.Task{Status: c.status}, c.deps); got != c.who {
+			t.Errorf("%s 依赖 %v：得到 %q，应为 %q", c.status, c.deps, got, c.who)
 		}
 	}
 }

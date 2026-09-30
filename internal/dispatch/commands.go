@@ -62,7 +62,7 @@ func Routes(r *api.Router, env *app.Env) {
 		if err != nil {
 			return nil, err
 		}
-		waiting, _ := depGate(deps)
+		waiting, _ := ledger.DepGate(deps)
 		get(env).wake()
 		return RunResult{Task: t, Queued: true, Position: pos, Waiting: waiting}, nil
 	})

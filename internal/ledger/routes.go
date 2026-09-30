@@ -17,12 +17,13 @@ func Module() app.Module {
 }
 
 // TreeNode 是任务树的一个节点；Summary 汇总全部子孙。Ready：没有子任务、自己 todo、依赖都完成，现在能派；
-// WaitingOn：todo 或排队中的任务还没完成的依赖。
+// WaitingOn、Broken：todo 或排队中的任务还在等的依赖、失败或取消了等不到的依赖（见 DepGate）。
 type TreeNode struct {
 	Task
 	Summary   *Summary    `json:"summary,omitempty"`
 	Ready     bool        `json:"ready,omitempty"`
 	WaitingOn []string    `json:"waiting_on,omitempty"`
+	Broken    []DepState  `json:"broken,omitempty"`
 	Children  []*TreeNode `json:"children,omitempty"`
 }
 
@@ -41,10 +42,10 @@ func BuildTree(tasks []Task, deps map[string][]DepState) *TreeNode {
 	}
 	var fill func(n *TreeNode) []Status
 	fill = func(n *TreeNode) []Status {
-		ready, waiting := Ready(n.Status, deps[n.ID])
-		n.Ready = ready && len(n.Children) == 0 // 有子任务的由子任务汇总，不派它自己
+		waiting, broken := DepGate(deps[n.ID])
+		n.Ready = n.Status == Todo && len(waiting)+len(broken) == 0 && len(n.Children) == 0 // 有子任务的由子任务汇总，不派它自己
 		if n.Status == Todo || n.Status == Queued {
-			n.WaitingOn = waiting
+			n.WaitingOn, n.Broken = waiting, broken
 		}
 		var all []Status
 		for _, c := range n.Children {
@@ -71,6 +72,7 @@ type Detail struct {
 	Deps      []DepState  `json:"deps"`
 	Ready     bool        `json:"ready"`
 	WaitingOn []string    `json:"waiting_on,omitempty"`
+	Broken    []DepState  `json:"broken,omitempty"`
 	Children  *Summary    `json:"children,omitempty"`
 	History   []TaskEvent `json:"history"`
 }
@@ -153,7 +155,8 @@ func Routes(r *api.Router, env *app.Env) {
 		if d.Deps, err = Deps(q.Context(), db, id); err != nil {
 			return nil, err
 		}
-		d.Ready, d.WaitingOn = Ready(t.Status, d.Deps)
+		d.WaitingOn, d.Broken = DepGate(d.Deps)
+		d.Ready = t.Status == Todo && len(d.WaitingOn)+len(d.Broken) == 0
 		sub, err := Subtree(q.Context(), db, id)
 		if err != nil {
 			return nil, err

@@ -98,7 +98,7 @@ func TestLedgerLifecycle(t *testing.T) {
 	}
 	// b 完成后 c 就绪。
 	deps, _ := Deps(ctx, db, c.ID)
-	if ready, _ := Ready(Todo, deps); !ready {
+	if waiting, broken := DepGate(deps); len(waiting)+len(broken) > 0 {
 		t.Fatalf("c 应就绪：%v", deps)
 	}
 	sub, _ := Subtree(ctx, db, a.ID)

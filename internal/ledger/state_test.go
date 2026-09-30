@@ -101,24 +101,28 @@ func TestTransition(t *testing.T) {
 	}
 }
 
-func TestReady(t *testing.T) {
+func TestDepGate(t *testing.T) {
 	cases := []struct {
 		name    string
-		s       Status
 		deps    []DepState
-		ready   bool
 		waiting []string
+		broken  []DepState
+		text    string
 	}{
-		{"无依赖", Todo, nil, true, nil},
-		{"依赖都完成", Todo, []DepState{{"t1", Done}, {"t2", Done}}, true, nil},
-		{"有依赖没完成", Todo, []DepState{{"t1", Done}, {"t2", Running}}, false, []string{"t2"}},
-		{"依赖被取消不算完成", Todo, []DepState{{"t1", Cancelled}}, false, []string{"t1"}},
-		{"自己不是 todo", Blocked, nil, false, nil},
+		{"无依赖", nil, nil, nil, ""},
+		{"依赖都完成", []DepState{{"t1", Done}, {"t2", Done}}, nil, nil, ""},
+		{"有在跑的", []DepState{{"t1", Done}, {"t2", Running}}, []string{"t2"}, nil, ""},
+		{"待派、排队、受阻、草稿都接着等", []DepState{{"t1", Todo}, {"t2", Queued}, {"t3", Blocked}, {"t4", Draft}},
+			[]string{"t1", "t2", "t3", "t4"}, nil, ""},
+		{"取消了等不到", []DepState{{"t449", Cancelled}, {"t456", Done}}, nil, []DepState{{"t449", Cancelled}}, "t449 已取消"},
+		{"失败了等不到", []DepState{{"t1", Failed}}, nil, []DepState{{"t1", Failed}}, "t1 失败了"},
+		{"完成、在做、取消、失败混合", []DepState{{"t1", Done}, {"t2", Running}, {"t3", Cancelled}, {"t4", Failed}, {"t5", Todo}},
+			[]string{"t2", "t5"}, []DepState{{"t3", Cancelled}, {"t4", Failed}}, "t3 已取消、t4 失败了"},
 	}
 	for _, c := range cases {
-		r, w := Ready(c.s, c.deps)
-		if r != c.ready || !reflect.DeepEqual(w, c.waiting) {
-			t.Errorf("%s: got %v %v", c.name, r, w)
+		w, b := DepGate(c.deps)
+		if !reflect.DeepEqual(w, c.waiting) || !reflect.DeepEqual(b, c.broken) || BrokenText(b) != c.text {
+			t.Errorf("%s: waiting=%v broken=%v text=%q", c.name, w, b, BrokenText(b))
 		}
 	}
 }
@@ -192,22 +196,25 @@ func TestBuildTreeReady(t *testing.T) {
 		{ID: "t5", Parent: "t1", Status: Queued},
 		{ID: "t6", Parent: "t1", Status: Blocked},
 		{ID: "t7", Parent: "t2", Status: Draft},
+		{ID: "t10", Parent: "t1", Status: Todo},
 	}, map[string][]DepState{
-		"t3": {{ID: "t2", Status: Todo}},
-		"t4": {{ID: "t9", Status: Done}},    // 树外、已完成
-		"t5": {{ID: "t8", Status: Running}}, // 树外、没完成
-		"t6": {{ID: "t2", Status: Todo}},
+		"t10": {{ID: "t11", Status: Cancelled}, {ID: "t8", Status: Running}}, // 取消的等不到，不算在等
+		"t3":  {{ID: "t2", Status: Todo}},
+		"t4":  {{ID: "t9", Status: Done}},    // 树外、已完成
+		"t5":  {{ID: "t8", Status: Running}}, // 树外、没完成
+		"t6":  {{ID: "t2", Status: Todo}},
 	})
 	type r struct {
-		ready bool
-		wait  []string
+		ready  bool
+		wait   []string
+		broken []DepState
 	}
-	want := map[string]r{"t1": {}, "t2": {}, "t3": {false, []string{"t2"}}, "t4": {true, nil},
-		"t5": {false, []string{"t8"}}, "t6": {}, "t7": {}}
+	want := map[string]r{"t1": {}, "t2": {}, "t3": {false, []string{"t2"}, nil}, "t4": {true, nil, nil},
+		"t5": {false, []string{"t8"}, nil}, "t6": {}, "t7": {}, "t10": {false, []string{"t8"}, []DepState{{"t11", Cancelled}}}}
 	var walk func(n *TreeNode)
 	walk = func(n *TreeNode) {
-		if w := want[n.ID]; n.Ready != w.ready || !reflect.DeepEqual(n.WaitingOn, w.wait) {
-			t.Errorf("%s: ready=%v waiting=%v，want %+v", n.ID, n.Ready, n.WaitingOn, w)
+		if w := want[n.ID]; n.Ready != w.ready || !reflect.DeepEqual(n.WaitingOn, w.wait) || !reflect.DeepEqual(n.Broken, w.broken) {
+			t.Errorf("%s: ready=%v waiting=%v broken=%v，want %+v", n.ID, n.Ready, n.WaitingOn, n.Broken, w)
 		}
 		delete(want, n.ID)
 		for _, c := range n.Children {

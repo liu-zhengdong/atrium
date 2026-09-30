@@ -77,19 +77,20 @@ type Holder struct {
 // Facts 是判定持球人需要的事实，由调用方从账本、组织、内存里取来。
 type Facts struct {
 	Task         ledger.Task
-	Owner        string   // 所属部门往上最近的负责人，没有是 secretary
-	Acceptor     string   // 等验收时部门的验收人（org.AcceptLeader、org.AcceptUser）；别的阶段不取
-	WaitingOn    []string // 没完成的依赖
-	OpenChildren int      // 没结束的子任务（待派的任务才取）
-	Children     int      // 全部子任务（待派的任务才取）
-	Proc         *Proc    // 与当前阶段对应的在跑进程；没有为 nil
-	ProgressAt   int64    // 进程最近一次有进展；0 表示拉起后还没有
+	Owner        string            // 所属部门往上最近的负责人，没有是 secretary
+	Acceptor     string            // 等验收时部门的验收人（org.AcceptLeader、org.AcceptUser）；别的阶段不取
+	Deps         []ledger.DepState // 依赖（待派、排队的任务才取）
+	OpenChildren int               // 没结束的子任务（待派的任务才取）
+	Children     int               // 全部子任务（待派的任务才取）
+	Proc         *Proc             // 与当前阶段对应的在跑进程；没有为 nil
+	ProgressAt   int64             // 进程最近一次有进展；0 表示拉起后还没有
 }
 
 // HolderOf 判定一件没结束的任务现在在谁手里。top、statusline、task show 共用。
 func HolderOf(f Facts) Holder {
 	t := f.Task
 	owner := Holder{Kind: kindOf(f.Owner), Who: f.Owner, Role: RoleLeader, Since: t.UpdatedAt}
+	waiting, broken := ledger.DepGate(f.Deps)
 	switch t.Status {
 	case ledger.Done, ledger.Cancelled:
 		return Holder{Kind: "", Text: "已结束"}
@@ -97,8 +98,24 @@ func HolderOf(f Facts) Holder {
 		// 草稿不在谁手里：不计时、不叫醒，想清楚了由人转待派。
 		return Holder{Kind: "draft", Text: "草稿：还没想清楚，不派活、不计时", Next: "atrium task set " + t.ID + " --status todo"}
 	case ledger.Todo:
-		if len(f.WaitingOn) > 0 {
-			return Holder{Kind: "deps", Text: "等 " + strings.Join(f.WaitingOn, "、") + " 完成"}
+		if len(broken) > 0 {
+			// 依赖等不到了：不会自己好，归负责人计时，改依赖或取消（不自动改写依赖）。
+			var keep []string
+			for _, d := range f.Deps {
+				if d.Status != ledger.Failed && d.Status != ledger.Cancelled {
+					keep = append(keep, d.ID)
+				}
+			}
+			after := `""`
+			if len(keep) > 0 {
+				after = strings.Join(keep, ",")
+			}
+			owner.Text = "依赖的 " + ledger.BrokenText(broken) + "，改依赖或取消"
+			owner.Next = "atrium task set " + t.ID + " --after " + after
+			return owner
+		}
+		if len(waiting) > 0 {
+			return Holder{Kind: "deps", Text: "等 " + strings.Join(waiting, "、") + " 完成"}
 		}
 		if f.OpenChildren > 0 {
 			// 拆开在做的父任务：子任务各自计时，全部结束后负责人收到结果再来收尾。
@@ -110,8 +127,8 @@ func HolderOf(f Facts) Holder {
 		}
 		return owner
 	case ledger.Queued:
-		if len(f.WaitingOn) > 0 {
-			return Holder{Kind: "deps", Text: "排队，等 " + strings.Join(f.WaitingOn, "、") + " 完成后自动派"}
+		if len(waiting) > 0 {
+			return Holder{Kind: "deps", Text: "排队，等 " + strings.Join(waiting, "、") + " 完成后自动派"}
 		}
 		return Holder{Kind: "runtime", Who: "运行时", Text: "排队等执行者"}
 	case ledger.Blocked:

@@ -126,21 +126,6 @@ func dropRow(ctx context.Context, q store.Querier, id string) error {
 	return err
 }
 
-// depGate 纯判定：派活前看依赖。有失败或取消的 → broken（等不到了，不派）；还有没完成的 → waiting（留在队列里，
-// 派活循环跳过它，依赖都完成后照常派）；都完成 → 两个都为空。
-func depGate(deps []ledger.DepState) (waiting []string, broken *ledger.DepState) {
-	for i, d := range deps {
-		switch d.Status {
-		case ledger.Failed, ledger.Cancelled:
-			return nil, &deps[i]
-		case ledger.Done:
-		default:
-			waiting = append(waiting, d.ID)
-		}
-	}
-	return waiting, nil
-}
-
 // openStatuses 是没结束的状态（完成、失败、取消之外）。
 var openStatuses = []ledger.Status{ledger.Draft, ledger.Todo, ledger.Queued, ledger.Running, ledger.Blocked}
 
@@ -172,8 +157,6 @@ func childGate(id string, open []ledger.Task) error {
 		id, len(open), list, id).WithNext(next)
 }
 
-var brokenLabel = map[ledger.Status]string{ledger.Failed: "失败了", ledger.Cancelled: "已取消"}
-
 // Enqueue 是 task run：核对选项、进派活队列（依赖还没完成的也进，完成后才派）。写死的执行者当场核对档案能不能接，免得排到时才报错。
 // 任务的执行者与机器改成这一轮指定的（自动挑的留空，拉起时由 record 写上）；上一轮是谁留在经历里。
 func Enqueue(ctx context.Context, env *app.Env, id string, o Options, actor string) (ledger.Task, error) {
@@ -200,9 +183,9 @@ func Enqueue(ctx context.Context, env *app.Env, id string, o Options, actor stri
 	if err != nil {
 		return t, err
 	}
-	waiting, broken := depGate(deps)
-	if broken != nil {
-		return t, api.Conflict("%s 依赖的 %s %s，等不到了", id, broken.ID, brokenLabel[broken.Status]).WithNext("atrium task show " + broken.ID)
+	waiting, broken := ledger.DepGate(deps)
+	if len(broken) > 0 {
+		return t, api.Conflict("%s 依赖的 %s，等不到了", id, ledger.BrokenText(broken)).WithNext("atrium task show " + broken[0].ID)
 	}
 	if o.Worker != "" {
 		r, err := workers.Resolve(ctx, db, o.Worker)

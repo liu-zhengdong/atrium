@@ -67,10 +67,12 @@ func TestHolderOf(t *testing.T) {
 		since int64
 	}{
 		{"待派活归负责人", Facts{Task: task(ledger.Todo, ""), Owner: "a1"}, "leader", "a1", RoleLeader, 500},
-		{"等依赖不算期限", Facts{Task: task(ledger.Todo, ""), Owner: "a1", WaitingOn: []string{"t2"}}, "deps", "", "", 0},
+		{"等依赖不算期限", Facts{Task: task(ledger.Todo, ""), Owner: "a1", Deps: []ledger.DepState{{ID: "t2", Status: ledger.Running}, {ID: "t3", Status: ledger.Done}}}, "deps", "", "", 0},
+		{"依赖取消了归负责人", Facts{Task: task(ledger.Todo, ""), Owner: "a1", Deps: []ledger.DepState{{ID: "t2", Status: ledger.Cancelled}, {ID: "t3", Status: ledger.Done}}}, "leader", "a1", RoleLeader, 500},
+		{"依赖失败了归负责人，在等的也不算", Facts{Task: task(ledger.Todo, ""), Owner: "a1", Deps: []ledger.DepState{{ID: "t2", Status: ledger.Failed}, {ID: "t3", Status: ledger.Running}}}, "leader", "a1", RoleLeader, 500},
 		{"子任务在做不算期限", Facts{Task: task(ledger.Todo, ""), Owner: "a1", OpenChildren: 2, Children: 3}, "children", "", "", 0},
 		{"子任务都结束了等负责人收尾", Facts{Task: task(ledger.Todo, ""), Owner: "a1", Children: 3}, "leader", "a1", RoleLeader, 500},
-		{"排队等依赖不算期限", Facts{Task: task(ledger.Queued, ""), WaitingOn: []string{"t2"}}, "deps", "", "", 0},
+		{"排队等依赖不算期限", Facts{Task: task(ledger.Queued, ""), Deps: []ledger.DepState{{ID: "t2", Status: ledger.Todo}}}, "deps", "", "", 0},
 		{"没负责人归秘书", Facts{Task: task(ledger.Blocked, ""), Owner: "secretary"}, "secretary", "secretary", RoleLeader, 500},
 		{"排队", Facts{Task: task(ledger.Queued, "")}, "runtime", "运行时", "", 0},
 		{"执行者刚起", Facts{Task: task(ledger.Running, ""), Proc: proc}, "worker", "codex", RoleWorkerStart, 1000},
@@ -89,6 +91,31 @@ func TestHolderOf(t *testing.T) {
 		h := HolderOf(c.f)
 		if h.Kind != c.kind || h.Who != c.who || h.Role != c.role || h.Since != c.since {
 			t.Errorf("%s：%+v", c.name, h)
+		}
+	}
+}
+
+// t455：依赖 t449 取消、t456 完成后不能再显示「等 t449 完成」，要归负责人计时，下一步改依赖（留下没断的）。
+func TestHolderBrokenDeps(t *testing.T) {
+	dep := func(id string, s ledger.Status) ledger.DepState { return ledger.DepState{ID: id, Status: s} }
+	for name, c := range map[string]struct {
+		deps       []ledger.DepState
+		text, next string
+	}{
+		"取消一件": {[]ledger.DepState{dep("t449", ledger.Cancelled), dep("t456", ledger.Done)},
+			"依赖的 t449 已取消，改依赖或取消", "atrium task set t455 --after t456"},
+		"全断了": {[]ledger.DepState{dep("t449", ledger.Cancelled), dep("t450", ledger.Failed)},
+			"依赖的 t449 已取消、t450 失败了，改依赖或取消", `atrium task set t455 --after ""`},
+		"留下在等的": {[]ledger.DepState{dep("t449", ledger.Failed), dep("t456", ledger.Running), dep("t457", ledger.Done)},
+			"依赖的 t449 失败了，改依赖或取消", "atrium task set t455 --after t456,t457"},
+	} {
+		h := HolderOf(Facts{Task: ledger.Task{ID: "t455", Status: ledger.Todo, UpdatedAt: 500}, Owner: "a3", Deps: c.deps})
+		if h.Text != c.text || h.Next != c.next || h.Who != "a3" || h.Role != RoleLeader {
+			t.Errorf("%s：%+v", name, h)
+		}
+		// 负责人一行计时：到期叫醒，再到期上交。
+		if Decide(h, Obs{}, 500+int64(31*minute)) != Notify || Decide(h, Obs{}, 500+int64(61*minute)) != Escalate {
+			t.Errorf("%s：到期应叫醒负责人", name)
 		}
 	}
 }

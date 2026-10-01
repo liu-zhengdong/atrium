@@ -39,17 +39,21 @@ type Task struct {
 	CreatedAt  int64    `json:"created_at"`
 	UpdatedAt  int64    `json:"updated_at"`
 	FinishedAt *int64   `json:"finished_at,omitempty"`
+	Ask        string   `json:"ask,omitempty"`      // 负责人在问用户的话（只在待派时有，见 ask.go）
+	AskedAt    int64    `json:"asked_at,omitempty"` // 什么时候问的
 }
 
 const taskCols = `id, parent, department, skill, title, detail, status, stage, priority, repo, worker, host, pr,
 	created_at, updated_at, finished_at`
 
-// extraCols 是另存一张表的几列（工作地点在 task_dirs，来源与类在 task_findings，见 schema.sql），接在 taskCols 后面；
+// extraCols 是另存一张表的几列（工作地点在 task_dirs，来源与类在 task_findings，在问用户的话在 task_asks，见 schema.sql），接在 taskCols 后面；
 // t 是 tasks 在查询里的名字。
 func extraCols(t string) string {
 	return `, COALESCE((SELECT dir FROM task_dirs WHERE task = ` + t + `.id), ''),
 	COALESCE((SELECT source FROM task_findings WHERE task = ` + t + `.id), ''),
-	COALESCE((SELECT class FROM task_findings WHERE task = ` + t + `.id), '')`
+	COALESCE((SELECT class FROM task_findings WHERE task = ` + t + `.id), ''),
+	COALESCE((SELECT text FROM task_asks WHERE task = ` + t + `.id), ''),
+	COALESCE((SELECT at FROM task_asks WHERE task = ` + t + `.id), 0)`
 }
 
 type scanner interface{ Scan(dest ...any) error }
@@ -59,7 +63,7 @@ func scanTask(s scanner) (Task, error) {
 	var parent, org, skill sql.NullString
 	var finished sql.NullInt64
 	err := s.Scan(&t.ID, &parent, &org, &skill, &t.Title, &t.Detail, &t.Status, &t.Stage, &t.Priority,
-		&t.Repo, &t.Worker, &t.Host, &t.PR, &t.CreatedAt, &t.UpdatedAt, &finished, &t.Dir, &t.Source, &t.Class)
+		&t.Repo, &t.Worker, &t.Host, &t.PR, &t.CreatedAt, &t.UpdatedAt, &finished, &t.Dir, &t.Source, &t.Class, &t.Ask, &t.AskedAt)
 	t.Parent, t.Org, t.Skill = parent.String, org.String, skill.String
 	if finished.Valid {
 		t.FinishedAt = &finished.Int64
@@ -168,8 +172,8 @@ func handOver(ctx context.Context, tx *sql.Tx, t *Task, p Parties, was, actor st
 	return who, nil
 }
 
-// assigned 给交给它去拆的负责人发一条要处理的 task.assigned（who 为空不发）；tell 是交出去之后的补充说明（没有为空）。
-// 同一任务还没取走的合并成最新一条（events.KeyOf）。
+// assigned 给交给它去拆的负责人发一条要处理的 task.assigned（who 为空不发）；tell 是交出去之后的补充说明（没有为空），
+// 任务挂着在问用户的话时它就是回话，正文带上问的话（ask）。同一任务还没取走的合并成最新一条（events.KeyOf）。
 func assigned(ctx context.Context, tx *sql.Tx, t Task, who, tell, actor string) error {
 	if who == "" {
 		return nil
@@ -177,6 +181,9 @@ func assigned(ctx context.Context, tx *sql.Tx, t Task, who, tell, actor string) 
 	body := map[string]any{"title": strings.TrimSpace(t.Title)}
 	if tell != "" {
 		body["tell"] = tell
+		if t.Ask != "" {
+			body["ask"] = t.Ask
+		}
 	}
 	return events.Emit(ctx, tx, events.Event{Kind: events.TaskAssigned, Task: t.ID, Dept: t.Org, Target: who, Body: body, By: actor})
 }
@@ -185,7 +192,8 @@ func assigned(ctx context.Context, tx *sql.Tx, t Task, who, tell, actor string) 
 var Tell func(ctx context.Context, id, text, by string) error
 
 // RecordTell 在调用方事务里记一条补充说明；任务交给负责人拆着（Assignee）的，同时随 task.assigned 发给它。
-// 返回经历编号与发给的负责人（不是交给负责人的为空）。
+// 任务挂着在问用户的话时，这条就是回话（负责人自己说的是撤回）：清掉那句话，发给处理它的负责人（answerTo）。
+// 返回经历编号与发给的负责人（没发的为空）。
 func RecordTell(ctx context.Context, tx *sql.Tx, t Task, text, by string) (int64, string, error) {
 	if err := Record(ctx, tx, t.ID, "tell", by, text); err != nil {
 		return 0, "", err
@@ -199,6 +207,14 @@ func RecordTell(ctx context.Context, tx *sql.Tx, t Task, text, by string) (int64
 		return 0, "", err
 	}
 	who := Assignee(t, p, by)
+	if t.Ask != "" {
+		if err := clearAsk(ctx, tx, t.ID); err != nil {
+			return 0, "", err
+		}
+		if who, err = answerTo(ctx, tx, t, p, by); err != nil {
+			return 0, "", err
+		}
+	}
 	return id, who, assigned(ctx, tx, t, who, text, by)
 }
 
@@ -454,6 +470,7 @@ type Filter struct {
 	Parent string
 	Top    bool   // 只列没有父任务的
 	Class  string // 只列归在这一类的（发现的类）
+	Asking bool   // 只列挂着在问用户的话的
 	Limit  int
 }
 
@@ -481,6 +498,9 @@ func List(ctx context.Context, q store.Querier, f Filter) ([]Task, error) {
 	}
 	if f.Class != "" {
 		where, args = append(where, "id IN (SELECT task FROM task_findings WHERE class = ?)"), append(args, f.Class)
+	}
+	if f.Asking {
+		where = append(where, "id IN (SELECT task FROM task_asks)")
 	}
 	if f.Limit <= 0 || f.Limit > 500 {
 		f.Limit = 50
@@ -774,6 +794,11 @@ func apply(ctx context.Context, db *store.DB, id string, ev Event, actor, note s
 		if _, err := tx.ExecContext(ctx, `UPDATE tasks SET status = ?, stage = ?, updated_at = ?, finished_at = ? WHERE id = ?`,
 			next.Status, next.Stage, now, finished, id); err != nil {
 			return err
+		}
+		if next.Status != Todo { // 在问用户的话只在待派时有：派出、结束、转草稿都不再等回话
+			if _, err := tx.ExecContext(ctx, `DELETE FROM task_asks WHERE task = ?`, id); err != nil {
+				return err
+			}
 		}
 		body, _ := json.Marshal(map[string]any{"from": State{t.Status, t.Stage}, "to": next, "note": note})
 		if err := Record(ctx, tx, id, string(ev.Kind), actor, string(body)); err != nil {

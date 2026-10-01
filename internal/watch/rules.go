@@ -101,6 +101,11 @@ func HolderOf(f Facts) Holder {
 		// 草稿没有当前等待对象：不计时、不唤醒，想清楚了由人转待派。
 		return Holder{Kind: "draft", Text: "草稿：还没想清楚，不分派任务、不计时", Next: "atrium task set " + t.ID + " --status todo"}
 	case ledger.Todo:
+		if t.Ask != "" {
+			// 负责人在问用户、等回话：归用户，不计时（到期不催用户）；回话经 task tell 送回并唤醒负责人。
+			return Holder{Kind: "user", Who: "u1", Text: "等你回话：" + t.Ask, Short: "等回话", Since: t.AskedAt,
+				Next: "atrium task tell " + t.ID + " <回话>"}
+		}
 		owner.Since = leaderSince(f, broken)
 		if len(broken) > 0 {
 			// 依赖等不到了：不会自己好，归负责人计时，改依赖或取消（不自动改写依赖）。
@@ -126,13 +131,13 @@ func HolderOf(f Facts) Holder {
 			return Holder{Kind: "deps", Text: "等 " + strings.Join(waiting, "、") + " 完成", Short: waitShort(waiting)}
 		}
 		if f.OpenChildren > 0 {
-			// 拆开在做的父任务：子任务各自计时，全部结束后负责人收到结果再来收尾。
+			// 拆开在做的父任务：子任务各自计时，全部结束后负责人再核对目标、安排下一步。
 			ended := fmt.Sprintf("%d/%d 结束", f.Children-f.OpenChildren, f.Children)
 			return Holder{Kind: "children", Text: "子任务在做（" + ended + "）", Short: "子任务 " + ended}
 		}
 		owner.Text, owner.Short, owner.Next = "待分派", "没派", "atrium task run "+t.ID
 		if f.Children > 0 {
-			owner.Text, owner.Short, owner.Next = "子任务都结束了，等收尾", "等收尾", "atrium task set "+t.ID+" --status done"
+			owner.Text, owner.Short, owner.Next = "子任务都结束了，等负责人核对目标、继续安排或收尾", "等安排", "atrium task tree "+t.ID
 		}
 		return owner
 	case ledger.Queued:

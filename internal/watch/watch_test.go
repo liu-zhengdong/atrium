@@ -2,10 +2,12 @@ package watch
 
 import (
 	"context"
+	"database/sql"
 	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -91,6 +93,99 @@ func TestHolderOf(t *testing.T) {
 		h := HolderOf(c.f)
 		if h.Kind != c.kind || h.Who != c.who || h.Role != c.role || h.Since != c.since {
 			t.Errorf("%s：%+v", c.name, h)
+		}
+	}
+}
+
+// t739、t743：负责人在问用户（挑 logo 编号、给服务器地址），子任务都结束了也不是等收尾：归用户、不计时、不会到期；
+// 回话清掉问题后回到负责人计时。
+func TestHolderAsking(t *testing.T) {
+	now := int64(1000 * minute)
+	ended := now - 5*60*minute // 子任务 5 小时前就都结束了
+	ask := ledger.Task{ID: "t739", Status: ledger.Todo, UpdatedAt: ended, Ask: "logo 挑几号？", AskedAt: ended + minute}
+	cases := []struct {
+		name string
+		f    Facts
+	}{
+		{"子任务都结束 + 在问用户", Facts{Task: ask, Owner: "a3", Children: 4, ChildEnded: ended}},
+		{"子任务在做 + 在问用户", Facts{Task: ask, Owner: "a3", Children: 4, OpenChildren: 1}},
+		{"依赖断了 + 在问用户", Facts{Task: ask, Owner: "a3", Deps: []ledger.DepState{{ID: "t2", Status: ledger.Cancelled}}, DepEnded: map[string]int64{"t2": ended}}},
+		{"待分派 + 在问用户", Facts{Task: ask, Owner: "secretary"}},
+	}
+	for _, c := range cases {
+		h := HolderOf(c.f)
+		if h.Kind != "user" || h.Who != "u1" || h.Role != "" || h.Since != ask.AskedAt || h.Short != "等回话" ||
+			h.Text != "等你回话：logo 挑几号？" || h.Next != "atrium task tell t739 <回话>" {
+			t.Errorf("%s：%+v", c.name, h)
+		}
+		for _, after := range []int64{0, 31 * minute, 61 * minute, 7 * 24 * 60 * minute} {
+			if lv, act := Level(h, now+after), Decide(h, Obs{}, now+after); lv != 0 || act != Keep {
+				t.Errorf("%s：过 %d 分钟 Level=%d Decide=%q，应不计时", c.name, after/minute, lv, act)
+			}
+		}
+	}
+	// 回话清掉问题（ledger 同时把改动时刻记成回话那一刻）：回到负责人等收尾，从回话起计时。
+	answered := ledger.Task{ID: "t739", Status: ledger.Todo, UpdatedAt: now}
+	h := HolderOf(Facts{Task: answered, Owner: "a3", Children: 4, ChildEnded: ended})
+	if h.Kind != "leader" || h.Text != "子任务都结束了，等负责人核对目标、继续安排或收尾" || h.Next != "atrium task tree t739" || h.Since != now || Decide(h, Obs{}, now+29*minute) != Keep {
+		t.Errorf("回话后：%+v", h)
+	}
+	// 已结束的任务不再显示问题。
+	if h := HolderOf(Facts{Task: ledger.Task{ID: "t739", Status: ledger.Done, Ask: "残留"}}); h.Kind != "" {
+		t.Errorf("已结束：%+v", h)
+	}
+}
+
+func TestTickAskingParent(t *testing.T) {
+	env, ctx := setup(t)
+	parent, err := ledger.Add(ctx, env.DB, ledger.NewTask{Title: "logo 定稿", Org: "o2"}, "u1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	child, err := ledger.Add(ctx, env.DB, ledger.NewTask{Title: "logo 方案", Parent: parent.ID}, "u1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ledger.Apply(ctx, env.DB, child.ID, ledger.Event{Kind: ledger.Set, To: ledger.Done}, "u1", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := env.DB.Tx(ctx, func(tx *sql.Tx) error { return ledger.SetAsk(ctx, tx, parent.ID, "logo 挑几号？") }); err != nil {
+		t.Fatal(err)
+	}
+	// 隔离库把任务、子任务结束和问题时间设到 3 小时前，实测超过负责人两倍时限。
+	old := store.Now() - 3*time.Hour.Milliseconds()
+	for _, q := range []string{`UPDATE tasks SET updated_at = ?, finished_at = CASE WHEN status = 'done' THEN ? END`, `UPDATE task_asks SET at = ?`} {
+		args := []any{old}
+		if strings.Contains(q, "finished_at") {
+			args = append(args, old)
+		}
+		if _, err := env.DB.Exec(q, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, asking := range []bool{true, false} {
+		if !asking {
+			// 对照组：移除问题，同一任务必须被巡检判到期，证据能检出故障。
+			if _, err := env.DB.Exec(`DELETE FROM task_asks`); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := Tick(ctx, env); err != nil {
+			t.Fatal(err)
+		}
+		v, err := BuildView(ctx, env)
+		if err != nil || len(v.Tasks) != 1 {
+			t.Fatalf("top: %+v %v", v, err)
+		}
+		var n int
+		if err := env.DB.QueryRow(`SELECT count(*) FROM events WHERE kind = ? AND task = ?`, events.Overdue, parent.ID).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		if asking && (n != 0 || v.Tasks[0].Holder.Kind != "user" || v.Tasks[0].Overdue != 0) {
+			t.Fatalf("在问用户不该到期: events=%d top=%+v", n, v.Tasks[0])
+		}
+		if !asking && (n == 0 || v.Tasks[0].Overdue != 2) {
+			t.Fatalf("对照组必须到期: events=%d top=%+v", n, v.Tasks[0])
 		}
 	}
 }

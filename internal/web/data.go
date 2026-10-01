@@ -231,11 +231,11 @@ func loadNav(ctx context.Context, q store.Querier) (Nav, error) {
 	return Nav{Depts: nonNil(ix.list), Names: ix.names, Asks: len(asks), ShippedID: shippedID}, nil
 }
 
-// Ask 是「等你」的一件：选项单等你挑，交付等你验收（部门的验收人是你），卡住的任务递到了你这层（往上没有负责人），
-// 负责人上报到秘书这层还没处理的事，或等人处理的执行者不可用标记（没登录、缺环境、模型名无效、自检不过；
-// 从 worker_marks 现读，解除就消失；额度用尽这类会自己恢复的不算）。
+// Ask 是「等你」的一件：选项单等你挑，交付等你验收（部门的验收人是你），负责人在问你、等你回话的任务（回话后消失），
+// 卡住的任务递到了你这层（往上没有负责人），负责人上报到秘书这层还没处理的事，或等人处理的执行者不可用标记（没登录、缺环境、
+// 模型名无效、自检不过；从 worker_marks 现读，解除就消失；额度用尽这类会自己恢复的不算）。
 type Ask struct {
-	Kind     string `json:"kind"` // choose | accept | stuck | escalate | worker
+	Kind     string `json:"kind"` // choose | accept | reply | stuck | escalate | worker
 	ID       string `json:"id"`
 	Title    string `json:"title"`
 	Sub      string `json:"sub"`
@@ -274,6 +274,13 @@ func loadAsks(ctx context.Context, q store.Querier, ix *orgIndex) ([]Ask, error)
 		}
 		out = append(out, Ask{Kind: "accept", ID: t.ID, Title: t.Title, Sub: "等你验收：atrium task accept " + t.ID + "，或 task reject " + t.ID + " --reason 原因",
 			Dept: t.Org, DeptName: ix.name(t.Org), At: t.UpdatedAt})
+	}
+	asking, err := ledger.List(ctx, q, ledger.Filter{Status: []ledger.Status{ledger.Todo}, Asking: true, Limit: 200})
+	if err != nil {
+		return nil, err
+	}
+	for _, t := range asking {
+		out = append(out, Ask{Kind: "reply", ID: t.ID, Title: t.Title, Sub: t.Ask, Dept: t.Org, DeptName: ix.name(t.Org), At: t.AskedAt})
 	}
 	blocked, err := ledger.List(ctx, q, ledger.Filter{Status: []ledger.Status{ledger.Blocked}, Limit: 50})
 	if err != nil {
@@ -314,11 +321,11 @@ func loadAsks(ctx context.Context, q store.Querier, ix *orgIndex) ([]Ask, error)
 	return append(out, ups...), nil
 }
 
-// escalations 是负责人上报到秘书这层（往上没有负责人）、要处理、还没确认的事件。
+// escalations 是负责人上报到秘书这层（往上没有负责人）、要处理、还没确认的事件。知会不算；问用户挂在任务上，按任务列（reply）。
 func escalations(ctx context.Context, q store.Querier, ix *orgIndex) ([]Ask, error) {
 	rows, err := q.QueryContext(ctx, `SELECT COALESCE(task, ''), COALESCE(department, ''), body, updated_at FROM events
 		WHERE kind = ? AND target = ? AND level = ? AND acked_at IS NULL
-		AND COALESCE(json_extract(body, '$.kind'), '') != 'notify' ORDER BY id LIMIT 200`, events.LeaderEscalate, org.Secretary, events.Act)
+		AND COALESCE(json_extract(body, '$.kind'), '') NOT IN ('notify', 'ask') ORDER BY id LIMIT 200`, events.LeaderEscalate, org.Secretary, events.Act)
 	if err != nil {
 		return nil, err
 	}

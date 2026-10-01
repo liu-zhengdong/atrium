@@ -131,6 +131,14 @@ CREATE TABLE IF NOT EXISTS task_findings (
 );
 CREATE INDEX IF NOT EXISTS task_findings_class ON task_findings (class);
 
+-- 负责人在问用户的话（leader escalate --kind ask）：一件任务最多一条，只在待派时有；等回话期间不计时。
+-- 用户回话（task tell）或负责人自己 task tell 撤回时删掉；任务离开待派（派出、结束等）时一并删掉。单独一张表的理由同 task_dirs。
+CREATE TABLE IF NOT EXISTS task_asks (
+  task TEXT PRIMARY KEY REFERENCES tasks (id),
+  text TEXT NOT NULL,
+  at   INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS task_deps (
   task       TEXT NOT NULL REFERENCES tasks (id),
   depends_on TEXT NOT NULL REFERENCES tasks (id),

@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"io"
@@ -103,7 +104,7 @@ func TestStepHolder(t *testing.T) {
 		{ledger.Todo, []ledger.DepState{dep("t6", ledger.Cancelled), dep("t8", ledger.Done)}, 0, 0, "idle", "依赖的 t6 已取消"},
 		{ledger.Todo, []ledger.DepState{dep("t6", ledger.Cancelled), dep("t5", ledger.Failed), run7}, 0, 0, "idle", "2 件依赖等不到了"},
 		{ledger.Todo, nil, 1, 4, "run", "子任务 3/4 结束"},
-		{ledger.Todo, nil, 0, 4, "idle", "等收尾"},
+		{ledger.Todo, nil, 0, 4, "idle", "等安排"},
 		{ledger.Todo, []ledger.DepState{run7}, 1, 4, "idle", "等 t7"},
 		{ledger.Queued, []ledger.DepState{run7}, 0, 0, "idle", "等 t7"},
 		{ledger.Queued, []ledger.DepState{dep("t8", ledger.Done)}, 0, 0, "idle", "排队"},
@@ -393,6 +394,28 @@ func TestRoutes(t *testing.T) {
 	read("today", &today)
 	if len(today.Asks) != 0 {
 		t.Fatalf("知会不应待拍板：%+v", today.Asks)
+	}
+	// 负责人在问用户的任务进「等你」（标题、问的话、问的时刻）；投秘书的那条 ask 上报不再重复列；任务结束后消失。
+	asking, err := ledger.Add(ctx, db, ledger.NewTask{Title: "logo 定稿", Org: sub.ID}, "u1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Tx(ctx, func(tx *sql.Tx) error { return ledger.SetAsk(ctx, tx, asking.ID, "挑几号？") }); err != nil {
+		t.Fatal(err)
+	}
+	events.Emit(ctx, db, events.Event{Kind: events.LeaderEscalate, Task: asking.ID, Dept: sub.ID, Target: org.Secretary,
+		Body: map[string]any{"from": a.ID, "kind": "ask", "note": "挑几号？"}})
+	read("today", &today)
+	if len(today.Asks) != 1 || today.Asks[0].Kind != "reply" || today.Asks[0].ID != asking.ID || today.Asks[0].Title != "logo 定稿" ||
+		today.Asks[0].Sub != "挑几号？" || today.Asks[0].At == 0 {
+		t.Fatalf("在问用户的任务应进等你、只列一次：%+v", today.Asks)
+	}
+	if _, err := ledger.Apply(ctx, db, asking.ID, ledger.Event{Kind: ledger.Cancel}, "u1", ""); err != nil {
+		t.Fatal(err)
+	}
+	read("today", &today)
+	if len(today.Asks) != 0 {
+		t.Fatalf("任务结束后不再等回话：%+v", today.Asks)
 	}
 	// 负责人上报到秘书这层、还没确认的，进「等你」。
 	events.Emit(ctx, db, events.Event{Kind: events.LeaderEscalate, Task: task.ID, Dept: sub.ID, Target: org.Secretary,

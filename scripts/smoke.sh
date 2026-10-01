@@ -544,7 +544,7 @@ out=$(json task run "$sub2" --worker fakesh); has '.result.task.status == "queue
 out=$(json task show "$goal"); has '.result.holder == "子任务在做（0/2 结束）" and .next == "atrium task tree '"$goal"'"'   # 子任务没结束：父任务不计时、不派它自己
 json task run "$sub1" --worker fakesh >/dev/null
 out=$(json task wait "$sub2" --timeout 30); has '.result.task.status == "done"'
-out=$(json task show "$goal"); has '.next == "atrium task set '"$goal"' --status done"'   # 子任务都完成：等负责人收尾父任务
+out=$(json task show "$goal"); has '.result.task.status == "todo" and .next == "atrium task tree '"$goal"'"'   # 子任务都结束：先核对父任务目标，不能推断目标完成
 out=$(json task set "$goal" --status done); has '.result.status == "done"'
 out=$(json task add 前序); pre=$(jq -r .result.id <<<"$out")
 out=$(json task add 后续 --after "$pre"); post=$(jq -r .result.id <<<"$out")

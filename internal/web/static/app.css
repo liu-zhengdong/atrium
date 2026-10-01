@@ -93,7 +93,7 @@ a.quiet{color:inherit}a.quiet:hover{color:var(--ink)}
 .ask:hover{background:var(--hover)}
 .ask .kind{width:30px;height:30px;border-radius:9px;display:grid;place-items:center;flex:none}
 .ask .kind svg{width:16px;height:16px}
-.ask.choose .kind,.ask.accept .kind,.ask.escalate .kind{background:var(--user-soft);color:var(--user-ink)}
+.ask.choose .kind,.ask.accept .kind,.ask.reply .kind,.ask.escalate .kind{background:var(--user-soft);color:var(--user-ink)}
 .ask.stuck .kind,.ask.worker .kind{background:var(--bad-soft);color:var(--bad)}
 .ask .t{font-weight:500}
 .ask .s{color:var(--ink2);font-size:13px}

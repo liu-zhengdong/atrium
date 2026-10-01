@@ -36,10 +36,10 @@ func moduleFor(h *hub) app.Module {
 }
 
 func commands(t *cli.Table) {
-	t.Add(cli.Command{Path: "leader escalate", Args: "<说明>", Summary: "负责人上报：要别的部门配合、越权、无法解决、知会用户",
+	t.Add(cli.Command{Path: "leader escalate", Args: "<说明>", Summary: "负责人上报：要别的部门配合、越权、无法解决、知会用户、问用户（挂在任务上等回话，不计时）",
 		Flags: []cli.Flag{
-			{Name: "kind", Value: "cross|beyond|stuck|notify", Help: "上报哪一类（必填）"},
-			{Name: "task", Value: "tN", Help: "关于哪件任务"},
+			{Name: "kind", Value: "cross|beyond|stuck|notify|ask", Help: "上报哪一类（必填）"},
+			{Name: "task", Value: "tN", Help: "关于哪件任务（ask 必填：待派的任务）"},
 			{Name: "event", Value: "编号", Help: "转交下层上报给你的那条事件"},
 		},
 		Run: func(c *cli.Ctx) error {
@@ -59,8 +59,12 @@ func commands(t *cli.Table) {
 			if err := c.Call("POST", "/api/escalations", in, &out); err != nil {
 				return err
 			}
-			if out.Kind == "notify" {
+			switch out.Kind {
+			case "notify":
 				return c.Done(out, "已知会秘书；不需回复，继续派活", "atrium task run <tN>")
+			case "ask":
+				return c.Done(out, fmt.Sprintf("已挂到 %s 上并投秘书转告用户；等回话期间不计时，回话送回时唤醒你。不用问了：atrium task tell %s <原因>", out.Task, out.Task),
+					"atrium task show "+out.Task)
 			}
 			return c.Done(out, fmt.Sprintf("已上报 %s（%s）", out.To, kindLabel(out.Kind)), "atrium events ack <编号>")
 		}})

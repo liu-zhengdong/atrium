@@ -188,6 +188,9 @@ func TestReclaimEndingsAndReopen(t *testing.T) {
 }
 
 func TestMain(m *testing.M) {
+	if filepath.Base(os.Args[0]) == "git" && os.Getenv("RECLAIM_TEST_GIT") != "" {
+		os.Exit(reclaimGitBarrier())
+	}
 	if len(os.Args) > 1 && os.Args[1] == "--continue-pr-worker" {
 		os.Exit(continuePRWorker())
 	}
@@ -198,6 +201,10 @@ func TestMain(m *testing.M) {
 		temp := os.Getenv("TMPDIR")
 		if temp == "" || os.Getenv("TMP") != temp || os.Getenv("TEMP") != temp {
 			os.Exit(2)
+		}
+		// 打回会复用临时目录；假执行者重建自己的只读缓存，不能直接覆盖 0400 文件。
+		if err := os.Remove(filepath.Join(temp, "readonly")); err != nil && !os.IsNotExist(err) {
+			os.Exit(3)
 		}
 		if err := os.WriteFile(filepath.Join(temp, "readonly"), []byte("只读缓存"), 0o400); err != nil {
 			os.Exit(3)

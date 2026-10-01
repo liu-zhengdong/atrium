@@ -38,64 +38,16 @@ func (d *dispatcher) reclaim(ctx context.Context) error {
 		return err
 	}
 	err = ledger.EachTask(ctx, d.env.DB, "dispatch.reclaim", items, func(it reclaimItem) string { return it.task }, func(it reclaimItem) error {
-		if d.procOf(it.task) != nil {
-			d.reclaimDeferred = true
-			return nil
-		}
-		var w gates.Worktree
-		if err := json.Unmarshal([]byte(it.body), &w); err != nil {
-			return fmt.Errorf("%s 工作树登记无效：%w", it.task, err)
-		}
-		// 早期 worktree/launch 没有 host，彼时只在本机运行；不把缺字段误判为远程。
-		if w.Host == "" {
-			w.Host = LocalHost
-		}
-		if w.Dir == "" {
-			return fmt.Errorf("%s 工作树登记缺目录，无法确认回收目标", it.task)
-		}
-		// 扫描后若被人工重开，pump 在回收之后重建；不会与新执行者并发删同一个目录。
-		pending, err := d.reclaimPending(ctx, it)
-		if err != nil {
-			return err
-		}
-		if pending {
-			d.reclaimDeferred = true
-			return nil
-		}
-		if w.Remote() {
-			if !hosts.Online(w.Host) {
-				d.reclaimDeferred = true
-				return nil
-			}
-			if err := hosts.Reclaim(ctx, w.Host, hosts.ReclaimRequest{Task: it.task, Dir: w.Dir, Run: it.remoteRun}); err != nil {
-				if app.IsNotNow(err) {
-					d.reclaimDeferred = true
-					return nil
-				}
+		// 沿用 EachTask 的错误去重；回收只清理旧交付，不拥有当前任务的状态。
+		// 单件错误在这里记经历，不能交给通用错误处理把重排后的任务转受阻。
+		if err := d.reclaimOne(ctx, it); err != nil {
+			if app.IsNotNow(err) {
 				return err
 			}
-		} else if it.repo == "" && (w.Dir == filepath.Join(TaskDir(d.env.Paths.Data, it.task), "work") || (it.workdir != "" && w.Dir == it.workdir)) {
-			// 指定工作地点与无仓库任务只回收临时文件，工作内容保留。
-		} else if filepath.IsAbs(w.Dir) && filepath.Clean(w.Dir) == filepath.Join(d.env.Paths.Data, "tasks", it.task, "repo") {
-			clone := ""
-			if it.repo != "" {
-				var err error
-				clone, _, err = RepoSource(d.env.Paths.Data, it.repo)
-				if err != nil {
-					return err
-				}
+			if fatal := app.InfrastructureError(ctx, d.env.DB, err); fatal != nil {
+				return fatal
 			}
-			if err := worktree.Remove(ctx, clone, w.Dir, Branch(it.task), run); err != nil {
-				return err
-			}
-		} else {
-			return fmt.Errorf("%s 登记目录不是本实例的任务仓库工作树，保留目录", it.task)
-		}
-		if err := worktree.RemoveTemp(TempDir(d.env.Paths.Data, it.task)); err != nil {
-			return err
-		}
-		if err := ledger.Record(ctx, d.env.DB, it.task, reclaimedKind, actor, strconv.FormatInt(it.id, 10)); err != nil {
-			return err
+			return app.Global(ledger.Record(ctx, d.env.DB, it.task, ledger.KindLoopError, "dispatch.reclaim", fmt.Sprintf("dispatch.reclaim 出错：%v", err)))
 		}
 		return nil
 	})
@@ -107,6 +59,76 @@ func (d *dispatcher) reclaim(ctx context.Context) error {
 	}
 	if len(items) < 100 {
 		d.reclaimAfter = 0
+	}
+	return nil
+}
+
+func (d *dispatcher) reclaimOne(ctx context.Context, it reclaimItem) error {
+	t, err := ledger.Get(ctx, d.env.DB, it.task)
+	if err != nil {
+		return err
+	}
+	if !Reclaimable(t.Status) {
+		return nil
+	}
+	if d.procOf(it.task) != nil {
+		d.reclaimDeferred = true
+		return nil
+	}
+	var w gates.Worktree
+	if err := json.Unmarshal([]byte(it.body), &w); err != nil {
+		return fmt.Errorf("%s 工作树登记无效：%w", it.task, err)
+	}
+	// 早期 worktree/launch 没有 host，彼时只在本机运行；不把缺字段误判为远程。
+	if w.Host == "" {
+		w.Host = LocalHost
+	}
+	if w.Dir == "" {
+		return fmt.Errorf("%s 工作树登记缺目录，无法确认回收目标", it.task)
+	}
+	// 开始回收后才重排的，pump 仍在回收之后分派；远程另按轮号核对。
+	pending, err := d.reclaimPending(ctx, it)
+	if err != nil {
+		return err
+	}
+	if pending {
+		d.reclaimDeferred = true
+		return nil
+	}
+	if w.Remote() {
+		if !hosts.Online(w.Host) {
+			d.reclaimDeferred = true
+			return nil
+		}
+		if err := hosts.Reclaim(ctx, w.Host, hosts.ReclaimRequest{Task: it.task, Dir: w.Dir, Run: it.remoteRun}); err != nil {
+			if app.IsNotNow(err) {
+				d.reclaimDeferred = true
+				return nil
+			}
+			return err
+		}
+	} else if it.repo == "" && (w.Dir == filepath.Join(TaskDir(d.env.Paths.Data, it.task), "work") || (it.workdir != "" && w.Dir == it.workdir)) {
+		// 指定工作地点与无仓库任务只回收临时文件，工作内容保留。
+	} else if filepath.IsAbs(w.Dir) && filepath.Clean(w.Dir) == filepath.Join(d.env.Paths.Data, "tasks", it.task, "repo") {
+		clone := ""
+		if it.repo != "" {
+			var err error
+			clone, _, err = RepoSource(d.env.Paths.Data, it.repo)
+			if err != nil {
+				return err
+			}
+		}
+		if err := worktree.Remove(ctx, clone, w.Dir, Branch(it.task), run); err != nil {
+			return err
+		}
+	} else {
+		return fmt.Errorf("%s 登记目录不是本实例的任务仓库工作树，保留目录", it.task)
+	}
+	if err := worktree.RemoveTemp(TempDir(d.env.Paths.Data, it.task)); err != nil {
+		return err
+	}
+	if err := ledger.Record(ctx, d.env.DB, it.task, reclaimedKind, actor, strconv.FormatInt(it.id, 10)); err != nil {
+		return err
 	}
 	return nil
 }

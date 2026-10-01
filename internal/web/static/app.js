@@ -8,6 +8,7 @@ const icon = {
   choose: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="4" cy="5" r="1.6"/><circle cx="4" cy="11" r="1.6" fill="currentColor"/><path d="M8 5h5.5M8 11h5.5"/></svg>',
   accept: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="7" cy="7" r="4"/><path d="M10 10l3.5 3.5"/></svg>',
   stuck: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M8 4v5"/><circle cx="8" cy="11.8" r=".6" fill="currentColor"/></svg>',
+  reply: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2.5 3.5h11v7.5H7l-3 2.5V11H2.5z"/><path d="M6.6 5.9a1.4 1.4 0 1 1 1.9 1.3c-.4.2-.5.5-.5.9"/><circle cx="8" cy="9.4" r=".5" fill="currentColor" stroke="none"/></svg>',
   escalate: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M8 13V3.5M4 7.5l4-4 4 4"/></svg>',
   worker: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="2.5" y="3" width="11" height="8" rx="1.5"/><path d="M6 14h4M8 11v3"/></svg>',
   check: '<svg class="check" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 8.5 6.5 12 13 4.5"/></svg>',

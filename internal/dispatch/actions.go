@@ -35,6 +35,7 @@ type TellResult struct {
 const maxTell = 4000
 
 // Tell 给任务补充说明，是补充说明与改说明（ledger.Tell）唯一的送达入口：先记进经历；交给负责人拆着的同一事务里发给它；
+// 挂着在问用户的话的，这条是回话（负责人自己说的是撤回）：清掉那句话、发给处理它的负责人（ledger.RecordTell）；
 // 在跑的按工具送到（即时写标准输入、本轮后继续、停掉带着补充重派），没在跑的下次拉起写进提示词。
 func Tell(ctx context.Context, env *app.Env, id, text, by string) (TellResult, error) {
 	text = strings.TrimSpace(text)
@@ -45,23 +46,29 @@ func Tell(ctx context.Context, env *app.Env, id, text, by string) (TellResult, e
 		return TellResult{}, api.Usage("<文字>: 最多 %d 字", maxTell)
 	}
 	d := get(env)
-	t, err := ledger.Get(ctx, env.DB, id)
-	if err != nil {
-		return TellResult{}, err
-	}
-	if t.Status.Finished() {
-		return TellResult{}, api.Conflict("%s 已%s，任务已结束，无法再补充说明", id, t.Status).WithNext("atrium task add <标题> --parent " + id)
-	}
+	var t ledger.Task
 	var tid int64
 	var leader string
-	err = env.DB.Tx(ctx, func(tx *sql.Tx) (err error) {
+	err := env.DB.Tx(ctx, func(tx *sql.Tx) (err error) {
+		t, err = ledger.Get(ctx, tx, id)
+		if err != nil {
+			return err
+		}
+		if t.Status.Finished() {
+			return api.Conflict("%s 已%s，任务已结束，无法再补充说明", id, t.Status).WithNext("atrium task add <标题> --parent " + id)
+		}
 		tid, leader, err = ledger.RecordTell(ctx, tx, t, text, by)
 		return err
 	})
 	if err != nil {
 		return TellResult{}, err
 	}
-	if leader != "" {
+	switch {
+	case t.Ask != "" && leader != "":
+		return TellResult{Task: id, ID: tid, Via: "leader", Note: "已清掉在问用户的话，回话发给负责人 " + leader + "（要处理），它醒来时读到"}, nil
+	case t.Ask != "":
+		return TellResult{Task: id, ID: tid, Via: "next", Note: "已清掉在问用户的话（撤回），下次拉起时写进提示词"}, nil
+	case leader != "":
 		return TellResult{Task: id, ID: tid, Via: "leader", Note: "已发给拆它的负责人 " + leader + "（要处理），它醒来时读到"}, nil
 	}
 	r := TellResult{Task: id, ID: tid, Via: "next", Note: "下次拉起时写进提示词"}

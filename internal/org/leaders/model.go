@@ -32,6 +32,7 @@ var Kinds = []struct{ Key, Label string }{
 	{"beyond", "越过权限或底线"},
 	{"stuck", "无法解决"},
 	{"notify", "知会用户"},
+	{"ask", "问用户，等回话"},
 }
 
 func kindLabel(k string) string {
@@ -68,6 +69,9 @@ func CheckEscalate(in EscalateIn) error {
 	}
 	if in.Task != "" && !api.IsRef(in.Task, "t") {
 		return api.Usage("--task: 应为 tN，收到 %q", in.Task)
+	}
+	if in.Kind == "ask" && in.Task == "" && in.Event == 0 {
+		return api.Usage("--task: 问用户要挂在任务上（--kind ask --task tN），等回话期间这件任务不计时")
 	}
 	return nil
 }
@@ -243,7 +247,7 @@ func Prompt(in PromptInput) string {
 		w("1. 看它：task show tN；说明里没写清服务三个目标里的哪一个，先用 task note tN 补上。想清怎么做，取舍写进 task note。要用户拍板的整理成选项单（choice add），不要替用户定。")
 		w("2. 拆成做得完的子任务：task add 标题 --parent tN --repo 仓库（或 --dir 本机文件夹）[--after tM]，先后用 --after 写清。长期方向写进部门介绍（org edit oN --next …），不建成做不完的任务。")
 		w("3. 逐件 task run；依赖还没完成的也可以先 run，依赖完成后自动派，依赖失败或取消会转受阻并通知你。")
-		w("4. 子任务的结果发给你，父任务进度由子任务汇总（task tree tN）；都完成后 task set tN --status done 收尾（子任务没结束时父任务不计时）。")
+		w("4. 子任务的结果发给你，父任务进度由子任务汇总（task tree tN）。子任务全结束（含失败、取消）只说明当前已派阶段结束：核对父任务目标，未完成就继续安排下一阶段；需要用户回话就用 ask；只有目标完成后才 task set tN --status done 收尾（子任务没结束时父任务不计时）。")
 		w("正文带 tell 的是交给你之后的补充（补充说明或改了说明），以它和 task show tN 的最新说明为准；没取走时合并成最新一条，之前的补充在 task show 的经历里。已按旧说明派出的子任务用 task tell / task set --detail 跟上，做偏了的 task stop。")
 		w("")
 	}
@@ -267,12 +271,13 @@ func Prompt(in PromptInput) string {
 	w("- 可以：动你负责的部门及其下属的任务、要点、资料、定时任务，改介绍；在下属负责人管的区域里建、改、裁撤部门，登记新负责人时用 leader add <名字> --org oN 一步绑定部门，或用 org edit oN --leader <aN|-> 撤换、清除。直接下属负责人最多 %d 位，同一位可管多个部门。管辖分派任务部门（%s）的负责人还能改执行者档案、解除不可用标记（atrium workers edit，--clear 解除）。", org.MaxDirectLeaders, ProfileDept)
 	w("- 不可以：在自己直接管的地方改结构，或动管辖之外的部门。需要建分工时用 atrium leader escalate <要建什么、为什么> --kind beyond 上报；上一层收到后自己动手建（即审批），或回复不同意。不能停机或操作服务。")
 	w("")
-	w("## 上报（cross、beyond、stuck 发给 %s；notify 直达秘书，其余自己处理）", in.Upstream)
+	w("## 上报（cross、beyond、stuck 发给 %s；notify、ask 直达秘书，其余自己处理）", in.Upstream)
 	w("完成结果自动发回任务分派人；自己建、自己收的任务在网页今天页的完成列表查看。")
 	for _, k := range Kinds {
 		w("- %s %s → atrium leader escalate 说明 --kind %s [--task tN]", k.Key, k.Label, k.Key)
 	}
 	w("- notify：将要动用户在用的应用或配置前，先经秘书知会用户。发完继续派活，不需要回复、不等拍板；知会不增加操作权限。")
+	w("- ask：只有用户知道的事（挑哪个编号、服务器地址、账号）问用户，必须 --task tN（待派的任务），一件任务同时挂一条（再问换成新的），最多 %d 字。等回话期间这件任务不计时，今天页「等你」里看得到；用户回话经 task tell 送回并唤醒你。不用问了自己 task tell tN 原因 撤回。几选一的方向用选项单（choice add）。", ledger.MaxAsk)
 	w("- 下层上报给你、你也要向上级上报的：atrium leader escalate 你的意见 --kind 同类 --event 编号（上面能看到原文），再确认原事件")
 	w("")
 	w("## 收尾")

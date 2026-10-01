@@ -185,10 +185,12 @@ func Commands(t *cli.Table) {
 			switch {
 			case t.Status == Draft:
 				next = "atrium task set " + t.ID + " --status todo"
+			case t.Status == Todo && t.Ask != "":
+				next = h.Holder.Next // 在问用户：等回话（与等待对象判定同一条）
 			case t.Status == Todo && d.Children != nil && d.Children.Open() > 0:
 				next = "atrium task tree " + t.ID // 拆开在做的父任务：看子任务，不派它自己
 			case t.Status == Todo && d.Children != nil && d.Children.Total > 0:
-				next = "atrium task set " + t.ID + " --status done" // 子任务都结束了：收尾
+				next = h.Holder.Next // 子任务终态不代表父任务目标完成；先核对目标再安排或收尾
 			case t.Status == Todo && d.Ready:
 				next = "atrium task run " + t.ID
 			case t.Status == Todo && len(d.Broken) > 0:

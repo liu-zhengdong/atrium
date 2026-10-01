@@ -3,8 +3,10 @@ package leaders
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"github.com/liu-zhengdong/atrium/internal/cli"
 	"io"
 	"log/slog"
@@ -328,6 +330,119 @@ func TestNotify(t *testing.T) {
 	}
 	if target != org.Secretary || level != events.Act {
 		t.Fatalf("秘书须能领取知会：%s %s", target, level)
+	}
+}
+
+// 问用户：挂到任务上、投秘书；坏输入按参数名报错；回话清掉问题并发给负责人，负责人自己说是撤回、不发给自己。
+func TestAsk(t *testing.T) {
+	env, h, srv := fixture(t)
+	ctx := context.Background()
+	tok, _ := h.issue("a2")
+	a2 := &api.Client{Base: srv.URL, Token: tok}
+	var out Escalation
+	if err := a2.Do(ctx, "POST", "/api/escalations", EscalateIn{Kind: "ask", Note: "logo 挑几号？", Task: "t1"}, &out); err != nil ||
+		out.To != org.Secretary || out.Task != "t1" {
+		t.Fatalf("ask 应直达秘书：%+v %v", out, err)
+	}
+	var target, level, body string
+	env.DB.QueryRowContext(ctx, `SELECT target, level, body FROM events WHERE kind = ? ORDER BY id DESC LIMIT 1`, events.LeaderEscalate).Scan(&target, &level, &body)
+	if target != org.Secretary || level != events.Act || !strings.Contains(body, `"kind":"ask"`) {
+		t.Fatalf("秘书须能领取问题：%s %s %s", target, level, body)
+	}
+	if got := events.Summary(events.Row{Kind: events.LeaderEscalate, Task: "t1", Body: []byte(body)}); !strings.Contains(got, "logo 挑几号？") ||
+		!strings.Contains(got, "atrium task tell t1") {
+		t.Fatalf("秘书看到的一句话要带问题和回话命令：%s", got)
+	}
+	// 再问换成新的：一件任务同时一条。
+	if err := a2.Do(ctx, "POST", "/api/escalations", EscalateIn{Kind: "ask", Note: "服务器地址和域名是？", Task: "t1"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	t1, _ := ledger.Get(ctx, env.DB, "t1")
+	var n int
+	env.DB.QueryRowContext(ctx, `SELECT count(*) FROM task_asks`).Scan(&n)
+	if t1.Ask != "服务器地址和域名是？" || t1.AskedAt == 0 || n != 1 {
+		t.Fatalf("应只挂最新一条：%q %d 条", t1.Ask, n)
+	}
+
+	must := func(_ any, err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	must(ledger.Add(ctx, env.DB, ledger.NewTask{Title: "已结束", Org: "o2"}, "u1")) // t3
+	must(ledger.Apply(ctx, env.DB, "t3", ledger.Event{Kind: ledger.Cancel}, "u1", ""))
+	must(ledger.Add(ctx, env.DB, ledger.NewTask{Title: "草稿", Org: "o2", Draft: true}, "u1")) // t4
+	for name, c := range map[string]struct {
+		in         EscalateIn
+		code, text string
+	}{
+		"超长":     {EscalateIn{Kind: "ask", Note: strings.Repeat("问", ledger.MaxAsk+1), Task: "t1"}, "usage", "最多 500 字"},
+		"没写任务":   {EscalateIn{Kind: "ask", Note: "x"}, "usage", "--task"},
+		"已结束的任务": {EscalateIn{Kind: "ask", Note: "x", Task: "t3"}, "conflict", "已结束"},
+		"草稿":     {EscalateIn{Kind: "ask", Note: "x", Task: "t4"}, "conflict", "只有待派的任务"},
+		"别处任务":   {EscalateIn{Kind: "ask", Note: "x", Task: "t2"}, "forbidden", ""},
+	} {
+		err := a2.Do(ctx, "POST", "/api/escalations", c.in, nil)
+		if code(err) != c.code || !strings.Contains(fmt.Sprint(err), c.text) {
+			t.Errorf("%s：%v，应为 %s（%s）", name, err, c.code, c.text)
+		}
+	}
+
+	// 秘书代用户回话：清掉问题，发给处理它的负责人 a2（t1 是用户建的，按部门找到 a2），正文带问的话。
+	tell := func(by, text string) string {
+		t.Helper()
+		t1, _ := ledger.Get(ctx, env.DB, "t1")
+		var who string
+		if err := env.DB.Tx(ctx, func(tx *sql.Tx) (err error) {
+			_, who, err = ledger.RecordTell(ctx, tx, t1, text, by)
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return who
+	}
+	if who := tell(org.Secretary, "地址 10.0.0.1，域名 a.example"); who != "a2" {
+		t.Fatalf("回话应发给 a2：%q", who)
+	}
+	env.DB.QueryRowContext(ctx, `SELECT target, body FROM events WHERE kind = ? ORDER BY id DESC LIMIT 1`, events.TaskAssigned).Scan(&target, &body)
+	if target != "a2" || !strings.Contains(body, "服务器地址和域名是？") || !strings.Contains(body, "10.0.0.1") {
+		t.Fatalf("回话事件：%s %s", target, body)
+	}
+	if t1, _ = ledger.Get(ctx, env.DB, "t1"); t1.Ask != "" {
+		t.Fatalf("回话后问题应清掉：%q", t1.Ask)
+	}
+	// 实际跑负责人收集与拉起：回话事件必须能使负责人醒来，不能只验证事件落库。
+	f := &fakeLauncher{h: h, db: env.DB, ack: true, cmd: "exit 0"}
+	SetLauncher(f.launch)
+	t.Cleanup(func() { SetLauncher(nil) })
+	if err := h.round(ctx, env); err != nil {
+		t.Fatal(err)
+	}
+	h.wg.Wait()
+	if f.calls.Load() != 1 {
+		t.Fatalf("回话后应唤醒一次负责人，实际 %d 次", f.calls.Load())
+	}
+	// 负责人撤回：清掉，不发给自己。
+	if err := a2.Do(ctx, "POST", "/api/escalations", EscalateIn{Kind: "ask", Note: "还要吗？", Task: "t1"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	env.DB.QueryRowContext(ctx, `SELECT count(*) FROM events WHERE kind = ?`, events.TaskAssigned).Scan(&n)
+	if who := tell("a2", "自己查到了，不用问了"); who != "" {
+		t.Fatalf("撤回不发给自己：%q", who)
+	}
+	var after int
+	env.DB.QueryRowContext(ctx, `SELECT count(*) FROM events WHERE kind = ?`, events.TaskAssigned).Scan(&after)
+	if t1, _ = ledger.Get(ctx, env.DB, "t1"); t1.Ask != "" || after != n {
+		t.Fatalf("撤回：问题 %q，事件 %d → %d", t1.Ask, n, after)
+	}
+	// 任务离开待派时一并删掉。
+	if err := a2.Do(ctx, "POST", "/api/escalations", EscalateIn{Kind: "ask", Note: "再问一次", Task: "t1"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	must(ledger.Apply(ctx, env.DB, "t1", ledger.Event{Kind: ledger.Cancel}, "u1", ""))
+	if env.DB.QueryRowContext(ctx, `SELECT count(*) FROM task_asks`).Scan(&n); n != 0 {
+		t.Fatalf("任务结束后问题应删掉：%d 条", n)
 	}
 }
 

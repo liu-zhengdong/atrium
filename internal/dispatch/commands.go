@@ -170,7 +170,7 @@ func Commands(t *cli.Table) {
 			}
 			return c.Done(res, text, next)
 		}})
-	t.Add(cli.Command{Path: "task tell", Args: "<tN> <文字>", Summary: "补充说明：在跑的执行者按工具即时或本轮后送到，没在跑的下次拉起时写进提示词；交给负责人拆着的发给负责人",
+	t.Add(cli.Command{Path: "task tell", Args: "<tN> <文字>", Summary: "补充说明：在跑的执行者按工具即时或本轮后送到，没在跑的下次拉起时写进提示词；交给负责人拆着的发给负责人；负责人在问用户的，这条是回话：清掉问题、唤醒负责人（负责人自己说是撤回）",
 		Run: func(c *cli.Ctx) error {
 			id, err := c.Arg(0, "<tN>")
 			if err != nil {

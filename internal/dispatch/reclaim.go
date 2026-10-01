@@ -38,7 +38,18 @@ func (d *dispatcher) reclaim(ctx context.Context) error {
 		return err
 	}
 	err = ledger.EachTask(ctx, d.env.DB, "dispatch.reclaim", items, func(it reclaimItem) string { return it.task }, func(it reclaimItem) error {
-		return d.reclaimOne(ctx, it)
+		// 沿用 EachTask 的错误去重；回收只清理旧交付，不拥有当前任务的状态。
+		// 单件错误在这里记经历，不能交给通用错误处理把重排后的任务转受阻。
+		if err := d.reclaimOne(ctx, it); err != nil {
+			if app.IsNotNow(err) {
+				return err
+			}
+			if fatal := app.InfrastructureError(ctx, d.env.DB, err); fatal != nil {
+				return fatal
+			}
+			return app.Global(ledger.Record(ctx, d.env.DB, it.task, ledger.KindLoopError, "dispatch.reclaim", fmt.Sprintf("dispatch.reclaim 出错：%v", err)))
+		}
+		return nil
 	})
 	if err != nil {
 		return err
@@ -53,6 +64,13 @@ func (d *dispatcher) reclaim(ctx context.Context) error {
 }
 
 func (d *dispatcher) reclaimOne(ctx context.Context, it reclaimItem) error {
+	t, err := ledger.Get(ctx, d.env.DB, it.task)
+	if err != nil {
+		return err
+	}
+	if !Reclaimable(t.Status) {
+		return nil
+	}
 	if d.procOf(it.task) != nil {
 		d.reclaimDeferred = true
 		return nil
@@ -68,7 +86,7 @@ func (d *dispatcher) reclaimOne(ctx context.Context, it reclaimItem) error {
 	if w.Dir == "" {
 		return fmt.Errorf("%s 工作树登记缺目录，无法确认回收目标", it.task)
 	}
-	// 扫描后若被人工重开，pump 在回收之后重建；不会与新执行者并发删同一个目录。
+	// 开始回收后才重排的，pump 仍在回收之后分派；远程另按轮号核对。
 	pending, err := d.reclaimPending(ctx, it)
 	if err != nil {
 		return err

@@ -67,6 +67,10 @@ func TestBuild(t *testing.T) {
 		{tool: "kimi", in: in("k2", ""), want: []string{"-p", "请先完整读取任务说明文件 " + pf + "，然后按文件内容执行。", "-m", "k2"}},
 		{tool: "kimi", in: in("", "high"), bad: "不接受思考强度"},
 		{tool: "grok", in: in("g", "low"), want: []string{"--prompt-file", pf, "--output-format", "streaming-messages-json", "-m", "g", "--reasoning-effort", "low", "--always-approve", "--cwd", dir}},
+		{tool: "pi", in: in("opencode-go/glm-5.3-flash", "high"), want: []string{"-p", "--mode", "json", "-na", "--model", "opencode-go/glm-5.3-flash", "--thinking", "high"}},
+		{tool: "pi", in: in("opencode-go/glm-5.3-flash", ""), want: []string{"--model", "opencode-go/glm-5.3-flash"}},
+		{tool: "pi", in: Request{Prompt: "x", PromptFile: pf, Dir: dir, Session: "0123abcd-0123-0123-0123-0123456789ab"}, want: []string{"-p", "--mode", "json", "-na", "--session-id", "0123abcd-0123-0123-0123-0123456789ab"}},
+		{tool: "pi", in: in("", "high"), bad: "要指定模型才能给思考强度"},
 		{tool: "agy", in: in("gemini-3.8-flash", "high"), want: []string{"--input-format", "stream-json", "--output-format", "stream-json", "--model", "gemini-3.8-flash", "--effort", "high"}},
 		{tool: "agy", in: in("claude-opus", "high"), bad: "不接受思考强度"},
 		{tool: "cursor", in: in("gpt-5.3-codex-fast", "high"), want: []string{"-p", "--workspace", dir, "--model", "gpt-5.3-codex-high-fast"}},
@@ -538,6 +542,7 @@ func TestEnded(t *testing.T) {
 	claude, _ := Builtin("claude")
 	agy, _ := Builtin("agy")
 	codex, _ := Builtin("codex")
+	pi, _ := Builtin("pi")
 	cases := []struct {
 		a     *Driver
 		tail  string
@@ -551,6 +556,9 @@ func TestEnded(t *testing.T) {
 		{codex, "anything", false, false},
 		{codex, `{"type":"item.completed","item":{"type":"agent_message","text":"好了"}}` + "\n" + `{"type":"turn.completed","usage":{}}`, true, true},
 		{codex, `{"type":"turn.failed","error":{"message":"boom"}}`, true, false},
+		{pi, `{"type":"agent_settled"}`, true, true},
+		{pi, `{"type":"auto_retry_end","success":false,"finalError":"upstream service timeout"}`, true, false},
+		{pi, `{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"跑完了"}]}}`, false, false},
 	}
 	for _, c := range cases {
 		e := c.a.Ended(c.tail)
@@ -566,6 +574,12 @@ func TestEnded(t *testing.T) {
 	}
 	if r := codex.LastReply(`{"type":"item.completed","item":{"id":"item_3","type":"agent_message","text":"审阅结论：通过"}}` + "\n" + `{"type":"turn.completed"}`); r != "审阅结论：通过" {
 		t.Errorf("codex 最后回复：%q", r)
+	}
+	if s := pi.SessionOf(`{"type":"session","version":3,"id":"01a0fd13-a325-7380-bb9e-e5468c2deb20","cwd":"/x"}`); s != "01a0fd13-a325-7380-bb9e-e5468c2deb20" {
+		t.Errorf("pi 会话 id：%q", s)
+	}
+	if r := pi.LastReply(`{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"审阅结论：通过"}]}}` + "\n" + `{"type":"agent_settled"}`); r != "审阅结论：通过" {
+		t.Errorf("pi 最后回复：%q", r)
 	}
 }
 

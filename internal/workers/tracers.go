@@ -403,3 +403,68 @@ func readOpencode(p *Parser, e event, line string) bool {
 	}
 	return true
 }
+
+// pi -p --mode json：头一行 session 给会话 id 与工作目录；message_end 是权威消息——
+// assistant 的文字算「说话」，它报的 provider/model 与用量都从这里取；系统提示词与用户消息也走 message_end，
+// 认出但不记（整段提示词不进经过，日志文件里仍有）。工具执行另有 tool_execution_start/end；agent_settled 是本轮收尾。
+func readPi(p *Parser, e event, _ string) bool {
+	switch e.str("type") {
+	case "session":
+		p.dir, p.t.Session = e.str("cwd"), e.str("id")
+	case "message_end":
+		m := e.obj("message")
+		if m.str("role") != "assistant" {
+			return true
+		}
+		if md, pv := m.str("model"), m.str("provider"); md != "" {
+			p.t.Model = md
+			if pv != "" {
+				p.t.Model = pv + "/" + md
+			}
+		}
+		for _, c := range asList(m["content"]) {
+			if b := event(asMap(c)); b.str("type") == "text" {
+				p.say(b.str("text"))
+			}
+		}
+		if u := m.obj("usage"); len(u) > 0 {
+			p.addUsage(Usage{Tokens: Tokens{Input: number(u, "input"), Output: number(u, "output"),
+				CacheRead: number(u, "cacheRead"), CacheWrite: number(u, "cacheWrite")},
+				Cost: reportedCost(u.obj("cost"), "total"), Currency: "USD"})
+		}
+	case "tool_execution_start":
+		cmd := p.step(e.str("toolName"), e.obj("args"))
+		if e.str("toolName") == "bash" {
+			if c := e.obj("args").str("command"); c != "" {
+				cmd = c
+			}
+		}
+		p.call(e.str("toolCallId"), cmd)
+	case "tool_execution_end":
+		code := 0
+		if e["isError"] == true {
+			code = -1
+		}
+		p.result(e.str("toolCallId"), code, piResultText(e.obj("result")))
+	case "agent_settled":
+		p.end(p.lastSay, 0)
+	case "agent_start", "agent_end", "turn_start", "turn_end", "message_start", "message_update",
+		"tool_execution_update", "queue_update", "entry_appended", "session_info_changed", "thinking_level_changed",
+		"compaction_start", "compaction_end", "auto_retry_start", "auto_retry_end",
+		"summarization_retry_scheduled", "summarization_retry_attempt_start", "summarization_retry_finished":
+	default:
+		return false
+	}
+	return true
+}
+
+// piResultText 取工具结果里的文字（result.content 里 type=text 的片段）。
+func piResultText(res event) string {
+	var parts []string
+	for _, c := range asList(res["content"]) {
+		if b := event(asMap(c)); b.str("type") == "text" {
+			parts = append(parts, b.str("text"))
+		}
+	}
+	return strings.Join(parts, "\n")
+}

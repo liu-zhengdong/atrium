@@ -440,11 +440,17 @@ func eventEnding(e event) (Ending, bool) {
 			return Ending{Known: true, Reason: "上下文或输出长度用尽"}, true
 		}
 		return Ending{Known: true, OK: true}, true
+	case e.str("type") == "agent_settled":
+		return Ending{Known: true, OK: true}, true
+	case e.str("type") == "auto_retry_end" && e["success"] == false:
+		return Ending{Known: true, Reason: "执行者重试耗尽：" + oneLine(e.str("finalError"))}, true
 	}
 	return Ending{}, false
 }
 
 func asMap(v any) map[string]any { m, _ := v.(map[string]any); return m }
+
+func asList(v any) []any { l, _ := v.([]any); return l }
 
 // maxReply 是记下的最后回复的上限（字符）。
 const maxReply = 8000
@@ -466,6 +472,12 @@ func (a *Driver) LastReply(tail string) string {
 				return clip(e.obj("part").str("text"))
 			case e.str("type") == "item.completed" && e.obj("item").str("type") == "agent_message":
 				return clip(e.obj("item").str("text"))
+			case e.str("type") == "turn_end", e.str("type") == "message_end":
+				if m := e.obj("message"); m.str("role") == "assistant" {
+					if t := piResultText(m); t != "" {
+						return clip(t)
+					}
+				}
 			}
 		}
 		return ""

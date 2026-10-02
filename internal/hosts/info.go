@@ -21,6 +21,7 @@ var loginFiles = map[string][]string{
 	"claude":   {".claude/.credentials.json", ".claude.json"},
 	"codex":    {".codex/auth.json", ".config/codex/auth.json"},
 	"opencode": {".local/share/opencode/auth.json"},
+	"pi":       {".pi/agent/auth.json"},
 }
 
 // LoggedIn 判是否登录（纯函数）：有登录文件算登录；codex 没文件就是没登录；claude 在 macOS 上可能只在钥匙串里，

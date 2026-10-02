@@ -170,10 +170,10 @@ func (a *Driver) check(in Request) error {
 var builtin = map[string]*Driver{}
 
 // Tools 是内置工具的固定顺序（没有额度数据时按它挑）。
-var Tools = []string{"claude", "codex", "opencode", "cursor", "agy", "kimi", "grok"}
+var Tools = []string{"claude", "codex", "opencode", "cursor", "agy", "kimi", "grok", "pi"}
 
 func init() {
-	for _, a := range []*Driver{claudeAdapter(), codexAdapter(), opencodeAdapter(), cursorAdapter(), agyAdapter(), kimiAdapter(), grokAdapter()} {
+	for _, a := range []*Driver{claudeAdapter(), codexAdapter(), opencodeAdapter(), cursorAdapter(), agyAdapter(), kimiAdapter(), grokAdapter(), piAdapter()} {
 		builtin[a.Tool] = a
 	}
 }
@@ -399,6 +399,33 @@ func grokAdapter() *Driver {
 		}
 		args = append(args, "--always-approve", "--cwd", in.Dir)
 		return Launch{Exe: a.Exe, Args: args, Dir: in.Dir}, nil
+	}
+	return a
+}
+
+// pi -p --mode json：逐行 JSON 事件；头一行 session 给会话 id 与工作目录，agent_settled 是本轮收尾。
+// 提示词走标准输入（pi 把管道内容并进第一条消息），不受命令行长度限制。
+// --session-id 精确打开那个会话（没有就建），继续时把新提示词当作新一轮写进去。
+// -na（--no-approve）：不信工作树里的 .pi/ 项目配置与资源，与 claude 不带 local 设置同源；用户个人的 ~/.pi/agent 设置照用。
+// 模型写 provider/id（模型 id 在不同 provider 下会重名）；思考强度单独给。
+func piAdapter() *Driver {
+	a := &Driver{Tool: "pi", Exe: "pi", Efforts: []string{"minimal", "low", "medium", "high", "xhigh"},
+		Tell: TellResume, JSON: true, read: readPi, session: regexp.MustCompile(`"type":"session"[^\n]*?"id":"([0-9a-f-]{36})"`)}
+	a.build = func(in Request) (Launch, error) {
+		args := []string{"-p", "--mode", "json", "-na"}
+		if in.Model != "" {
+			args = append(args, "--model", in.Model)
+		}
+		if in.Effort != "" {
+			if in.Model == "" {
+				return Launch{}, api.Usage("pi 要指定模型才能给思考强度：执行者写 pi+<provider>/<模型>:%s", in.Effort)
+			}
+			args = append(args, "--thinking", in.Effort)
+		}
+		if in.Session != "" {
+			args = append(args, "--session-id", in.Session)
+		}
+		return Launch{Exe: a.Exe, Args: args, Dir: in.Dir, StdinFile: in.PromptFile}, nil
 	}
 	return a
 }

@@ -1,6 +1,7 @@
 package workers
 
 import (
+	"math"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -14,6 +15,27 @@ func TestTraceGrokLog(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := Trace{Segments: []Segment{{Say: "我先读取当前目录里的 probe.txt。", Cmds: []Command{{Cmd: "read_file probe.txt", State: CmdOK, Out: "1→t561 sample"}}}}, Ended: true, Result: "`probe.txt` 只有一行：`t561 sample`。", Model: "grok-4.7", Ms: 23889}
+	if !reflect.DeepEqual(tr, want) {
+		t.Fatalf("得到 %+v", tr)
+	}
+}
+
+// 真实日志（t806）：pi 头一行给会话与工作目录，工具执行、用量、收尾分事件；
+// 忘了具体形状时重新采一份：`pi -p --mode json --model <模型> "用 bash 跑 echo hi"`。
+func TestTracePiLog(t *testing.T) {
+	tr, err := ReadTrace("pi", "testdata/pi-bash.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := Trace{Session: "01a0fd22-2763-76dd-8d9e-e1d7f785d8fe",
+		Usage:    Usage{Tokens: Tokens{Input: token(51026), Output: token(15), CacheRead: token(0), CacheWrite: token(0)}, Currency: "USD", Source: "tool"},
+		Segments: []Segment{{Cmds: []Command{{Cmd: "echo hi", State: CmdOK, Out: "hi"}}}},
+		Ended:    true, Result: "hi", Model: "opencode-go/glm-5.3-flash"}
+	cost := tr.Usage.Cost
+	if cost == nil || math.Abs(*cost-0.0076614) > 1e-12 {
+		t.Fatalf("花费 %v", cost)
+	}
+	tr.Usage.Cost = nil // 两次用量相加，末位与字面量对不上，单独比
 	if !reflect.DeepEqual(tr, want) {
 		t.Fatalf("得到 %+v", tr)
 	}
@@ -228,6 +250,8 @@ func TestModelOf(t *testing.T) {
 		{"agy+gemini-3.8-flash-high", read("testdata/agy-t349.jsonl"), "gemini-3.8-flash-high"},
 		{"codex", read("testdata/codex-sample.jsonl"), ""},
 		{"kimi", "Model: k2\n", ""},
+		{"pi+opencode-go/glm-5.3-flash", `{"type":"session","version":3,"id":"01a0fd13-a325-7380-bb9e-e5468c2deb20","cwd":"/r"}` + "\n" +
+			`{"type":"message_end","message":{"role":"assistant","provider":"opencode-go","model":"glm-5.3-flash","content":[]}}`, "opencode-go/glm-5.3-flash"},
 	}
 	for _, c := range cases {
 		if got := ModelOf(c.worker, c.head); got != c.want {

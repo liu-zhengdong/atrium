@@ -226,6 +226,79 @@ out=$(json secretary bridge --install-hook --dir "$dir"); has '.result.added'
 out=$(json secretary bridge --install-hook --dir "$dir"); has '.result.added == false'
 jq -e '.model == "x" and (.hooks.SessionStart[0].hooks[0].command == "atrium secretary bridge --detach")' "$dir/.claude/settings.local.json" >/dev/null || fail "hook 写得不对"
 
+step "secretary bridge 到 Pi 会话（/secretary on 走的路：--pi 指名会话，同时只有一个在听）"
+# 假 pi-inbox：逐行回执（bridge 拿到回执才算送出）。用 node 写，Unix socket 与 Windows 命名管道共用一份。
+pi_home="$work/home"; mkdir -p "$pi_home/.pi/agent/inbox"
+# Windows（Git Bash）：bash 自己按 POSIX 路径读写，而 atrium 进程拿到的是系统给的 Windows 路径（%USERPROFILE%、登记里的文件路径），要转一下。
+pi_native() { if command -v cygpath >/dev/null 2>&1; then cygpath -w "$1"; else printf '%s' "$1"; fi; }
+pi_home_win=$(pi_native "$pi_home")
+pi_fake() {  # pi_fake <pid> <socket> <收件记录>：登记一个 Pi 会话并起它的监听，进程号放 pi_job
+  local p=$1 s=$2 save=$3 key="$pi_home/.pi/agent/inbox/$1.key"
+  printf '{"token":"pik%s"}' "$p" >"$key"
+  jq -n --argjson pid "$p" --arg sid "smoke-$p-0000" --arg name "秘书$p" \
+    --arg cwd "$(pi_native "$work")" --arg sock "$s" --arg key "$(pi_native "$key")" \
+    --argjson at "$(( $(date +%s) * 1000 + p ))" \
+    '{protocol:1,pid:$pid,sessionId:$sid,name:$name,cwd:$cwd,socketPath:$sock,keyFile:$key,startedAt:$at}' \
+    >"$pi_home/.pi/agent/inbox/$p.json"
+  node - "$s" "$save" "pik$p" >"$save.out" 2>&1 <<'JS' &
+const net = require("node:net"), fs = require("node:fs");
+const [sock, save, token] = process.argv.slice(2);
+net.createServer((c) => {
+  let buf = "", authed = false;
+  c.on("data", (d) => {
+    buf += d.toString("utf8");
+    for (let i = buf.indexOf("\n"); i >= 0; i = buf.indexOf("\n")) {
+      const line = buf.slice(0, i); buf = buf.slice(i + 1);
+      if (!authed) {
+        authed = line.trim() === token;
+        if (!authed) { c.write('{"ok":false,"error":"unauthorized"}\n'); c.destroy(); return; }
+        fs.appendFileSync(save, "auth ok\n");
+        continue;
+      }
+      fs.appendFileSync(save, line + "\n");
+      c.write('{"ok":true,"delivered":{"mode":"followUp"}}\n');
+    }
+  });
+  c.on("error", () => {});
+}).listen(sock, () => fs.writeFileSync(save + ".ready", ""));
+JS
+  pi_job=$!
+}
+pi_ready() { local _; for _ in $(seq 100); do [ -f "$1.ready" ] && return 0; sleep 0.1; done; fail "假 Pi 会话没起来：$1"; }
+pi_on() { HOME="$pi_home" USERPROFILE="$pi_home_win" json secretary bridge --detach --pi "$1" --batch 1; }
+pi_sent() { local _; for _ in $(seq 100); do grep -q "$2" "$1" 2>/dev/null && return 0; sleep 0.1; done; fail "事件没投到 $1：$(cat "$1" 2>/dev/null)"; }
+pi_wait() { local _; for _ in $(seq 150); do grep -q "$2" "$1" 2>/dev/null && return 0; sleep 0.1; done; fail "没等到「$2」：$(tail -3 "$1" 2>/dev/null)"; }
+
+s1="$work/pi1.sock"; [ -z "$win" ] || s1='\\.\pipe\atrium-smoke-pi1-'"$$"
+p1="$work/pi1.txt"; pi_fake 90001 "$s1" "$p1"; jobs="$jobs $pi_job"; pi_ready "$p1"
+out=$(pi_on 90001); has '.ok and .result.pid > 0'
+pi_pid1=$(jq -r .result.pid <<<"$out"); pid="$pid $pi_pid1"
+out=$(pi_on 90001); has '.result.pid == '"$pi_pid1"   # 同一会话不起第二个
+out=$(json task add 派人看日志); t_pi1=$(jq -r .result.id <<<"$out"); json task stop "$t_pi1" >/dev/null
+pi_sent "$p1" "$t_pi1"
+head -1 "$p1" | grep -qx 'auth ok' || fail "没先认证：$(head -1 "$p1")"
+grep -q '"as":"external"' "$p1" || fail "投到 Pi 的消息没标成来自外部"
+grep -q '"from":"atrium-secretary"' "$p1" || fail "投到 Pi 的消息没写谁发的"
+grep -q '"deliverAs":"followUp"' "$p1" || fail "秘书会话忙时应排在当前这轮之后"
+grep -q '【Atrium 事件】' "$p1" || fail "注入的不是事件清单：$(cat "$p1")"
+out=$(json secretary bridge --status); has '.result.bridge.pid == '"$pi_pid1"' and .result.listener.via == "Pi 会话，经注入"'
+
+# 另一个 Pi 会话 /secretary on：抢过收件地址，旧的自己退出
+s2="$work/pi2.sock"; [ -z "$win" ] || s2='\\.\pipe\atrium-smoke-pi2-'"$$"
+p2="$work/pi2.txt"; pi_fake 90002 "$s2" "$p2"; jobs="$jobs $pi_job"; pi_ready "$p2"
+out=$(pi_on 90002); has '.ok and .result.pid > 0 and .result.pid != '"$pi_pid1"
+pi_pid2=$(jq -r .result.pid <<<"$out"); pid="$pid $pi_pid2"
+out=$(json task add "叫醒旧 bridge"); t_pi2=$(jq -r .result.id <<<"$out"); json task stop "$t_pi2" >/dev/null
+pi_wait "$ATRIUM_DATA/secretary/bridge.log" "另一个秘书会话的 bridge 已接手"
+out=$(json secretary bridge --status); has '.result.bridge.pid == '"$pi_pid2"
+# 旧的退了以后再来一条：新会话收得到，旧会话不再收
+out=$(json task add 再派人看); t_pi3=$(jq -r .result.id <<<"$out"); json task stop "$t_pi3" >/dev/null
+pi_sent "$p2" "$t_pi3"
+sleep 1; grep -q "$t_pi3" "$p1" && fail "旧会话还在收事件：$(cat "$p1")" || true
+# /secretary off：停掉 bridge，让出收件地址
+out=$(json secretary bridge --stop); has '.result.stopped'
+out=$(json secretary bridge --status); has '.result.bridge == null'
+
 step "技能、资料、凭据、选项单、定时任务（第二波 D）"
 mkdir -p "$work/skill/refs"; printf -- '---\ndescription: 修 bug 的做法\n---\n先复现再修\n' >"$work/skill/SKILL.md"; echo 附 >"$work/skill/refs/a.md"
 out=$(json skill add fix-bug "$work/skill" --checks pr_exists || true); has '.ok == false and (.error.message|test("--checks: 不认识的检查"))'

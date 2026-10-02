@@ -229,11 +229,14 @@ jq -e '.model == "x" and (.hooks.SessionStart[0].hooks[0].command == "atrium sec
 step "secretary bridge 到 Pi 会话（/secretary on 走的路：--pi 指名会话，同时只有一个在听）"
 # 假 pi-inbox：逐行回执（bridge 拿到回执才算送出）。用 node 写，Unix socket 与 Windows 命名管道共用一份。
 pi_home="$work/home"; mkdir -p "$pi_home/.pi/agent/inbox"
+# Windows（Git Bash）：bash 自己按 POSIX 路径读写，而 atrium 进程拿到的是系统给的 Windows 路径（%USERPROFILE%、登记里的文件路径），要转一下。
+pi_native() { if command -v cygpath >/dev/null 2>&1; then cygpath -w "$1"; else printf '%s' "$1"; fi; }
+pi_home_win=$(pi_native "$pi_home")
 pi_fake() {  # pi_fake <pid> <socket> <收件记录>：登记一个 Pi 会话并起它的监听，进程号放 pi_job
   local p=$1 s=$2 save=$3 key="$pi_home/.pi/agent/inbox/$1.key"
   printf '{"token":"pik%s"}' "$p" >"$key"
   printf '{"pid":%s,"sessionId":"smoke-%s-0000","name":"秘书%s","cwd":"%s","socketPath":"%s","keyFile":"%s","startedAt":%s}' \
-    "$p" "$p" "$p" "$work" "$s" "$key" "$(( $(date +%s) * 1000 + p ))" >"$pi_home/.pi/agent/inbox/$p.json"
+    "$p" "$p" "$p" "$(pi_native "$work")" "$s" "$(pi_native "$key")" "$(( $(date +%s) * 1000 + p ))" >"$pi_home/.pi/agent/inbox/$p.json"
   node - "$s" "$save" "pik$p" >"$save.out" 2>&1 <<'JS' &
 const net = require("node:net"), fs = require("node:fs");
 const [sock, save, token] = process.argv.slice(2);
@@ -259,7 +262,7 @@ JS
   pi_job=$!
 }
 pi_ready() { local _; for _ in $(seq 100); do [ -f "$1.ready" ] && return 0; sleep 0.1; done; fail "假 Pi 会话没起来：$1"; }
-pi_on() { HOME="$pi_home" USERPROFILE="$pi_home" json secretary bridge --detach --pi "$1" --batch 1; }
+pi_on() { HOME="$pi_home" USERPROFILE="$pi_home_win" json secretary bridge --detach --pi "$1" --batch 1; }
 pi_sent() { local _; for _ in $(seq 100); do grep -q "$2" "$1" 2>/dev/null && return 0; sleep 0.1; done; fail "事件没投到 $1：$(cat "$1" 2>/dev/null)"; }
 pi_wait() { local _; for _ in $(seq 150); do grep -q "$2" "$1" 2>/dev/null && return 0; sleep 0.1; done; fail "没等到「$2」：$(tail -3 "$1" 2>/dev/null)"; }
 

@@ -41,11 +41,13 @@ func Module() app.Module { return app.Module{Name: "secretary", Commands: Comman
 func Commands(t *cli.Table) {
 	t.Group("secretary", "秘书")
 	t.Add(cli.Command{Path: "secretary bridge",
-		Summary: "在 Claude Code 秘书会话里常驻，把要处理的事件注入会话；--install-hook 让它随会话自动起",
+		Summary: "在秘书会话里常驻，把要处理的事件注入会话；Claude Code 用 --install-hook 随会话自动起，Pi 由扩展用 --pi 起",
 		Flags: []cli.Flag{
-			{Name: "detach", Bool: true, Help: "后台起（SessionStart hook 用），起好后输出根部门要点、此刻全景与秘书备忘就返回"},
+			{Name: "detach", Bool: true, Help: "后台起（SessionStart hook 与 Pi 扩展用），起好后输出根部门要点、此刻全景与秘书备忘就返回"},
 			{Name: "install-hook", Bool: true, Help: "在秘书目录的 .claude/settings.local.json 加 SessionStart hook 与 env ATRIUM_AS=secretary（命令署名秘书）"},
 			{Name: "dir", Value: "目录", Help: "--install-hook 的秘书目录（缺省当前目录）"},
+			{Name: "pi", Value: "会话", Help: "Pi 秘书会话：pid、名字或会话 id 前缀（读 ~/.pi/agent/inbox 里的登记）"},
+			{Name: "stop", Bool: true, Help: "停掉在跑的 bridge 让出收件地址（Pi 里 /secretary off 用）"},
 			{Name: "status", Bool: true, Help: "看 bridge 在不在跑、秘书在不在听"},
 			{Name: "batch", Value: "秒", Help: "首条事件到了之后攒多久再送（缺省 30）"},
 		},
@@ -75,16 +77,19 @@ func bridgeCommand(c *cli.Ctx) error {
 		return err
 	}
 	modes := 0
-	for _, m := range []string{"detach", "install-hook", "status"} {
+	for _, m := range []string{"detach", "install-hook", "status", "stop"} {
 		if c.Bool(m) {
 			modes++
 		}
 	}
 	if modes > 1 {
-		return api.Usage("--detach、--install-hook、--status 只能给一个")
+		return api.Usage("--detach、--install-hook、--status、--stop 只能给一个")
 	}
 	if c.Has("dir") && !c.Bool("install-hook") {
 		return api.Usage("--dir: 只和 --install-hook 一起用")
+	}
+	if c.Has("pi") && (c.Bool("install-hook") || c.Bool("status") || c.Bool("stop")) {
+		return api.Usage("--pi: 只和 --detach 一起用（或单独跑 bridge）")
 	}
 	batch, err := c.Int("batch", int(BatchWindow.Seconds()))
 	if err != nil {
@@ -98,8 +103,10 @@ func bridgeCommand(c *cli.Ctx) error {
 		return installHook(c)
 	case c.Bool("status"):
 		return status(c)
+	case c.Bool("stop"):
+		return bridgeStop(c)
 	}
-	endpoint, token, err := sessionInbox(c.Env.Getenv)
+	in, err := resolveInbox(c)
 	if err != nil {
 		return err
 	}
@@ -108,22 +115,64 @@ func bridgeCommand(c *cli.Ctx) error {
 		return err
 	}
 	if c.Bool("detach") {
-		return detach(c, p, endpoint, batch)
+		return detach(c, p, in, batch)
 	}
-	return foreground(c, p, endpoint, token, time.Duration(batch)*time.Second)
+	return foreground(c, p, in, time.Duration(batch)*time.Second)
 }
 
-// sessionInbox 读本会话的收件地址与口令：只在 Claude Code 会话的 hook 与 Bash 子进程里有。
-func sessionInbox(getenv func(string) string) (string, string, error) {
+// inbox 是秘书会话的收件地址。两种会话的协议不同：Pi 逐条回执（platform/piinbox.go），Claude Code 只收不回。
+type inbox struct {
+	kind     string // kindPi 或 kindClaude
+	endpoint string
+	token    string
+}
+
+const (
+	kindPi     = "pi"
+	kindClaude = "claude-code"
+	// Pi 收件地址与口令：Pi 扩展（/secretary on）起 bridge 时写进环境，bridge 再传给它自己的子进程。
+	piInboxEnv = "ATRIUM_PI_INBOX"
+	piTokenEnv = "ATRIUM_PI_TOKEN"
+)
+
+// resolveInbox 定这次 bridge 往哪送：--pi 指名本机一个 Pi 会话，否则从环境变量认本会话的收件地址。
+func resolveInbox(c *cli.Ctx) (inbox, error) {
+	if q := c.Str("pi"); q != "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return inbox{}, err
+		}
+		list, err := platform.ListPiInbox(home)
+		if err != nil {
+			return inbox{}, err
+		}
+		hit, err := MatchPiInbox(list, q)
+		if err != nil {
+			return inbox{}, err
+		}
+		token, err := hit.Token()
+		if err != nil {
+			return inbox{}, api.Usage("Pi 会话 %d 的口令读不出：%v", hit.PID, err)
+		}
+		return inbox{kind: kindPi, endpoint: hit.Socket, token: token}, nil
+	}
+	return sessionInbox(runtime.GOOS, c.Env.Getenv)
+}
+
+// sessionInbox 读本会话的收件地址与口令：Claude Code 的在 hook 与 Bash 子进程里有，Pi 的由扩展起 bridge 时写进环境。
+func sessionInbox(goos string, getenv func(string) string) (inbox, error) {
+	if endpoint, token := getenv(piInboxEnv), getenv(piTokenEnv); endpoint != "" && token != "" {
+		return inbox{kind: kindPi, endpoint: endpoint, token: token}, nil
+	}
 	raw, token := getenv("CLAUDE_CODE_MESSAGING_SOCKET"), getenv("CLAUDE_CODE_MESSAGING_TOKEN")
 	if raw == "" || token == "" {
-		return "", "", api.Usage("不在 Claude Code 会话里：没有 CLAUDE_CODE_MESSAGING_SOCKET 与 CLAUDE_CODE_MESSAGING_TOKEN（在秘书会话的 Bash 或 SessionStart hook 里运行）")
+		return inbox{}, api.Usage("不在秘书会话里：没有 %s/%s（Pi 会话里先 /secretary on）也没有 CLAUDE_CODE_MESSAGING_SOCKET/CLAUDE_CODE_MESSAGING_TOKEN", piInboxEnv, piTokenEnv)
 	}
-	endpoint := platform.MessagingEndpoint(runtime.GOOS, raw)
+	endpoint := platform.MessagingEndpoint(goos, raw)
 	if endpoint == "" {
-		return "", "", api.Usage("CLAUDE_CODE_MESSAGING_SOCKET 认不出：%q", raw)
+		return inbox{}, api.Usage("CLAUDE_CODE_MESSAGING_SOCKET 认不出：%q", raw)
 	}
-	return endpoint, token, nil
+	return inbox{kind: kindClaude, endpoint: endpoint, token: token}, nil
 }
 
 // ---- 登记（数据目录 secretary/bridge.json）----
@@ -167,16 +216,16 @@ func releaseRecord(p config.Paths, pid int) {
 
 // ---- 前台常驻 ----
 
-func foreground(c *cli.Ctx, p config.Paths, endpoint, token string, batch time.Duration) error {
+func foreground(c *cli.Ctx, p config.Paths, in inbox, batch time.Duration) error {
 	cur, err := readRecord(p)
 	if err != nil {
 		return err
 	}
-	if cur != nil && cur.PID != os.Getpid() && Claim(cur, endpoint, platform.Alive) == "running" {
+	if cur != nil && cur.PID != os.Getpid() && Claim(cur, in.endpoint, platform.Alive) == "running" {
 		return api.Conflict("本会话的 bridge 已在跑（pid %d）", cur.PID).WithNext("atrium secretary bridge --status")
 	}
 	me := os.Getpid()
-	if err := writeRecord(p, Record{PID: me, Socket: endpoint, StartedAt: store.Now()}); err != nil {
+	if err := writeRecord(p, Record{PID: me, Socket: in.endpoint, Kind: in.kind, StartedAt: store.Now()}); err != nil {
 		return err
 	}
 	defer releaseRecord(p, me)
@@ -184,23 +233,22 @@ func foreground(c *cli.Ctx, p config.Paths, endpoint, token string, batch time.D
 	defer stop()
 	c.Context = ctx // 收到结束信号时打断挂着的 events wait
 	lg := log.New(c.Env.Stderr, "", log.LstdFlags)
-	lg.Printf("bridge 开始（pid %d，会话收件地址 %s）", me, endpoint)
-	b := &bridge{c: c, p: p, endpoint: endpoint, token: token, me: me, log: lg, sent: Sent{}, batch: batch}
+	lg.Printf("bridge 开始（pid %d，%s 会话，收件地址 %s）", me, in.kind, in.endpoint)
+	b := &bridge{c: c, p: p, in: in, me: me, log: lg, sent: Sent{}, batch: batch}
 	reason := b.run(ctx)
 	lg.Printf("bridge 退出：%s", reason)
 	return c.Done(map[string]any{"reason": reason}, "bridge 已退出："+reason, "atrium secretary bridge --status")
 }
 
 type bridge struct {
-	c        *cli.Ctx
-	p        config.Paths
-	endpoint string
-	token    string
-	me       int
-	log      *log.Logger
-	sent     Sent
-	batch    time.Duration
-	live     Liveness
+	c     *cli.Ctx
+	p     config.Paths
+	in    inbox
+	me    int
+	log   *log.Logger
+	sent  Sent
+	batch time.Duration
+	live  Liveness
 }
 
 // closed 记一次连会话的结果（探测或送入），返回退出原因；空串是会话还在。连不上与恢复各记一行日志。
@@ -219,7 +267,7 @@ func (b *bridge) closed(err error) string {
 
 func (b *bridge) listen(stop bool) error {
 	return b.c.Call("POST", "/api/events/listen",
-		events.ListenBody{As: events.Secretary, Via: "claude-code 会话，经注入", TTLSeconds: ListenTTL, Stop: stop}, nil)
+		events.ListenBody{As: events.Secretary, Via: kindText(b.in.kind) + " 会话，经注入", TTLSeconds: ListenTTL, Stop: stop}, nil)
 }
 
 func (b *bridge) run(ctx context.Context) string {
@@ -260,7 +308,7 @@ func (b *bridge) run(ctx context.Context) string {
 		if r, err := readRecord(b.p); err == nil && r != nil && r.PID != b.me {
 			return "另一个秘书会话的 bridge 已接手"
 		}
-		if reason := b.closed(platform.ProbeEndpoint(b.endpoint, 3*time.Second)); reason != "" {
+		if reason := b.closed(platform.ProbeEndpoint(b.in.endpoint, 3*time.Second)); reason != "" {
 			return reason
 		}
 		wait := 60 * time.Second
@@ -290,7 +338,7 @@ func (b *bridge) run(ctx context.Context) string {
 			pending = nil
 			continue
 		}
-		err := platform.SendLines(b.endpoint, InboxLines(b.token, Prompt(batch, RemindAfter)), 5*time.Second)
+		err := b.send(Prompt(batch, RemindAfter))
 		if reason := b.closed(err); reason != "" {
 			return reason
 		}
@@ -307,6 +355,14 @@ func (b *bridge) run(ctx context.Context) string {
 	}
 }
 
+// send 把一批事件送进会话：Pi 走 pi-inbox 协议（逐条读回执），Claude Code 只写完不回执。
+func (b *bridge) send(text string) error {
+	if b.in.kind == kindPi {
+		return platform.SendPiMessages(b.in.endpoint, b.in.token, []string{text}, 5*time.Second)
+	}
+	return platform.SendLines(b.in.endpoint, InboxLines(b.in.token, text), 5*time.Second)
+}
+
 func sleep(ctx context.Context, d time.Duration) {
 	select {
 	case <-ctx.Done():
@@ -316,7 +372,7 @@ func sleep(ctx context.Context, d time.Duration) {
 
 // ---- 后台起（SessionStart hook）----
 
-func detach(c *cli.Ctx, p config.Paths, endpoint string, batch int) error {
+func detach(c *cli.Ctx, p config.Paths, in inbox, batch int) error {
 	cur, err := readRecord(p)
 	if err != nil {
 		return err
@@ -325,7 +381,7 @@ func detach(c *cli.Ctx, p config.Paths, endpoint string, batch int) error {
 	if err != nil {
 		return err
 	}
-	if Claim(cur, endpoint, platform.Alive) == "running" {
+	if Claim(cur, in.endpoint, platform.Alive) == "running" {
 		return c.Done(cur, fmt.Sprintf("Atrium bridge 已在跑（pid %d）：要处理的事件以「【Atrium 事件】」消息送进本会话，处理完 atrium events ack <编号>。%s\n\n%s", cur.PID, WorkStyle, brief),
 			"atrium secretary bridge --status")
 	}
@@ -341,9 +397,14 @@ func detach(c *cli.Ctx, p config.Paths, endpoint string, batch int) error {
 		return err
 	}
 	defer lf.Close()
-	// bridge 要会话收件地址与数据目录，环境原样带上（它不是执行者）。
+	// bridge 要会话收件地址与数据目录，环境原样带上（它不是执行者）；Pi 的收件地址不在当前环境里，显式传给它。
+	env := platform.EnvMap(os.Environ())
+	if in.kind == kindPi {
+		env[platform.EnvKey(runtime.GOOS, piInboxEnv)] = in.endpoint
+		env[platform.EnvKey(runtime.GOOS, piTokenEnv)] = in.token
+	}
 	cmd, err := platform.Start(platform.Spec{Path: self, Args: []string{"secretary", "bridge", "--batch", fmt.Sprint(batch)},
-		Env: platform.EnvMap(os.Environ()), Stdout: lf, Stderr: lf, Detached: true})
+		Env: env, Stdout: lf, Stderr: lf, Detached: true})
 	if err != nil {
 		return err
 	}
@@ -428,13 +489,50 @@ func status(c *cli.Ctx) error {
 	case out.Listener != nil:
 		text := fmt.Sprintf("秘书在听（%s）", out.Listener.Via)
 		if cur != nil {
-			text += fmt.Sprintf(" · bridge pid %d", cur.PID)
+			text += fmt.Sprintf(" · bridge pid %d（%s 会话）", cur.PID, kindText(cur.Kind))
 		}
 		return c.Done(res, text, "atrium events wait --timeout 0")
 	case cur != nil:
 		return c.Done(res, fmt.Sprintf("bridge 在跑（pid %d），但还没向服务报「在听」；看日志：%s", cur.PID, logPath(p)), "atrium secretary bridge --status")
 	}
 	return c.Done(res, "没有 bridge 在听：秘书会话收不到注入的事件", "atrium secretary bridge --install-hook")
+}
+
+// kindText 把登记里的会话种类写成人看的话（早期登记没有这个字段，那时只有 Claude Code 一种）。
+func kindText(kind string) string {
+	if kind == kindPi {
+		return "Pi"
+	}
+	return "Claude Code"
+}
+
+// bridgeStop 停掉登记里的 bridge 并清登记：Pi 里 /secretary off 靠它让出收件地址（Claude Code 的 bridge 随会话退出，不用停）。
+func bridgeStop(c *cli.Ctx) error {
+	p, err := c.Paths()
+	if err != nil {
+		return err
+	}
+	cur, err := readRecord(p)
+	if err != nil {
+		return err
+	}
+	if cur == nil || !platform.Alive(cur.PID) {
+		if cur != nil {
+			releaseRecord(p, cur.PID)
+		}
+		return c.Done(map[string]any{"stopped": false}, "没有 bridge 在跑", "atrium secretary bridge --status")
+	}
+	if err := platform.KillTree(cur.PID); err != nil {
+		return fmt.Errorf("停不掉 pid %d：%w；看日志：%s", cur.PID, err, logPath(p))
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) && platform.Alive(cur.PID) {
+		time.Sleep(100 * time.Millisecond)
+	}
+	releaseRecord(p, cur.PID)
+	return c.Done(map[string]any{"stopped": true, "pid": cur.PID, "socket": cur.Socket},
+		fmt.Sprintf("已停 bridge（pid %d，%s 会话）：收件地址让出，别的会话用 /secretary on 接手", cur.PID, kindText(cur.Kind)),
+		"atrium secretary bridge --status")
 }
 
 func installHook(c *cli.Ctx) error {

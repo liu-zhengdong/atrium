@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/liu-zhengdong/atrium/internal/api"
 	"github.com/liu-zhengdong/atrium/internal/events"
 	"github.com/liu-zhengdong/atrium/internal/ledger"
 	"github.com/liu-zhengdong/atrium/internal/org"
@@ -171,6 +172,7 @@ func InboxLines(token, text string) []string {
 type Record struct {
 	PID       int    `json:"pid"`
 	Socket    string `json:"socket"`
+	Kind      string `json:"kind,omitempty"` // pi 或 claude-code；早期登记没有这个字段
 	StartedAt int64  `json:"started_at"`
 }
 
@@ -187,6 +189,52 @@ func Claim(cur *Record, socket string, alive func(int) bool) string {
 
 // HookCommand 是 SessionStart hook 里跑的命令。
 const HookCommand = "atrium secretary bridge --detach"
+
+// MatchPiInbox 按 pid、名字或会话 id 前缀在 pi-inbox 登记里挑一个会话：
+// 只对上一个就返回它；一个都没对上报错，对上多个时报出候选让人用 pid 指名。
+func MatchPiInbox(list []platform.PiInbox, q string) (platform.PiInbox, error) {
+	var hit []platform.PiInbox
+	if pid, err := strconv.Atoi(q); err == nil {
+		for _, in := range list {
+			if in.PID == pid {
+				hit = append(hit, in)
+			}
+		}
+	}
+	if len(hit) == 0 {
+		for _, in := range list {
+			if (in.Name != "" && in.Name == q) || strings.HasPrefix(in.SessionID, q) {
+				hit = append(hit, in)
+			}
+		}
+	}
+	switch len(hit) {
+	case 1:
+		return hit[0], nil
+	case 0:
+		return platform.PiInbox{}, api.Usage("没有这个 Pi 会话：%q（本机在登记的是 %s；pi-inbox list 看得到）", q, piInboxListText(list))
+	}
+	return platform.PiInbox{}, api.Usage("%q 对上多个 Pi 会话：%s；用 pid 指名", q, piInboxListText(hit))
+}
+
+// piInboxListText 把候选会话写成一行的样子，用于认不出来时告诉用户有哪些。
+func piInboxListText(list []platform.PiInbox) string {
+	if len(list) == 0 {
+		return "无"
+	}
+	parts := make([]string, 0, len(list))
+	for _, in := range list {
+		who := in.Name
+		if who == "" && len(in.SessionID) >= 8 {
+			who = in.SessionID[:8]
+		}
+		if who == "" {
+			who = "无名"
+		}
+		parts = append(parts, fmt.Sprintf("%d（%s，%s）", in.PID, who, in.Cwd))
+	}
+	return strings.Join(parts, "、")
+}
 
 // WithHook 在 Claude Code 设置里加一条起 bridge 的 SessionStart hook，并在 env 里写 ATRIUM_AS=secretary
 // （会话里发的命令署名秘书）；两样都有就不改，changed 为 false。

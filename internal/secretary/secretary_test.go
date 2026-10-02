@@ -229,3 +229,55 @@ func TestNotifyPrompt(t *testing.T) {
 		}
 	}
 }
+
+// MatchPiInbox：pid、名字、会话 id 前缀三种挑法，对不上与对上多个都要说清楚。
+func TestMatchPiInbox(t *testing.T) {
+	list := []platform.PiInbox{
+		{PID: 41, SessionID: "aaaa1111-2222", Name: "秘书", Cwd: "/repo/atrium"},
+		{PID: 42, SessionID: "bbbb3333-4444", Cwd: "/repo"},
+		{PID: 43, SessionID: "bbbb5555-6666", Cwd: "/tmp"},
+	}
+	if in, err := MatchPiInbox(list, "41"); err != nil || in.PID != 41 {
+		t.Fatalf("按 pid 挑：%v %+v", err, in)
+	}
+	if in, err := MatchPiInbox(list, "秘书"); err != nil || in.PID != 41 {
+		t.Fatalf("按名字挑：%v %+v", err, in)
+	}
+	if in, err := MatchPiInbox(list, "aaaa"); err != nil || in.PID != 41 {
+		t.Fatalf("按会话 id 前缀挑：%v %+v", err, in)
+	}
+	if _, err := MatchPiInbox(list, "9999"); err == nil || !strings.Contains(err.Error(), "没有这个 Pi 会话") {
+		t.Fatalf("对不上应报错并列出在登记的会话：%v", err)
+	}
+	_, err := MatchPiInbox(list, "bbbb")
+	if err == nil || !strings.Contains(err.Error(), "42") || !strings.Contains(err.Error(), "43") {
+		t.Fatalf("对上多个应报出候选：%v", err)
+	}
+}
+
+// sessionInbox：Pi 的收件地址优先（扩展起的 bridge 带着它），其次 Claude Code 的，都没有就报错。
+func TestSessionInbox(t *testing.T) {
+	pi := func(k string) string {
+		return map[string]string{piInboxEnv: "/tmp/pi.sock", piTokenEnv: "t-pi"}[k]
+	}
+	in, err := sessionInbox("linux", pi)
+	if err != nil || in.kind != kindPi || in.endpoint != "/tmp/pi.sock" || in.token != "t-pi" {
+		t.Fatalf("Pi 环境：%v %+v", err, in)
+	}
+	cc := func(k string) string {
+		return map[string]string{"CLAUDE_CODE_MESSAGING_SOCKET": "uds:/tmp/cc.sock", "CLAUDE_CODE_MESSAGING_TOKEN": "t-cc"}[k]
+	}
+	in, err = sessionInbox("linux", cc)
+	if err != nil || in.kind != kindClaude || in.endpoint != "/tmp/cc.sock" || in.token != "t-cc" {
+		t.Fatalf("Claude Code 环境：%v %+v", err, in)
+	}
+	if _, err := sessionInbox("linux", func(string) string { return "" }); err == nil || !strings.Contains(err.Error(), piInboxEnv) {
+		t.Fatalf("不在会话里应报错并提示 /secretary on：%v", err)
+	}
+	bad := func(k string) string {
+		return map[string]string{"CLAUDE_CODE_MESSAGING_SOCKET": "不是路径", "CLAUDE_CODE_MESSAGING_TOKEN": "t"}[k]
+	}
+	if _, err := sessionInbox("linux", bad); err == nil || !strings.Contains(err.Error(), "认不出") {
+		t.Fatalf("收件地址认不出应报错：%v", err)
+	}
+}

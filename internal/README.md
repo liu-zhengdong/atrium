@@ -26,7 +26,7 @@ Go 代码怎么分包、包之间怎么调用、并行开发时各自改哪里�
 | `api` | 完成 | HTTP 信封、错误码、路由（认证在匹配后统一做，默认拒绝）、客户端 | — |
 | `cli` | 完成 | 命令表、参数解析、帮助生成、回执（`Done`）、执行者拦截 | — |
 | `app` | 完成 | `Module`、`Env` | — |
-| `platform` | 完成 | 进程树结束、存活、shell、PATH 查找、服务与执行者白名单环境、凭据文件权限 | — |
+| `platform` | 完成 | 进程树结束、存活、shell、PATH 查找、服务与执行者白名单环境、凭据文件权限、会话收件地址（Claude Code 的 socket 与 Pi 的 pi-inbox：读登记与口令、逐条投递并读回执） | — |
 | `pause` | 完成 | 一键停机的状态与判定 `Paused` | `pauses` |
 | `service` | 完成 | start/serve/status/stop/restart/pause/resume/auth rotate；单实例；令牌 | — |
 | `ledger` | 完成 | 任务（仓库或工作地点二选一；都没写的，`task run` 派出去时沿用部门的仓库——部门恰有一个才沿用，纯判定 `DeptRepo`、写入 `UseDeptRepo`；运行时自己派的审阅、定时任务不经这里）、父子、依赖、状态机、就绪、汇总；草稿记的发现带来源（用户纠正／组织发现）与类，来源一行带记录人（任务分派人）的名字（`org.NameOf`），用户本人验收退回、取消任务时 `Apply` 自动记一条用户纠正（纯判定 `Correction`）；三个目标的数（纠正、认可、复发）由纯函数 `Measure` 算、`ReadGoals` 读，top 与网页今天页共用；`task add/ls/show/set/stop/tree/note/wait`（`task tree` 每件标出能派还是在等谁）（`task stop` 即转受阻，分派任务循环结束执行者；`task set --status` 不收 blocked） | `tasks` `task_dirs` `task_findings` `task_deps` `task_events` |
@@ -47,7 +47,7 @@ Go 代码怎么分包、包之间怎么调用、并行开发时各自改哪里�
 | `quota` | 完成 | 额度读取、多机合并、富余（`Spares`）；只有服务的后台循环去读（本机自带读取到期就读，OpenQuota 每 5 分钟），读数连同 OpenQuota 的都存 `quota_cache`，分派任务、网页、命令都只取 `Last`；隔离实例（服务与代理都按数据目录不是缺省的算）不读本机登录与 OpenQuota；`quota`（只读）、`quota set`（改给用户留的份额） | `quota_cache` `quota_settings` |
 | `web` | 完成 | 只读网页与只读接口；`map`；点了立刻切页：先画上次数据（没有画页头与骨架），nav 与页面数据并行取，推送来了数据没变的一处不重画；执行者页额度是存下的读数（`quota.Last`），后台读到新数经推送随整页重取；页面上提到部门、身份（你、秘书、负责人）、机器一律写名字，不写短号（服务端 `orgIndex.name`，前端 `nameOf` 查 nav 带的同一张名字表）；今天页三块：等你、在做、「今天完成 | 接下来 7 天」页签，三个目标只在标题行右侧写近 7 天一行（累计在 `top`）；长列表（今天完成、部门页的草稿与三天内结束）先摆 5 件、其余折成「还有 N 件」；任务抽屉的步骤条按任务给（没有仓库的只到验收），结束了的不画，事实有值才出现；选项单每项收成标题、能得到什么、代价三行，点开看全文；「等你」= 待拍板的选项单 + 等你验收的交付 + 递到你这层的卡住任务 + 上报到秘书还没确认的事 + 等人处理的执行者不可用标记（从 `worker_marks` 现读，解除就消失；额度用尽不算）；部门页负责人一行点开是负责人抽屉（执行者组合、负责哪些部门、备忘按行分段，地址 `#oN/aN`，数据就用部门页的）；部门页任务按父子排成树（结束的子任务两件以上折成一行，没派的行尾写「等 tN」），任务抽屉给上级、子任务、要等的、在等它的，来源后的负责人名字点开是他的负责人抽屉；任务抽屉的「经过」是执行者真日志按段解析（`workers.ReadTrace`，与 `task log` 同一份解析）；定时任务在部门页（挂上一轮）、今天页「接下来 7 天」页签和抽屉（最近 5 轮，`agenda.Rounds`）里看得到，多久一轮与 `schedule ls` 共用 `agenda.Cadence`；部门页资料点开是资料抽屉（能放宽到整个主内容区），原文走 `/ui/material/mN`（带 CSP sandbox，pdf 除外），一条资料是一个文件或一个目录，打开渲染正文，按扩展名一处分派：md（相对图片、链接在这条资料的文件里找）、html（沙箱 iframe，从带键的 `/ui/frame/mN-<键>/<相对路径>` 打开，相对路径只在这条资料里找；只有这个地址对沙箱页面放行跨域读，模块脚本、fetch 才能用）、没有正文的图片集列出缩略图、pdf 与图片（浏览器原生）、其它文本等宽、docx 与 xlsx（`static/lib` 里 embed 的前端库，打开时才加载），其余给下载；代为注册一次性的 `import`（实现在 `importer`） | — |
 | `importer` | 完成 | 从旧 TS 库只读导入部门、要点、负责人、备忘、技能、资料、档案、机器 | — |
-| `secretary` | 完成 | 把事件注入 Claude Code 会话；`secretary bridge`（`--install-hook` 装 SessionStart hook 与 `ATRIUM_AS=secretary`；`--detach` 起好后输出根部门要点、此刻全景与秘书备忘进会话；执行者令牌调不了事件接口，执行者里起不来）、`statusline`（状态栏调用，不列在帮助里） | — |
+| `secretary` | 完成 | 把事件注入秘书会话（Claude Code，或 Pi：`--pi` 按 pid／名字／会话 id 前缀指名，经 pi-inbox 投递）；`secretary bridge`（`--install-hook` 装 SessionStart hook 与 `ATRIUM_AS=secretary`；`--detach` 起好后输出根部门要点、此刻全景与秘书备忘进会话；`--stop` 停掉让出收件地址，Pi 里 `/secretary off` 用；同时只有一个 bridge 在听，后起的接手、旧的看到登记换人就退出；执行者令牌调不了事件接口，执行者里起不来）、`statusline`（状态栏调用，不列在帮助里） | — |
 
 ## 共同约定
 

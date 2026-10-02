@@ -425,6 +425,12 @@ func piAdapter() *Driver {
 		if in.Session != "" {
 			args = append(args, "--session-id", in.Session)
 		}
+		// pi 默认把整场对话（提示词、每轮消息、思考、工具调用）写进用户的 ~/.pi/agent/sessions，
+		// 而它起的进程没人再回头看会话文件——只有续接会读。放在这次运行的记录旁（数据目录里），
+		// 集中一处、可量可清；本机与远程给的提示词文件都在数据目录的这次运行下。
+		if in.PromptFile != "" {
+			args = append(args, "--session-dir", filepath.Join(filepath.Dir(in.PromptFile), "pi-sessions"))
+		}
 		return Launch{Exe: a.Exe, Args: args, Dir: in.Dir, StdinFile: in.PromptFile}, nil
 	}
 	return a

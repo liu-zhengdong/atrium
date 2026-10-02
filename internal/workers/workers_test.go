@@ -69,6 +69,7 @@ func TestBuild(t *testing.T) {
 		{tool: "grok", in: in("g", "low"), want: []string{"--prompt-file", pf, "--output-format", "streaming-messages-json", "-m", "g", "--reasoning-effort", "low", "--always-approve", "--cwd", dir}},
 		{tool: "pi", in: in("opencode-go/glm-5.3-flash", "high"), want: []string{"-p", "--mode", "json", "-na", "--model", "opencode-go/glm-5.3-flash", "--thinking", "high"}},
 		{tool: "pi", in: in("opencode-go/glm-5.3-flash", ""), want: []string{"--model", "opencode-go/glm-5.3-flash"}},
+		{tool: "pi", in: in("opencode-go/glm-5.3-flash", ""), want: []string{"--session-dir", filepath.Join(dir, "pi-sessions")}},
 		{tool: "pi", in: Request{Prompt: "x", PromptFile: pf, Dir: dir, Session: "0123abcd-0123-0123-0123-0123456789ab"}, want: []string{"-p", "--mode", "json", "-na", "--session-id", "0123abcd-0123-0123-0123-0123456789ab"}},
 		{tool: "pi", in: in("", "high"), bad: "要指定模型才能给思考强度"},
 		{tool: "agy", in: in("gemini-3.8-flash", "high"), want: []string{"--input-format", "stream-json", "--output-format", "stream-json", "--model", "gemini-3.8-flash", "--effort", "high"}},

@@ -235,8 +235,11 @@ pi_home_win=$(pi_native "$pi_home")
 pi_fake() {  # pi_fake <pid> <socket> <收件记录>：登记一个 Pi 会话并起它的监听，进程号放 pi_job
   local p=$1 s=$2 save=$3 key="$pi_home/.pi/agent/inbox/$1.key"
   printf '{"token":"pik%s"}' "$p" >"$key"
-  printf '{"pid":%s,"sessionId":"smoke-%s-0000","name":"秘书%s","cwd":"%s","socketPath":"%s","keyFile":"%s","startedAt":%s}' \
-    "$p" "$p" "$p" "$(pi_native "$work")" "$s" "$(pi_native "$key")" "$(( $(date +%s) * 1000 + p ))" >"$pi_home/.pi/agent/inbox/$p.json"
+  jq -n --argjson pid "$p" --arg sid "smoke-$p-0000" --arg name "秘书$p" \
+    --arg cwd "$(pi_native "$work")" --arg sock "$s" --arg key "$(pi_native "$key")" \
+    --argjson at "$(( $(date +%s) * 1000 + p ))" \
+    '{protocol:1,pid:$pid,sessionId:$sid,name:$name,cwd:$cwd,socketPath:$sock,keyFile:$key,startedAt:$at}' \
+    >"$pi_home/.pi/agent/inbox/$p.json"
   node - "$s" "$save" "pik$p" >"$save.out" 2>&1 <<'JS' &
 const net = require("node:net"), fs = require("node:fs");
 const [sock, save, token] = process.argv.slice(2);

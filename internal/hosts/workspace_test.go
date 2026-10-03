@@ -147,3 +147,18 @@ func assertTop(t *testing.T, dir string) {
 		t.Fatalf("顶层 %s，目录 %s", got, want)
 	}
 }
+
+// 生产 workspaceRun 原样返回标准输出（与 dispatch.run 同一契约）。
+func TestWorkspaceRunReturnsVerbatimOutput(t *testing.T) {
+	isolatedGit(t)
+	a := NewAgent(t.TempDir(), AgentConfig{}, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	out, err := a.workspaceRun(ctx, "", "git", "--version")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasSuffix(out, "\n") {
+		t.Fatalf("workspaceRun 应原样返回标准输出，实际 %q", out)
+	}
+}

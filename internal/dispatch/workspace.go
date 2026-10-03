@@ -83,7 +83,7 @@ func hostNeed(ctx context.Context, q store.Querier, w workers.Spec, t ledger.Tas
 	return n, nil
 }
 
-// run 跑一条命令（经 platform），返回标准输出；失败时带上标准错误。
+// run 跑一条命令（经 platform），原样返回标准输出（不 TrimSpace）：默认分支、-z 这类输出由调用方按自己的格式解析；失败时带上标准错误。
 func run(ctx context.Context, dir, name string, args ...string) (string, error) {
 	env := platform.EnvMap(os.Environ())
 	env["GIT_TERMINAL_PROMPT"] = "0"
@@ -108,7 +108,7 @@ func run(ctx context.Context, dir, name string, args ...string) (string, error) 
 	if err != nil {
 		return "", fmt.Errorf("%s %s：%v：%s", name, strings.Join(args, " "), err, strings.TrimSpace(errb.String()))
 	}
-	return strings.TrimSpace(out.String()), nil
+	return out.String(), nil
 }
 
 // Workdir 准备任务的工作目录：有仓库时在任务目录下建 git worktree（分支 task-tN，已有就沿用：交回原执行者接着改）。
@@ -146,7 +146,7 @@ func Workdir(ctx context.Context, data, task, repo, place string) (dir, branch s
 	if err != nil {
 		return "", "", err
 	}
-	if cur != branch {
+	if strings.TrimSpace(cur) != branch {
 		return "", "", api.Conflict("任务 %s 的工作树 %s 在分支 %s 上，不是 %s；拉起前停止，由负责人核对分支归属；不要进入其他任务工作树或删除现有改动", task, dir, cur, branch)
 	}
 	return dir, branch, nil
@@ -170,7 +170,7 @@ func checkoutRepo(ctx context.Context, main, url, dir, branch string) error {
 			return err
 		}
 		if head, err := run(ctx, main, "git", "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"); err == nil {
-			base = head
+			base = strings.TrimSpace(head)
 		} else if _, err := run(ctx, main, "git", "rev-parse", "--verify", "--quiet", "origin/main"); err == nil {
 			base = "origin/main"
 		}

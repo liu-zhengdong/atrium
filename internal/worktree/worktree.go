@@ -11,6 +11,7 @@ import (
 	"sync"
 )
 
+// Runner 跑一条命令并原样返回标准输出（不 TrimSpace）：按格式解析由调用方负责。
 type Runner func(context.Context, string, string, ...string) (string, error)
 
 // LocalMutation 沿用本机合入的串行锁：合入主分支与回收不能同时使用、删除同一个工作树。

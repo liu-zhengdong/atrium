@@ -28,18 +28,20 @@ func Create(ctx context.Context, clone, dir, branch, fallback string, run Runner
 	return err
 }
 
-// adopt 把已有文件、没有 .git 的目录做成工作树：先对照 base 查冲突，有冲突就报错、什么都不动；
-// 没有冲突时在旁边建不检出的工作树，把它的 .git 移进 dir 并修复登记，再写出跟踪的文件。原有文件留作未跟踪。
+// adopt 把已有文件、没有 .git 的目录做成工作树：先对照起点提交查冲突，有冲突就报错、什么都不动；
+// 没有冲突时在旁边建工作树，把跟踪的文件搬进目录，最后才移 .git 并修复登记。
+// 跟踪内容在 .git 之前就位：任何一步失败时目录都还没有 .git，下一轮不会把半成品当成检出放行。
 func adopt(ctx context.Context, clone, dir, branch, base string, run Runner) error {
 	tracked, err := run(ctx, clone, "git", "ls-tree", "-r", "-z", "--name-only", base)
 	if err != nil {
 		return err
 	}
+	files := splitZ(tracked)
 	existing, err := listTree(dir)
 	if err != nil {
 		return err
 	}
-	if c := conflicts(existing, splitZ(tracked)); len(c) > 0 {
+	if c := conflicts(existing, files, caseInsensitive(dir)); len(c) > 0 {
 		return fmt.Errorf("目录 %s 不是检出：里面没有 .git，已有的 %v 与任务仓库的文件冲突；拉起前停止，由负责人核对这些文件的来历，不要在上级目录干活", dir, c)
 	}
 	side := dir + ".checkout"
@@ -48,19 +50,24 @@ func adopt(ctx context.Context, clone, dir, branch, base string, run Runner) err
 	} else if !os.IsNotExist(err) {
 		return err
 	}
-	if _, err := run(ctx, clone, "git", "worktree", "add", "--quiet", "--no-checkout", "-B", branch, side, base); err != nil {
+	if _, err := run(ctx, clone, "git", "worktree", "add", "--quiet", "-B", branch, side, base); err != nil {
 		return err
+	}
+	for _, f := range files {
+		dst := filepath.Join(dir, filepath.FromSlash(f))
+		if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
+			return err
+		}
+		if err := os.Rename(filepath.Join(side, filepath.FromSlash(f)), dst); err != nil {
+			return err
+		}
 	}
 	if err := os.Rename(filepath.Join(side, ".git"), filepath.Join(dir, ".git")); err != nil {
 		return err
 	}
-	if err := os.Remove(side); err != nil {
+	if err := os.RemoveAll(side); err != nil {
 		return err
 	}
-	for _, args := range [][]string{{"worktree", "repair"}, {"reset", "--quiet"}, {"checkout-index", "--all"}} {
-		if _, err := run(ctx, dir, "git", args...); err != nil {
-			return err
-		}
-	}
-	return nil
+	_, err = run(ctx, dir, "git", "worktree", "repair")
+	return err
 }

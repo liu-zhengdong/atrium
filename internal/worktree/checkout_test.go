@@ -2,6 +2,7 @@ package worktree_test
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -183,4 +184,109 @@ func assertParentUntouched(t *testing.T, gh *fakegh.GH, parent, before string) {
 	if diff := gh.Must(parent, "diff", "HEAD"); diff != "" {
 		t.Fatalf("改了上级仓库：%s", diff)
 	}
+}
+
+// 第一次检出失败时目录不能留下 .git：否则下一轮会把它当成可复用的检出直接放行（t927 审阅 P1）。
+func TestEnsureRetryAfterFailedCheckout(t *testing.T) {
+	gh, ctx, parent, dir := parentRepo(t, "task-t1")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "keep.txt"), []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	before := gh.Must(parent, "rev-parse", "HEAD")
+	fail := true
+	run := func(c context.Context, d, name string, args ...string) (string, error) {
+		if fail && name == "git" && len(args) > 1 && args[0] == "worktree" && args[1] == "add" {
+			return "", errors.New("注入：检出失败")
+		}
+		return gh.Git.Run(c, d, name, args...)
+	}
+	checkout := func() error { return worktree.Create(ctx, gh.Work, dir, "task-t1", "main", run) }
+	if err := worktree.Ensure(ctx, dir, run, checkout); err == nil {
+		t.Fatal("第一次检出应失败")
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".git")); !os.IsNotExist(err) {
+		t.Fatal("失败后目录留下了 .git，下一轮会把它当成检出放行")
+	}
+	fail = false
+	if err := worktree.Ensure(ctx, dir, run, checkout); err != nil {
+		t.Fatal(err)
+	}
+	assertOwnTop(t, gh, dir)
+	if body, err := os.ReadFile(filepath.Join(dir, "README.md")); err != nil || strings.TrimSpace(string(body)) != "hi" {
+		t.Fatalf("重试没有完成检出：%q %v", body, err)
+	}
+	assertParentUntouched(t, gh, parent, before)
+}
+
+// 目标文件系统不区分大小写时（Windows 与默认的 macOS），已有的 readme.md 挡住仓库里的 README.md，拉起前拒绝。
+func TestEnsureCaseOnlyConflictRefuses(t *testing.T) {
+	gh, ctx, parent, dir := parentRepo(t, "task-t1")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "readme.md"), []byte("mine"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	before := gh.Must(parent, "rev-parse", "HEAD")
+	err := worktree.Ensure(ctx, dir, gh.Git.Run, func() error {
+		return worktree.Create(ctx, gh.Work, dir, "task-t1", "main", gh.Git.Run)
+	})
+	if !fsCaseInsensitive(t, dir) {
+		if err != nil {
+			t.Fatalf("区分大小写的文件系统上不该冲突：%v", err)
+		}
+		return
+	}
+	if err == nil || !strings.Contains(err.Error(), "readme.md") || !strings.Contains(err.Error(), "冲突") {
+		t.Fatalf("大小写不同的同名文件应拒绝：%v", err)
+	}
+	if body, readErr := os.ReadFile(filepath.Join(dir, "readme.md")); readErr != nil || string(body) != "mine" {
+		t.Fatalf("拒绝时改了目录：%q %v", body, readErr)
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, ".git")); !os.IsNotExist(statErr) {
+		t.Fatal("拒绝时仍做成了检出")
+	}
+	assertParentUntouched(t, gh, parent, before)
+}
+
+// 仓库里首个跟踪文件带前导空格时原样比对：Runner 不再 TrimSpace 掉它，冲突要查出来。
+func TestEnsureLeadingSpaceConflictRefuses(t *testing.T) {
+	gh, ctx, parent, dir := parentRepo(t, "task-t1")
+	gh.Write(gh.Work, " leading.txt", "x")
+	gh.Must(gh.Work, "add", "-A")
+	gh.Must(gh.Work, "commit", "--quiet", "-m", "leading space")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, " leading.txt"), []byte("mine"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	before := gh.Must(parent, "rev-parse", "HEAD")
+	err := worktree.Ensure(ctx, dir, gh.Git.Run, func() error {
+		return worktree.Create(ctx, gh.Work, dir, "task-t1", "main", gh.Git.Run)
+	})
+	if err == nil || !strings.Contains(err.Error(), " leading.txt") || !strings.Contains(err.Error(), "冲突") {
+		t.Fatalf("带前导空格的同名文件应被检出冲突：%v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, ".git")); !os.IsNotExist(statErr) {
+		t.Fatal("拒绝时仍做成了检出")
+	}
+	assertParentUntouched(t, gh, parent, before)
+}
+
+// fsCaseInsensitive 用一次独立探针问文件系统：该目录所在卷是否不区分大小写。
+func fsCaseInsensitive(t *testing.T, dir string) bool {
+	t.Helper()
+	f, err := os.CreateTemp(dir, "probe-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	name := f.Name()
+	f.Close()
+	defer os.Remove(name)
+	_, err = os.Stat(filepath.Join(dir, strings.ToUpper(filepath.Base(name))))
+	return err == nil
 }

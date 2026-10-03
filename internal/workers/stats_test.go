@@ -196,7 +196,8 @@ func TestStatsMergesPlainTool(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	at := int64(1000)
+	// 拉起时间取窗口内，Show 的质量行才读得到。
+	at := store.Now() - QualityWindow.Milliseconds() + 1000
 	must := func(err error) {
 		t.Helper()
 		if err != nil {

@@ -128,27 +128,38 @@ func TestReadQualityLeaderWakes(t *testing.T) {
 	}
 }
 
-func TestReadQualityAllHistory(t *testing.T) {
+// 窗口过滤不截断分页：窗口内的全部经历按页读完，窗口外的不读、坏了也不报错；
+// 没有拉起开头的退出不配对。
+func TestReadQualityWindow(t *testing.T) {
 	ctx := context.Background()
 	db, err := store.Open(filepath.Join(t.TempDir(), "quality.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	task, err := ledger.Add(ctx, db, ledger.NewTask{Title: "分页质量统计"}, "u1")
+	task, err := ledger.Add(ctx, db, ledger.NewTask{Title: "窗口内质量统计"}, "u1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	// 超过旧 statScan，交回恰好跨页；不能丢老拉起或把交回算交付。
-	for i := 1; i <= 10001; i++ {
+	since := store.Now() - QualityWindow.Milliseconds()
+	for _, e := range []struct {
+		kind, body string
+		at         int64
+	}{{ExitKind, `{"outcome":"ok"}`, since + 500}, {RunKind, fmtRun(0), since - 60_000}, {ExitKind, `{"outcome":"ok"}`, since - 50_000}} {
+		if _, err := db.ExecContext(ctx, `INSERT INTO task_events(task,kind,body,at,actor) VALUES(?,?,?,?,?)`, task.ID, e.kind, e.body, e.at, "runtime"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// 超过一页（1000 条），交回恰好插在拉起与退出之间；窗口内的全算。
+	for i := 1; i <= 1001; i++ {
 		for _, e := range []struct{ kind, body string }{{RunKind, fmtRun(i)}, {ExitKind, `{"outcome":"ok"}`}} {
-			if _, err := db.ExecContext(ctx, `INSERT INTO task_events(task,kind,body,at,actor) VALUES(?,?,?,?,?)`, task.ID, e.kind, e.body, i*1000, "runtime"); err != nil {
+			if _, err := db.ExecContext(ctx, `INSERT INTO task_events(task,kind,body,at,actor) VALUES(?,?,?,?,?)`, task.ID, e.kind, e.body, since+int64(i)*1000, "runtime"); err != nil {
 				t.Fatal(err)
 			}
-		}
-		if i == 500 {
-			if err := ledger.Record(ctx, db, task.ID, "bounce", "runtime", `{"note":"跨页交回"}`); err != nil {
-				t.Fatal(err)
+			if i == 500 && e.kind == RunKind {
+				if err := ledger.Record(ctx, db, task.ID, "bounce", "runtime", `{"note":"跨页交回"}`); err != nil {
+					t.Fatal(err)
+				}
 			}
 		}
 	}
@@ -156,10 +167,18 @@ func TestReadQualityAllHistory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 1 || got[0].Launches != 10001 || got[0].OK != 10000 || got[0].BounceReasons["跨页交回"] != 1 {
-		t.Fatalf("全量：%+v", got)
+	if len(got) != 1 || got[0].Launches != 1001 || got[0].OK != 1000 || got[0].BounceReasons["跨页交回"] != 1 {
+		t.Fatalf("窗口内：%+v", got)
 	}
-	if _, err := db.ExecContext(ctx, `UPDATE task_events SET body = ? WHERE task = ? AND kind = ?`, "{", task.ID, ExitKind); err != nil {
+	// 窗口外的经历读不到：把它改坏也不报错。
+	if _, err := db.ExecContext(ctx, `UPDATE task_events SET body = '{' WHERE at < ?`, since); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadQuality(ctx, db); err != nil {
+		t.Fatalf("窗口外的不该读：%v", err)
+	}
+	// 窗口内的坏了必须报错。
+	if _, err := db.ExecContext(ctx, `UPDATE task_events SET body = '{' WHERE task = ? AND kind = ?`, task.ID, ExitKind); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := ReadQuality(ctx, db); err == nil {

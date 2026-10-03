@@ -369,7 +369,11 @@ func agentRoutes(r *api.Router, env *app.Env) {
 		if err := q.Decode(&b); err != nil {
 			return nil, err
 		}
-		return map[string]int{"recorded": len(b.Readings)}, quota.Record(q.Context(), env.DB, host, b.Readings)
+		disabled, err := quota.Disabled(q.Context(), env.DB)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"recorded": len(b.Readings), "disabled": disabled}, quota.Record(q.Context(), env.DB, host, b.Readings)
 	})
 }
 

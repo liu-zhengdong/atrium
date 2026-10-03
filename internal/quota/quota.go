@@ -41,10 +41,14 @@ type Local struct {
 func NewLocal(d Deps) *Local { return &Local{deps: d, next: map[string]time.Time{}} }
 
 // Due 读到期的账号并返回这些新读数（没到期的不读、不返回）。
-func (l *Local) Due(ctx context.Context) []Reading {
+func (l *Local) Due(ctx context.Context, disabled map[string]bool) []Reading {
 	now := l.deps.Now()
 	var due []string
 	for _, a := range Builtin {
+		if disabled[a] {
+			delete(l.next, a)
+			continue
+		}
 		if !now.Before(l.next[a]) {
 			due = append(due, a)
 		}
@@ -168,7 +172,11 @@ type poller struct {
 
 // round 读一轮到期的并存下。
 func (p *poller) round(ctx context.Context, db *store.DB) error {
-	if r := p.local.Due(ctx); len(r) > 0 {
+	disabled, err := Disabled(ctx, db)
+	if err != nil {
+		return err
+	}
+	if r := p.local.Due(ctx, disabled); len(r) > 0 {
 		if err := Record(ctx, db, LocalHost, r); err != nil {
 			return err
 		}
@@ -247,6 +255,10 @@ type Overview struct {
 
 // Last 是存下的读数的一览：不去读，马上返回（读取由后台循环做）。
 func Last(ctx context.Context, env *app.Env) (Overview, error) {
+	disabled, err := Disabled(ctx, env.DB)
+	if err != nil {
+		return Overview{}, err
+	}
 	all, err := stored(ctx, env.DB)
 	if err != nil {
 		return Overview{}, err
@@ -266,7 +278,11 @@ func Last(ctx context.Context, env *app.Env) (Overview, error) {
 	if env.Paths.Isolated() {
 		ov.Notes = append(ov.Notes, "隔离实例不读本机额度（自带读取与 OpenQuota）")
 	}
-	ov.Lines = Lines(mergeHosts(all, LocalHost, store.Now()), oq.Rows)
+	for _, line := range Lines(mergeHosts(all, LocalHost, store.Now()), oq.Rows) {
+		if !disabled[line.Account] {
+			ov.Lines = append(ov.Lines, line)
+		}
+	}
 	return ov, nil
 }
 

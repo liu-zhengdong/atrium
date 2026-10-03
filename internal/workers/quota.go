@@ -13,6 +13,14 @@ func showWithQuota(ctx context.Context, env *app.Env, name string) (Detail, erro
 	if err != nil || d.Resolved == nil {
 		return d, err
 	}
+	disabled, err := disabledQuotaAccounts(ctx, env.DB)
+	if err != nil {
+		return Detail{}, err
+	}
+	if disabled[d.Resolved.Account()] {
+		d.Quota = &quota.Line{Pace: quota.Pace{Account: d.Resolved.Account()}, Note: "已下架只点名"}
+		return d, nil
+	}
 	ov, err := quota.Last(ctx, env)
 	if err != nil {
 		return Detail{}, err
@@ -34,6 +42,8 @@ func quotaFor(account string, lines []quota.Line) quota.Line {
 func quotaText(line quota.Line) string {
 	text := line.Account + "  "
 	switch {
+	case line.Note == "已下架只点名":
+		text += line.Note
 	case line.UsedPercent == nil:
 		text += "没有额度读数"
 	case line.SparePercent == nil:

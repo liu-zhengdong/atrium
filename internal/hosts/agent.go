@@ -666,7 +666,13 @@ func (a *Agent) reportExit(st *runState) (bool, error) {
 // reportQuota 每分钟看一次这台的额度读数（读取器自己按 5 分钟缓存），有新读数就报给服务。
 func (a *Agent) reportQuota(ctx context.Context) {
 	for {
-		if rs := a.Quota.Due(ctx); len(rs) > 0 {
+		var policy struct {
+			Disabled map[string]bool `json:"disabled"`
+		}
+		err := a.call(ctx, "/api/agent/quota", map[string]any{"readings": []quota.Reading{}}, &policy)
+		if err != nil {
+			a.Log.Debug("额度档案没取到", "err", err)
+		} else if rs := a.Quota.Due(ctx, policy.Disabled); len(rs) > 0 {
 			if err := a.call(ctx, "/api/agent/quota", map[string]any{"readings": rs}, nil); err != nil {
 				a.Log.Debug("额度没报上", "err", err)
 			}

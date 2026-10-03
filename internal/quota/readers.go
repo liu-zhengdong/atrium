@@ -345,13 +345,13 @@ func readClaude(ctx context.Context, d Deps) Reading {
 	login, src, ok, unreadable := firstCredential(d, ClaudeSources(d.GOOS, d.Home, d.Env), parseClaude)
 	if !ok {
 		if unreadable {
-			return fail("Claude Code 登录数据读不出，运行 claude 重新登录")
+			return fail("Claude Code 登录数据读不出，无法读取订阅额度")
 		}
-		return fail("没有找到 Claude Code 登录，运行 claude 登录")
+		return fail("没有找到 Claude Code 登录，无法读取订阅额度")
 	}
 	now := d.Now().UnixMilli()
 	if login.expires > 0 && login.expires <= now {
-		return fail(fmt.Sprintf("Claude Code 登录已过期（%s），运行一次 claude 会自动续期", src))
+		return fail(fmt.Sprintf("Claude Code 登录已过期（%s），无法读取订阅额度", src))
 	}
 	r, kind := getJSON(ctx, d, d.url("claude"), map[string]string{
 		"Authorization": "Bearer " + login.token, "Accept": "application/json",
@@ -361,9 +361,9 @@ func readClaude(ctx context.Context, d Deps) Reading {
 	case kind != "":
 		return fail(transport(kind, "Claude"))
 	case r.status == 401:
-		return fail("Claude 用量接口拒绝了登录（令牌失效），运行 claude 重新登录")
+		return fail("Claude 用量接口拒绝了登录（令牌失效）")
 	case r.status == 403:
-		return fail("Claude 用量接口拒绝了请求（HTTP 403）；登录没过期，重新登录多半没用，额度走 OpenQuota")
+		return fail("Claude 用量接口拒绝了请求（HTTP 403），订阅访问不可用")
 	case r.status == 429:
 		out := fail("Claude 用量接口限流")
 		out.retryAt = retryAfter(r.header.Get("Retry-After"), now)

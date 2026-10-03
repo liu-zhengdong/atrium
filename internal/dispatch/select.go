@@ -113,9 +113,11 @@ func (d *dispatcher) view(ctx context.Context, t ledger.Task, o Options, exclude
 		return PickView{}, err
 	}
 	for i := range facts {
-		if why := req.refusal(facts[i]); why != "" && facts[i].Refusal == "" {
-			facts[i].Refusal = why
+		f := &facts[i]
+		if why := reviewRefusal(req, f.ID, f.Tool, f.Model, f.Trust); why != "" && f.Refusal == "" {
+			f.Refusal = why
 		}
+		f.Recused = req.Recused(f.ID)
 	}
 	busy, err := busyTools(ctx, db)
 	if err != nil {

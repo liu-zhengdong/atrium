@@ -24,6 +24,7 @@ type Fact struct {
 	Unavailable string // 没有符合任务条件的可用主机，或隔离实例不允许
 	Waiting     string // 主机暂未就绪或标了不可用（会到期或被解除）；仍符合条件，等待后再派
 	Exclusive   bool
+	Recused     bool          // 审阅任务：它拉起过被审任务，要回避（理由已在 Refusal）
 	Preferred   int           // 技能里的优先顺序（1 起）；0 不是
 	Prefer      bool          // 档案标了 prefer：技能偏好之后、其余之前
 	Stat        workers.Stat  // 近 StatWindow 次表现；拉起次数用于同档轮转
@@ -108,8 +109,12 @@ func Pick(in PickInput) PickView {
 		cost   workers.Rules
 	}
 	var ok, no []row
+	var recused []string
 	anyData := false
 	for i, f := range in.Facts {
+		if f.Recused {
+			recused = append(recused, f.ID)
+		}
 		c := Candidate{ID: f.ID, Trust: f.Trust, MaxRisk: f.MaxRisk, Fails: f.Fails, Stat: f.Stat}
 		if f.Problem != "" {
 			c.Refusals = append(c.Refusals, f.Problem)
@@ -248,6 +253,9 @@ func Pick(in PickInput) PickView {
 			why = append(why, r.c.ID+"："+strings.Join(r.c.Refusals, "、"))
 		}
 		v.Reason += "（" + strings.Join(why, "；") + "）"
+	}
+	if len(recused) > 0 {
+		v.Reason += "；" + strings.Join(recused, "、") + " 拉起过被审任务，审阅回避；点名别的执行者或等执行者恢复后再派"
 	}
 	return v
 }

@@ -5,7 +5,6 @@ import (
 	"context"
 	"time"
 
-	"github.com/liu-zhengdong/atrium/internal/quota"
 	"github.com/liu-zhengdong/atrium/internal/store"
 	"github.com/liu-zhengdong/atrium/internal/workers"
 )
@@ -29,21 +28,12 @@ func tries(runs []workers.Run) (same, switches int, tried map[string]bool) {
 }
 
 // markUnavailable 按退出信号把这一轮的「工具+模型@机器」标成不可用，返回写进任务备注的一句；不是可用性信号返回空。
-// 本机额度用尽而报文没写恢复时刻（grok 的 402）时，用本机额度读数里用满窗口的重置时刻，不按固定时长到期重派再撞。
 func markUnavailable(ctx context.Context, db *store.DB, run workers.Run, sig workers.Signal) (string, error) {
 	w, err := workers.ParseWorker(run.Worker)
 	if err != nil {
 		return "", err
 	}
-	host, now := cmp.Or(run.Host, LocalHost), time.Now()
-	if sig.Kind == workers.SignalQuota && sig.ResetAt == 0 && host == LocalHost {
-		rows, err := quota.CachedSources(ctx, db, now.UnixMilli())
-		if err != nil {
-			return "", err
-		}
-		sig.ResetAt = quota.ExhaustedUntil(rows, workers.Resolved{Spec: w}.Account(), now.UnixMilli())
-	}
-	m, ok := workers.MarkOf(sig, w, host, now)
+	m, ok := workers.MarkOf(sig, w, cmp.Or(run.Host, LocalHost), time.Now())
 	if !ok {
 		return "", nil
 	}

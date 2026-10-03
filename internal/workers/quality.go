@@ -109,7 +109,7 @@ func (q Quality) costText() string {
 }
 
 func (q Quality) String() string {
-	return fmt.Sprintf("全量 %d 次拉起：交付 %d（%.1f%%） · 被交回 %d · 重试 %d（%.1f%%） · 其他失败 %d · 额度 %d · 起不来 %d · 每次交付 %s · 用时中位 %s", q.Launches, q.OK, q.DeliveryRate*100, q.Bounce, q.Retries, q.RetryRate*100, q.Fail, q.Quota, q.Setup, q.costText(), DurationText(q.MedianMS))
+	return fmt.Sprintf("近 %d 天 %d 次拉起：交付 %d（%.1f%%） · 被交回 %d · 重试 %d（%.1f%%） · 其他失败 %d · 额度 %d · 起不来 %d · 每次交付 %s · 用时中位 %s", int(QualityWindow.Hours()/24), q.Launches, q.OK, q.DeliveryRate*100, q.Bounce, q.Retries, q.RetryRate*100, q.Fail, q.Quota, q.Setup, q.costText(), DurationText(q.MedianMS))
 }
 
 func writeBounceReasons(b *strings.Builder, q Quality) {

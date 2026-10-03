@@ -41,7 +41,7 @@ type Detail struct {
 	Resolved *Resolved `json:"resolved,omitempty"`
 	Profile  *Profile  `json:"profile,omitempty"`
 	Stat     *Stat     `json:"stat,omitempty"`
-	Quality  *Quality  `json:"quality,omitempty"`  // 全量质量，与近期统计同口径
+	Quality  *Quality  `json:"quality,omitempty"`  // 窗口内质量（QualityWindow），与近期统计同口径
 	Attempts []Attempt `json:"attempts,omitempty"` // 近 StatWindow 次有结果的拉起，新的在前
 	Marks    []Mark    `json:"marks,omitempty"`
 	Layers   []Profile `json:"layers"`
@@ -265,9 +265,9 @@ func Commands(t *cli.Table) {
 		Summary: "执行者 Chrome MCP 入口", Args: "[-- MCP 参数]",
 		Run: func(c *cli.Ctx) error { return runChromeMCP(c.Args, os.Stdin, c.Env.Stdout, c.Env.Stderr) }})
 	t.Add(cli.Command{Path: "workers", Args: "[执行者或 层/名]",
-		Summary: "列执行者；--quality 看全量质量；给名字看档案、质量与近 20 次明细",
+		Summary: "列执行者；--quality 看质量汇总；给名字看档案、质量与近 20 次明细",
 		Detail:  qualityHelp,
-		Flags:   []cli.Flag{{Name: "quality", Bool: true, Help: "按组合列全量质量汇总（不带名字），按交付率、花费、用时排序"}},
+		Flags:   []cli.Flag{{Name: "quality", Bool: true, Help: "按组合列近期质量汇总（不带名字），按交付率、花费、用时排序"}},
 		Run: func(c *cli.Ctx) error {
 			if c.Bool("quality") {
 				return qualityCmd(c)

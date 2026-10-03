@@ -10,8 +10,15 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/store"
 )
 
-// ReadQuality 分页读取全部相关经历，每件任务仍由 Settle 判定，不截断历史；负责人唤醒记录只取保留期内的，另成行。
+// QualityWindow 是质量统计的窗口：任务行与负责人行都只算这段时间内的拉起（负责人唤醒记录物理保留期取同值）。
+// 任务经历（task_events）是全系统共用的事件流水，按期删会断交回计数、转告对照等判定，这里只做读侧过滤不删数据；
+// 窗口内的相关经历按任务量万条以内封顶，查询不再随历史增长。
+const QualityWindow = leaders.WakeRetention
+
+// ReadQuality 分页读取窗口内的相关经历，每件任务仍由 Settle 判定；负责人唤醒记录只取保留期内的，另成行。
+// 两行同窗口：工具与模型更替快，更早的不代表现在的质量。
 func ReadQuality(ctx context.Context, db store.Querier) ([]Quality, error) {
+	since := store.Now() - QualityWindow.Milliseconds()
 	byTask := map[string][]Event{}
 	var upper int64
 	if err := db.QueryRowContext(ctx, `SELECT COALESCE(MAX(id), 0) FROM task_events`).Scan(&upper); err != nil {
@@ -19,7 +26,7 @@ func ReadQuality(ctx context.Context, db store.Querier) ([]Quality, error) {
 	}
 	var cursor int64
 	for {
-		rows, err := db.QueryContext(ctx, `SELECT id, task, kind, body, at FROM task_events WHERE id > ? AND id <= ? AND kind IN (?, ?, 'exit_ok', 'exit_fail', 'bounce') ORDER BY id LIMIT 1000`, cursor, upper, RunKind, ExitKind)
+		rows, err := db.QueryContext(ctx, `SELECT id, task, kind, body, at FROM task_events WHERE id > ? AND id <= ? AND at >= ? AND kind IN (?, ?, 'exit_ok', 'exit_fail', 'bounce') ORDER BY id LIMIT 1000`, cursor, upper, since, RunKind, ExitKind)
 		if err != nil {
 			return nil, err
 		}
@@ -56,7 +63,7 @@ func ReadQuality(ctx context.Context, db store.Querier) ([]Quality, error) {
 		}
 		all = append(all, ls...)
 	}
-	ws, err := leaders.ReadWakes(ctx, db, store.Now()-leaders.WakeRetention.Milliseconds())
+	ws, err := leaders.ReadWakes(ctx, db, since)
 	if err != nil {
 		return nil, err
 	}

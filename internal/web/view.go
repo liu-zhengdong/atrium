@@ -2,8 +2,6 @@ package web
 
 import (
 	"encoding/json"
-	"fmt"
-	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -11,7 +9,6 @@ import (
 
 	"github.com/liu-zhengdong/atrium/internal/hosts"
 	"github.com/liu-zhengdong/atrium/internal/ledger"
-	"github.com/liu-zhengdong/atrium/internal/quota"
 	"github.com/liu-zhengdong/atrium/internal/watch"
 )
 
@@ -166,31 +163,6 @@ func slots(h hosts.Host) int {
 		return h.Info.MaxWorkers
 	}
 	return 1
-}
-
-// account 把一行额度写成页面上的一条：剩多少、什么时候重置或为什么没读数；读数旧了由页面写上读的时刻。
-func account(l quota.Line) Account {
-	a := Account{Name: l.Account, Stale: l.Stale}
-	if t, err := time.Parse(time.RFC3339, l.RefreshedAt); err == nil {
-		a.At = t.UnixMilli()
-	}
-	if l.UsedPercent != nil {
-		left := int(math.Round(100 - *l.UsedPercent))
-		a.Left = &left
-	}
-	var notes []string
-	if h := l.HoursToReset; h != nil {
-		if *h < 24 {
-			notes = append(notes, fmt.Sprintf("%.0f 小时后重置", math.Max(1, math.Round(*h))))
-		} else {
-			notes = append(notes, fmt.Sprintf("%.0f 天后重置", math.Round(*h/24)))
-		}
-	}
-	if a.Left == nil && l.Note != "" {
-		notes = append(notes, l.Note)
-	}
-	a.Note = strings.Join(notes, " · ")
-	return a
 }
 
 // topGroup 返回 id 所在的「一级部门」：根的直接下级（id 本身是根或一级时返回自己）。

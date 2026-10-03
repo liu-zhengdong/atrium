@@ -175,7 +175,7 @@ type Module struct {
 
 #### 通用 CLI 档案
 
-新工具在 `harness/<工具>` 档案中声明 `protocol: cli`，经 `workers edit --file` 保存；档案存在数据库中。`command` 仍只接受 PATH 命令名。应用内的脚本入口应由安装者在 PATH 放一个 shim，转发参数到脚本；不用为一个工具放宽命令查找规则。
+新工具在 `harness/<工具>` 档案中声明 `protocol: cli`，经 `workers edit --file` 保存；档案存在数据库中。`command` 仍只接受 PATH 命令名。应用内的脚本可用 PATH 上的解释器（如 `command: node`），将脚本绝对路径放进 `args`；只有没有可用解释器入口时才需要安装者提供 shim。
 
 参数模板与校验以 `workers/cli.go` 的 `CLISpec` 为准。支持会话续接的工具声明 `session_match`（恰有一个捕获组，取会话 id），并在 `args` 用 `{session_args}` 标出 `session_args` 的位置。例如：
 
@@ -188,7 +188,7 @@ session_match: '"session_id":"([0-9a-f-]{36})"'
 auto: false
 ```
 
-该例假设工具接受 `--print`、`--resume` 并输出上述 JSON 字段，接入前必须按实际工具核对。首次启动省掉整组续接参数；有补充说明时，dispatch 等本轮退出，从日志开头的 64 KiB 取会话 id，下一轮将 id 与补充提示词交给同一工具。会话 id 沿用现有校验：36 位小写十六进制与连字符。没有声明会话的档案仍按重派处理，不尝试续接。日志格式、模型、认证与 `usage` 字段路径均须实测，不能由这个示例推断。
+该例假设工具接受 `--print`、`--resume` 并输出上述 JSON 字段，接入前必须按实际工具核对。首次启动省掉整组续接参数；有补充说明时，dispatch 等本轮退出，从日志开头的 64 KiB 取会话 id，下一轮将 id 与补充提示词交给同一工具。通用 CLI 的会话 id 为最多 128 个 ASCII 字符，以字母或数字开头，其余只含字母、数字、下划线、点和连字符；内置工具仍沿用 UUID 约束。没有声明会话的档案仍按重派处理，不尝试续接。日志格式、模型、认证与 `usage` 字段路径均须实测，不能由这个示例推断。
 
 ### 子进程（`internal/platform`）
 

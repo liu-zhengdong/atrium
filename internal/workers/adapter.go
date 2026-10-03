@@ -125,10 +125,11 @@ func (a *Driver) CanResume() bool { return a.session != nil && a.Tell != TellRes
 const argPromptMax = 256 * 1024
 
 var (
-	modelRE   = regexp.MustCompile(`^[\w.@-]+(/[\w.@-]+)*$`)
-	effortRE  = regexp.MustCompile(`^[a-z]+$`)
-	sessionRE = regexp.MustCompile(`^[0-9a-f-]{36}$`)
-	toolRE    = regexp.MustCompile(`^[a-z][a-z0-9-]{0,39}$`)
+	modelRE      = regexp.MustCompile(`^[\w.@-]+(/[\w.@-]+)*$`)
+	effortRE     = regexp.MustCompile(`^[a-z]+$`)
+	sessionRE    = regexp.MustCompile(`^[0-9a-f-]{36}$`)
+	cliSessionRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$`)
+	toolRE       = regexp.MustCompile(`^[a-z][a-z0-9-]{0,39}$`)
 )
 
 func (a *Driver) check(in Request) error {
@@ -152,7 +153,11 @@ func (a *Driver) check(in Request) error {
 	if a.ArgPrompt && len(in.Prompt) > argPromptMax {
 		return api.Usage("%s 的提示词走命令行参数，%d 字节超过上限 %d", a.Tool, len(in.Prompt), argPromptMax)
 	}
-	if in.Session != "" && !sessionRE.MatchString(in.Session) {
+	validSession := sessionRE
+	if a.cli != nil {
+		validSession = cliSessionRE
+	}
+	if in.Session != "" && !validSession.MatchString(in.Session) {
 		return api.Usage("会话 id 不合法：%s", in.Session)
 	}
 	if in.Endpoint != nil && !slices.Contains(a.Endpoints, in.Endpoint.API) {

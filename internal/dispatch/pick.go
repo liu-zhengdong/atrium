@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/liu-zhengdong/atrium/internal/ledger"
+	"github.com/liu-zhengdong/atrium/internal/quota"
 	"github.com/liu-zhengdong/atrium/internal/workers"
 )
 
@@ -23,9 +24,11 @@ type Fact struct {
 	Unavailable string // 没有符合任务条件的可用主机，或隔离实例不允许
 	Waiting     string // 主机暂未就绪；仍符合条件，等待后再派
 	Exclusive   bool
-	Preferred   int          // 技能里的优先顺序（1 起）；0 不是
-	Stat        workers.Stat // 近 StatWindow 次表现；拉起次数用于同档轮转
-	Fails       int          // 这个「工具+模型」近 ShakyWindow 次拉起里启动失败几次（workers.Fails）
+	Preferred   int           // 技能里的优先顺序（1 起）；0 不是
+	Stat        workers.Stat  // 近 StatWindow 次表现；拉起次数用于同档轮转
+	Fails       int           // 这个「工具+模型」近 ShakyWindow 次拉起里启动失败几次（workers.Fails）
+	Quota       *Spare        // 对应所选机器的已关联额度；未知也覆盖摘要，不能猜身份
+	Cost        workers.Rules // 生效档案中的计费与单价，不新增价格来源
 }
 
 // 近 ShakyWindow 次拉起里启动失败（额度、起不来、其他）≥ ShakyFails 次的候选往后排：只影响排序、不排除；
@@ -40,6 +43,7 @@ func Shaky(fails int) bool { return fails >= ShakyFails }
 
 // PickInput 是挑执行者的全部输入。
 type PickInput struct {
+	Tokens   int64 // 明确任务需求，0 未知
 	Risk     string
 	Priority ledger.Priority // 活的分量：紧急、修复只交给够 trust 的（NeedTrust）
 	Facts    []Fact
@@ -50,16 +54,17 @@ type PickInput struct {
 
 // Candidate 是 --dry-run 列出的一位候选。
 type Candidate struct {
-	ID       string       `json:"id"`
-	Stat     workers.Stat `json:"stat"`
-	Trust    string       `json:"trust"`
-	MaxRisk  string       `json:"max_risk"`
-	Eligible bool         `json:"eligible"`
-	Refusals []string     `json:"refusals,omitempty"`
-	Busy     bool         `json:"busy,omitempty"`
-	Spare    *float64     `json:"spare,omitempty"` // 富余百分点（与 atrium quota 同一个数）；没数据为空
-	Rank     int          `json:"rank,omitempty"`  // 能接的里排第几（1 起）
-	Fails    int          `json:"fails,omitempty"` // 近 ShakyWindow 次拉起里启动失败几次
+	ID           string              `json:"id"`
+	Stat         workers.Stat        `json:"stat"`
+	Trust        string              `json:"trust"`
+	MaxRisk      string              `json:"max_risk"`
+	Eligible     bool                `json:"eligible"`
+	Refusals     []string            `json:"refusals,omitempty"`
+	Busy         bool                `json:"busy,omitempty"`
+	Spare        *float64            `json:"spare,omitempty"` // 富余百分点（与 atrium quota 同一个数）；没数据为空
+	TokenWindows []quota.TokenWindow `json:"token_windows,omitempty"`
+	Rank         int                 `json:"rank,omitempty"`  // 能接的里排第几（1 起）
+	Fails        int                 `json:"fails,omitempty"` // 近 ShakyWindow 次拉起里启动失败几次
 }
 
 // PickView 是挑执行者的结论：候选（能接的按推荐顺序在前）、推荐与理由。
@@ -87,8 +92,8 @@ func NeedTrust(priority ledger.Priority, risk string) (min, why string) {
 }
 
 // Pick 挑执行者（纯函数）：档案能接、装了、本机没标不可用、trust 够活的分量（NeedTrust）、额度没见底；
-// 能接的先把近期启动失败多的（Shaky）排到后面，再按技能优先分档；同档按近期拉起次数升序、额度富余降序排
-// （次数相同时，没有富余数据的排在有的后面，之间按档案顺序）；正忙的跳过。
+// 能接的先按 Shaky、技能偏好、近期拉起次数与富余排序，再比较明确的免费/订阅价格；
+// 未知价格保持原位置，正忙的跳过。额度优先使用对应机器的读数。
 func Pick(in PickInput) PickView {
 	minTrust, heavy := NeedTrust(in.Priority, in.Risk)
 	v := PickView{Risk: in.Risk, Candidates: []Candidate{}}
@@ -97,6 +102,7 @@ func Pick(in PickInput) PickView {
 		wait  string
 		pref  int
 		order int
+		cost  workers.Rules
 	}
 	var ok, no []row
 	anyData := false
@@ -117,7 +123,13 @@ func Pick(in PickInput) PickView {
 		if in.Exclude[f.ID] {
 			c.Refusals = append(c.Refusals, "这一轮已试过")
 		}
-		if s, has := in.Spares[f.Account]; has {
+		s, has := in.Spares[f.Account]
+		if f.Quota != nil {
+			s, has = *f.Quota, true
+		}
+		if has {
+			c.TokenWindows = s.TokenWindows
+			s = s.WithDemand(in.Tokens)
 			if s.Stop != "" {
 				c.Refusals = append(c.Refusals, s.Stop)
 			}
@@ -133,9 +145,9 @@ func Pick(in PickInput) PickView {
 			pref = 1 << 30
 		}
 		if c.Eligible {
-			ok = append(ok, row{c, f.Waiting, pref, i})
+			ok = append(ok, row{c, f.Waiting, pref, i, f.Cost})
 		} else {
-			no = append(no, row{c, f.Waiting, pref, i})
+			no = append(no, row{c, f.Waiting, pref, i, f.Cost})
 		}
 	}
 	sort.SliceStable(ok, func(i, j int) bool {
@@ -157,6 +169,17 @@ func Pick(in PickInput) PickView {
 		}
 		return a.order < b.order
 	})
+	// 未知价格的候选保持原位置；只调整同一稳定性组里明确可比较的价格。
+	// 使用逐项支配关系，不猜任务的输入/输出比例，也不跨币种估价。
+	costChanged := false
+	for i := range ok {
+		for j := i + 1; j < len(ok); j++ {
+			if Shaky(ok[i].c.Fails) == Shaky(ok[j].c.Fails) && workers.Cheaper(ok[j].cost, ok[i].cost) {
+				ok[i], ok[j] = ok[j], ok[i]
+				costChanged = true
+			}
+		}
+	}
 	for i, r := range ok {
 		r.c.Rank = i + 1
 		v.Candidates = append(v.Candidates, r.c)
@@ -181,6 +204,9 @@ func Pick(in PickInput) PickView {
 		}
 		if minTrust != "" {
 			v.Reason = heavy + "只在 trust≥" + minTrust + " 的里挑；" + v.Reason
+		}
+		if costChanged {
+			v.Reason = "按档案明确的免费/订阅单价辅助排序；" + v.Reason
 		}
 		if Shaky(r.c.Fails) {
 			v.Reason += fmt.Sprintf("；它近 %d 次拉起启动失败 %d 次，但没有更稳的能接", ShakyWindow, r.c.Fails)

@@ -188,6 +188,12 @@ func TestReclaimEndingsAndReopen(t *testing.T) {
 }
 
 func TestMain(m *testing.M) {
+	if filepath.Base(os.Args[0]) == "pi" || filepath.Base(os.Args[0]) == "pi.exe" {
+		os.Exit(recoveryPi())
+	}
+	if len(os.Args) > 2 && os.Args[1] == "--recovery-fake-worker" {
+		os.Exit(recoveryCLI(os.Args[2]))
+	}
 	if filepath.Base(os.Args[0]) == "git" && os.Getenv("RECLAIM_TEST_GIT") != "" {
 		os.Exit(reclaimGitBarrier())
 	}

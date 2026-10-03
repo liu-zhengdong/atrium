@@ -22,9 +22,19 @@ import (
 // launch 拉起一次执行者：备好工作目录与提示词、算出进程调用、白名单环境加凭据、记录结果、跟着等它退出。
 func (d *dispatcher) launch(ctx context.Context, t ledger.Task, o launchOpts) error {
 	db, data := d.env.DB, d.env.Paths.Data
+	live, err := ledger.Get(ctx, db, t.ID)
+	if err != nil {
+		return err
+	}
+	if live.Status != t.Status || live.Stage != ledger.StageNone {
+		return api.Conflict("%s 已停止或进入下一阶段，不再拉起", t.ID)
+	}
+	o.W, err = CheckExecution(ctx, d.env, o.W, o.Host, o.Tokens)
+	if err != nil {
+		return err
+	}
 	remote := o.Host != LocalHost
 	var dir, branch string
-	var err error
 	if !remote {
 		if dir, branch, err = Workdir(ctx, data, t.ID, t.Repo, t.Dir); err != nil {
 			if isAPI(err) {
@@ -115,9 +125,9 @@ func (d *dispatcher) launch(ctx context.Context, t ledger.Task, o launchOpts) er
 	if err != nil {
 		return err
 	}
-	run := workers.Run{N: n, Why: o.Why, Cause: o.Cause, Worker: o.W.ID, Host: o.Host, Dir: dir, Branch: branch,
+	run := workers.Run{Tokens: o.Tokens, N: n, Why: o.Why, Cause: o.Cause, Worker: o.W.ID, Host: o.Host, Dir: dir, Branch: branch,
 		Log: filepath.Join(td, fmt.Sprintf("run-%d.log", n)), Risk: o.Risk, Secrets: secrets, TellsUpto: upto, At: store.Now()}
-	p := &proc{task: t.ID, adapter: o.W.Adapter, remote: remote, pending: map[string]bool{}, done: make(chan struct{})}
+	p := &proc{binding: o.W.QuotaBinding, task: t.ID, adapter: o.W.Adapter, remote: remote, pending: map[string]bool{}, done: make(chan struct{})}
 	var wait func() int
 	if remote {
 		clone := ""

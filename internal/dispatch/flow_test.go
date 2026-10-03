@@ -77,7 +77,7 @@ func setup(t *testing.T) (*app.Env, *dispatcher) {
 	}
 	// 不读开发者本机的额度与机器：只用本机、没有额度数据。
 	// 假的内置工具在 PATH 上：自动挑人时当用户的服务挑它们（换人重派要用）。
-	oldPick, oldSpares, oldIsolated := pickHost, spares, isolated
+	oldPick, oldIsolated := pickHost, isolated
 	pickHost = func(ctx context.Context, env *app.Env, need HostNeed, pinned string) (HostChoice, error) {
 		marks, err := workers.Marks(ctx, env.DB, store.Now())
 		if err != nil {
@@ -90,9 +90,8 @@ func setup(t *testing.T) (*app.Env, *dispatcher) {
 		clis["fake"] = hosts.CLI{Installed: true}
 		return hosts.Choose([]hosts.Candidate{{ID: LocalHost, Kind: "local", CLIs: clis, Marks: marks}}, need, pinned), nil
 	}
-	spares = func(context.Context, *app.Env) (map[string]Spare, error) { return map[string]Spare{}, nil }
 	isolated = func(*app.Env) bool { return false }
-	t.Cleanup(func() { pickHost, spares, isolated = oldPick, oldSpares, oldIsolated })
+	t.Cleanup(func() { pickHost, isolated = oldPick, oldIsolated })
 	d := get(env)
 	t.Cleanup(func() {
 		d.mu.Lock()
@@ -253,7 +252,7 @@ func TestFlowInPlace(t *testing.T) {
 	}
 }
 
-// 执行者额度用尽：标记本机的「工具+模型」到恢复时刻，任务重新排队，再挑执行者时避开它。
+// 执行者额度用尽：标记本机套餐到恢复时刻，直接换人；进入关卡前记下两次拉起。
 func TestFlowQuotaRequeue(t *testing.T) {
 	env, d := setup(t)
 	ctx := context.Background()
@@ -264,12 +263,12 @@ func TestFlowQuotaRequeue(t *testing.T) {
 	if err := d.pump(ctx); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, env, tk.ID, func(x ledger.Task) bool { return x.Status == ledger.Queued && x.Worker == "" }) // 换人重派：上一轮的执行者清掉
+	waitFor(t, env, tk.ID, func(x ledger.Task) bool { return x.Stage == ledger.StageGate })
 	marks, _ := workers.Marks(ctx, env.DB, store.Now())
 	if len(marks) != 1 || marks[0].Target() != "codex@"+LocalHost || marks[0].Until <= store.Now() {
 		t.Fatalf("应标记本机的 codex 额度用尽：%+v", marks)
 	}
-	v, err := d.view(ctx, tk, "low", nil)
+	v, err := d.view(ctx, tk, Options{Risk: "low"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -337,7 +336,7 @@ func TestWatchQuotaMarks(t *testing.T) {
 	}
 }
 
-// 执行者报没登录：标记本机的这个工具，任务重新排队，再挑执行者时避开它。
+// 执行者报没登录：标记本机的这个工具，直接换人并避开它。
 func TestFlowLoginRequeue(t *testing.T) {
 	env, d := setup(t)
 	ctx := context.Background()
@@ -356,12 +355,12 @@ func TestFlowLoginRequeue(t *testing.T) {
 	if err := d.pump(ctx); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, env, tk.ID, func(x ledger.Task) bool { return x.Status == ledger.Queued && x.Worker == "" }) // 换人重派：上一轮的执行者清掉
+	waitFor(t, env, tk.ID, func(x ledger.Task) bool { return x.Stage == ledger.StageGate })
 	marks, _ := workers.Marks(ctx, env.DB, store.Now())
 	if len(marks) != 1 || marks[0].Target() != "grok@"+LocalHost || marks[0].Until != 0 {
 		t.Fatalf("本机的 grok 应标没登录、等人处理：%+v", marks)
 	}
-	v, err := d.view(ctx, tk, "low", nil)
+	v, err := d.view(ctx, tk, Options{Risk: "low"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

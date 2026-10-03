@@ -137,26 +137,31 @@ func TestContinuePRFromAcceptance(t *testing.T) {
 
 func TestWorkdirOccupiedBranchStopsBeforeLaunch(t *testing.T) {
 	d, gh, ctx := reclaimRig(t)
+	task, err := ledger.Add(ctx, d.env.DB, ledger.NewTask{Title: "占用分支时不能拉起", Repo: gh.Work}, "u1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	branch := Branch(task.ID)
 	other := filepath.Join(d.env.Paths.Data, "tasks", "t642", "repo")
 	if err := os.MkdirAll(filepath.Dir(other), 0700); err != nil {
 		t.Fatal(err)
 	}
-	gh.Must(gh.Work, "worktree", "add", "--quiet", "-b", "task-t476", other, "main")
+	gh.Must(gh.Work, "worktree", "add", "--quiet", "-b", branch, other, "main")
 	before := gh.Must(other, "rev-parse", "HEAD")
-	_, _, err := Workdir(ctx, d.env.Paths.Data, "t476", gh.Work, "")
-	if err == nil || !strings.Contains(err.Error(), "t642") || !strings.Contains(err.Error(), "task-t476") || !strings.Contains(err.Error(), "拉起前停止") {
+	_, _, err = Workdir(ctx, d.env.Paths.Data, task.ID, gh.Work, "")
+	if err == nil || !strings.Contains(err.Error(), "t642") || !strings.Contains(err.Error(), branch) || !strings.Contains(err.Error(), "拉起前停止") {
 		t.Fatalf("占用错误不清楚：%v", err)
 	}
-	if err := d.launch(ctx, ledger.Task{ID: "t476", Repo: gh.Work}, launchOpts{Host: LocalHost}); err == nil || !strings.Contains(err.Error(), "t642") {
+	if err := d.launch(ctx, task, launchOpts{Host: LocalHost}); err == nil || !strings.Contains(err.Error(), "t642") {
 		t.Fatalf("拉起入口未停止：%v", err)
 	}
-	if launched, err := workers.LastRun(ctx, d.env.DB, "t476"); err != nil || launched != nil {
+	if launched, err := workers.LastRun(ctx, d.env.DB, task.ID); err != nil || launched != nil {
 		t.Fatalf("占用时仍登记了执行者：%+v %v", launched, err)
 	}
 	if after := gh.Must(other, "rev-parse", "HEAD"); after != before {
 		t.Fatal("改了占用者分支")
 	}
-	if _, err := os.Stat(filepath.Join(TaskDir(d.env.Paths.Data, "t476"), "repo")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(TaskDir(d.env.Paths.Data, task.ID), "repo")); !os.IsNotExist(err) {
 		t.Fatal("占用时仍创建了工作树")
 	}
 	t.Log(err)

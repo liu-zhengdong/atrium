@@ -6,7 +6,7 @@ import (
 	"strings"
 )
 
-// Stored 是 quota_cache 的一行：某台机器对某个账号的最近一次读数。
+// Stored 是 quota_cache 的一行：某台机器对某个 provider 的来源读数；不证明当前执行账号或共享池。
 type Stored struct {
 	Host string `json:"host"`
 	Reading
@@ -26,8 +26,8 @@ type Line struct {
 	From   string `json:"from,omitempty"` // 自带读数来自哪台机器
 }
 
-// mergeHosts 按账号合并各台机器的自带读数（纯函数）：同一指纹只算一份（存储时已按指纹合一行）；
-// 本机登录的那个账号优先，本机没读到就用最新的；别的机器登录的是另一个账号时在说明里写明没算进来。
+// mergeHosts 是按 provider 收敛的展示摘要（纯函数），本机优先、否则取最新。
+// 未证明账号/套餐关系，不能用于跨机器挑人。
 func mergeHosts(rows []Stored, local string, now int64) map[string]Line {
 	byAcct := map[string][]Stored{}
 	for _, r := range rows {
@@ -76,7 +76,7 @@ func mergeHosts(rows []Stored, local string, now int64) map[string]Line {
 			others = append(others, g.Host)
 		}
 		if len(others) > 0 {
-			notes = append(notes, strings.Join(others, "、")+" 登录的是另一个账号，没算进来")
+			notes = append(notes, strings.Join(others, "、")+" 的来源读数未合入摘要（账号/共享池关系未知）")
 		}
 		out[acct] = Line{Pace: PaceOf(pick.Reading, now), Source: "builtin", Note: strings.Join(notes, "；"), From: pick.Host}
 	}
@@ -143,12 +143,37 @@ func Lines(builtin map[string]Line, oq []Pace) []Line {
 
 // Spare 是给分派任务的一个账号的额度判定。
 type Spare struct {
-	Account string `json:"account"`
+	TokenWindows []TokenWindow `json:"token_windows,omitempty"`
+	Account      string        `json:"account"`
 	// Percent 是富余：周期已过 − 已用；零用量且缺周期进度按 0，其他算不出为空。分派任务按它排先后。
 	Percent *float64 `json:"percent,omitempty"`
 	Stale   bool     `json:"stale"` // 读数超过 10 分钟
 	// Stop 是不该再派的原因：已用到给用户留的份额（周窗与短窗取紧的）；能派为空。
 	Stop string `json:"stop,omitempty"`
+}
+
+// TokenWindow 仅由明确同池同窗 token 分母证据消费得出，不持久化差值。
+type TokenWindow struct {
+	ID        string  `json:"id"`
+	Total     float64 `json:"total"`
+	Used      float64 `json:"used"`
+	Remaining float64 `json:"remaining"`
+	Available float64 `json:"available"`
+}
+
+// WithDemand 对本轮任务声明量逐窗判容纳，0 表示未知，不从任务文本估算。
+// 选择与启动共用此入口；先保留百分比/marks 等既有拒绝原因。
+func (s Spare) WithDemand(tokens int64) Spare {
+	if s.Stop != "" || tokens <= 0 {
+		return s
+	}
+	for _, w := range s.TokenWindows {
+		if float64(tokens) > w.Available {
+			s.Stop = fmt.Sprintf("token 容量不足：窗口 %s 可派 %.0f，任务需要 %d", w.ID, w.Available, tokens)
+			break
+		}
+	}
+	return s
 }
 
 // SpareOf 判一个账号的富余与能不能派（纯函数）。优先取来源富余；零用量且缺周期进度按刚开始的窗口处理。

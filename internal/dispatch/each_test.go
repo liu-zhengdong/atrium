@@ -61,12 +61,11 @@ func TestLoopBadRecordsStillDispatches(t *testing.T) {
 	if _, err := workers.SaveProfile(ctx, db, "harness/loopfake", workers.Edit{Source: &source}, "u1"); err != nil {
 		t.Fatal(err)
 	}
-	oldPick, oldSpares := pickHost, spares
-	defer func() { pickHost, spares = oldPick, oldSpares }()
+	oldPick := pickHost
+	defer func() { pickHost = oldPick }()
 	pickHost = func(context.Context, *app.Env, HostNeed, string) (HostChoice, error) {
 		return HostChoice{Kind: "run", Host: LocalHost}, nil
 	}
-	spares = func(context.Context, *app.Env) (map[string]Spare, error) { return map[string]Spare{}, nil }
 	var ids []string
 	for _, name := range []string{"bad launch record", "bad queue opts", "good"} {
 		task, err := ledger.Add(ctx, db, ledger.NewTask{Title: name}, "u1")

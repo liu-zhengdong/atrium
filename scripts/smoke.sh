@@ -626,7 +626,7 @@ json task set "$pre" --status failed >/dev/null
 out=$(json task wait "$post" --timeout 10); has '.result.task.status == "blocked"'
 out=$(json task run "$post" || true); has '.error.code == "conflict"'   # 依赖失败了：当场拒绝
 
-step "执行者可用性：假执行者报模型名无效 → 标记「工具@机器」、重新排队 → workers 看得到、挑执行者跳过 → workers edit --clear 解除"
+step "执行者可用性：假执行者报模型名无效 → 标记「工具@机器」、停机中明确受阻 → workers 看得到、挑执行者跳过 → workers edit --clear 解除"
 cat >"$work/fakemodel.md" <<'MD'
 ---
 protocol: cli
@@ -642,10 +642,10 @@ json task run "$av" --worker fakemodel >/dev/null
 # 主机实测异步更新；确认已拉起再暂停，避免新增档案还没探测就先挡住分派任务。
 for _ in $(seq 150); do out=$(json task show "$av"); jq -e '.result.task.status == "running"' >/dev/null <<<"$out" && break; sleep 0.2; done
 has '.result.task.status == "running"'
-out=$(json pause --org "$av_org"); has '.ok'   # 重新排队后不再拉起，好断言停在 queued
+out=$(json pause --org "$av_org"); has '.ok'   # 退出恢复遇到部门停机，不再拉起，明确 blocked
 for _ in $(seq 50); do out=$(json workers fakemodel); jq -e '(.result.marks // [])|length == 1' >/dev/null <<<"$out" && break; sleep 0.2; done
 has '.result.marks[0].host == "h1" and .result.marks[0].kind == "model" and .result.marks[0].until == 0'
-out=$(json task show "$av"); has '.result.task.status == "queued" and (.result.history|map(.body // "")|join(" ")|contains("已标记 fakemodel@h1 不可用"))'
+out=$(json task show "$av"); has '.result.task.status == "blocked" and (.result.history|map(.body // "")|join(" ")|contains("已标记 fakemodel@h1 不可用"))'
 out=$(json workers); has '(.result|map(select(.id == "fakemodel"))|.[0].marks|length) == 1'
 out=$(json task run "$av" --dry-run); has '.result.pick.candidates|map(select(.id == "fakemodel"))|.[0]|(.eligible|not) and (.refusals|join("")|contains("不可用：模型名无效"))'
 out=$(json workers edit --clear fakemodel@h1); has '.result.cleared == 1'

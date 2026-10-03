@@ -14,8 +14,8 @@ import (
 
 // run 经 platform 拉起一个短命令，限时读完标准输出。返回退出码（拉不起为 -1）。
 func run(ctx context.Context, path string, args []string, env map[string]string, limit time.Duration) ([]byte, int, error) {
-	var out bytes.Buffer
-	cmd, err := platform.Start(platform.Spec{Path: path, Args: args, Env: env, Stdout: &out})
+	var out, stderr bytes.Buffer
+	cmd, err := platform.Start(platform.Spec{Path: path, Args: args, Env: env, Stdout: &out, Stderr: &stderr})
 	if err != nil {
 		return nil, -1, err
 	}
@@ -35,6 +35,11 @@ func run(ctx context.Context, path string, args []string, env map[string]string,
 	var exit *exec.ExitError
 	if errors.As(err, &exit) {
 		return out.Bytes(), exit.ExitCode(), nil
+	}
+	if err == nil && stderr.Len() > 0 && len(args) > 0 && args[0] == "pace" {
+		// 现有 pace 混合坏行可能退出 0 却写警告；不把部分来源当整轮成功。
+		// 固定错误句，不外传响应正文、路径或凭据。
+		err = errors.New("命令输出诊断，来源结果未完整验证")
 	}
 	return out.Bytes(), 0, err
 }
@@ -69,8 +74,9 @@ const OpenquotaBin = "/Applications/OpenQuota.app/Contents/MacOS/openquota"
 
 // Pace 是 `openquota pace --json` 的一行（自带读数也折成同样的结构）。
 type Pace struct {
+	SourceFacts
 	Account       string   `json:"providerId"`
-	Plan          string   `json:"plan"`
+	Plan          *string  `json:"plan"`
 	UsedPercent   *float64 `json:"usedPercent"`
 	ElapsedPct    *float64 `json:"periodElapsedPercent"`
 	SparePercent  *float64 `json:"sparePercent"`
@@ -106,5 +112,32 @@ func readOpenquota(ctx context.Context, env map[string]string) ([]Pace, error) {
 	if err := json.Unmarshal(out, &rows); err != nil {
 		return nil, errors.New("OpenQuota 输出无法解析")
 	}
+	if err := validateSources(rows); err != nil {
+		return nil, err
+	}
 	return rows, nil
+}
+
+// agePaces 只按原成功 refreshedAt 在消费时重算年龄；轮询不续鲜。
+// 摘要仍仅展示；没有身份/完整窗口/质量事实不能用于当前套餐判定。
+func agePaces(rows []Pace, now int64) []Pace {
+	out := append([]Pace(nil), rows...)
+	for i := range out {
+		p := &out[i]
+		if p.Remembered || p.ErrorKind != nil || p.RefreshOutcome == "failed" ||
+			p.DataQuality == "refreshFailed" || p.DataQuality == "empty" ||
+			p.DataQuality == "remembered" || p.DataQuality == "stale" {
+			p.Stale = true
+		}
+		at, err := time.Parse(time.RFC3339, p.RefreshedAt)
+		if err != nil || at.UnixMilli() > now {
+			p.Stale = true
+			p.SparePercent = nil
+			continue
+		}
+		age := now - at.UnixMilli()
+		p.RefreshedAgoH = round1(float64(age) / 3600000)
+		p.Stale = p.Stale || age >= staleAfter
+	}
+	return out
 }

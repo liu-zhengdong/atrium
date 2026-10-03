@@ -130,15 +130,16 @@ func TestRouteExit(t *testing.T) {
 		{"非 0 但日志正常收尾", ExitInput{Code: 1, Ending: workers.Ending{Known: true, OK: true}}, "gate"},
 		{"报错收尾", ExitInput{Code: 0, Ending: workers.Ending{Known: true, Reason: "x"}}, "fail"},
 		{"补充说明要重派", ExitInput{Code: -1, StopFor: "restart"}, "restart"},
-		{"额度用尽重新排队", ExitInput{Code: 1, Signal: quota, Switches: 2}, "requeue"},
-		{"模型名无效重新排队", ExitInput{Code: 1, Signal: workers.Signal{Kind: workers.SignalModel, Reason: "模型名无效"}}, "requeue"},
+		{"额度用尽换人", ExitInput{Code: 1, Signal: quota}, "switch"},
+		{"额度用尽换够后受阻", ExitInput{Code: 1, Signal: quota, Switches: 2}, "block"},
+		{"模型名无效换人", ExitInput{Code: 1, Signal: workers.Signal{Kind: workers.SignalModel, Reason: "模型名无效"}}, "switch"},
 		{"思考耗尽换人", ExitInput{Code: 0, Signal: thinking}, "switch"},
 		{"思考耗尽换够了", ExitInput{Code: 0, Signal: thinking, Switches: 2}, "fail"},
 		{"临时错误先重试", ExitInput{Code: 1, Signal: transient}, "same"},
 		{"临时错误再换人", ExitInput{Code: 1, Signal: transient, Same: 1}, "switch"},
 		{"临时错误用尽", ExitInput{Code: 1, Signal: transient, Same: 1, Switches: 2}, "fail"},
-		{"零步骤出错退出重新排队", ExitInput{Code: 1, Signal: workers.Signal{Kind: workers.SignalNoStart, Reason: "零步骤出错退出（退出码 1，原因不明）"}}, "requeue"},
-		{"没登录重新排队", ExitInput{Code: 1, Signal: workers.Signal{Kind: workers.SignalSetup, Reason: "没登录"}, Switches: 2}, "requeue"},
+		{"零步骤出错退出换人", ExitInput{Code: 1, Signal: workers.Signal{Kind: workers.SignalNoStart, Reason: "零步骤出错退出（退出码 1，原因不明）"}}, "switch"},
+		{"没登录换够后受阻", ExitInput{Code: 1, Signal: workers.Signal{Kind: workers.SignalSetup, Reason: "没登录"}, Switches: 2}, "block"},
 		{"有补充说明能继续", ExitInput{Code: 0, Pending: 1, CanResume: true}, "resume"},
 		{"有补充说明不能继续", ExitInput{Code: 0, Pending: 2}, "restart"},
 	}
@@ -355,9 +356,6 @@ func TestViewIsolated(t *testing.T) {
 		t.Fatal(err)
 	}
 	testLocalHost(t, env)
-	oldSpares := spares
-	spares = func(context.Context, *app.Env) (map[string]Spare, error) { return map[string]Spare{}, nil }
-	t.Cleanup(func() { spares = oldSpares })
 	src := "---\nprotocol: cli\ncommand: go\nargs: [\"{prompt}\"]\n---\n"
 	if _, err := workers.SaveProfile(ctx, db, "harness/fake", workers.Edit{Source: &src}, "u1"); err != nil {
 		t.Fatal(err)
@@ -376,7 +374,7 @@ func TestViewIsolated(t *testing.T) {
 	if !env.Paths.Isolated() {
 		t.Fatal("临时目录应算隔离实例")
 	}
-	v, err := d.view(ctx, tk, "low", nil)
+	v, err := d.view(ctx, tk, Options{Risk: "low"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -391,7 +389,7 @@ func TestViewIsolated(t *testing.T) {
 	oldIsolated := isolated
 	isolated = func(*app.Env) bool { return false }
 	t.Cleanup(func() { isolated = oldIsolated })
-	if v, err = d.view(ctx, tk, "low", nil); err != nil || refused(v, "claude") {
+	if v, err = d.view(ctx, tk, Options{Risk: "low"}, nil); err != nil || refused(v, "claude") {
 		t.Errorf("用户的服务照常挑内置工具：%+v %v", v, err)
 	}
 }

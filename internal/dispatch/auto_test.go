@@ -23,9 +23,6 @@ func TestNamedOnlyWorker(t *testing.T) {
 	defer db.Close()
 	env := &app.Env{DB: db, Paths: config.Paths{Data: dir}}
 	testLocalHost(t, env)
-	oldSpares := spares
-	spares = func(context.Context, *app.Env) (map[string]Spare, error) { return map[string]Spare{}, nil }
-	t.Cleanup(func() { spares = oldSpares })
 	src := "---\nprotocol: cli\ncommand: go\nargs: [\"{prompt}\"]\nauto: false\n---\n"
 	if _, err := workers.SaveProfile(ctx, db, "harness/fake", workers.Edit{Source: &src}, "u1"); err != nil {
 		t.Fatal(err)
@@ -35,7 +32,7 @@ func TestNamedOnlyWorker(t *testing.T) {
 		t.Fatal(err)
 	}
 	d := get(env)
-	v, err := d.view(ctx, tk, "low", nil)
+	v, err := d.view(ctx, tk, Options{Risk: "low"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,7 +70,7 @@ func TestNamedOnlyWorker(t *testing.T) {
 	if _, err := workers.SaveProfile(ctx, db, "harness/fake", workers.Edit{Unset: []string{"auto"}}, "u1"); err != nil {
 		t.Fatal(err)
 	}
-	v, err = d.view(ctx, tk, "low", nil)
+	v, err = d.view(ctx, tk, Options{Risk: "low"}, nil)
 	if err != nil || v.Recommended != "fake" {
 		t.Fatalf("缺省仍自动挑：%+v %v", v, err)
 	}

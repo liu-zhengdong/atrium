@@ -480,7 +480,7 @@ func TestAgentRoutesAuth(t *testing.T) {
 		t.Fatal(err)
 	}
 	var body string
-	if err := g.env.DB.QueryRow(`SELECT body FROM quota_cache WHERE account = 'f1'`).Scan(&body); err != nil || !strings.Contains(body, `"host":"`+a.Cfg.Host+`"`) {
+	if err := g.env.DB.QueryRow(`SELECT body FROM quota_cache WHERE account = ?`, a.Cfg.Host+":codex").Scan(&body); err != nil || !strings.Contains(body, `"host":"`+a.Cfg.Host+`"`) {
 		t.Fatalf("%q %v", body, err)
 	}
 	// 用户接口：show、暂停后挑机器不选、本机不能移除。

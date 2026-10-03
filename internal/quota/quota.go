@@ -1,8 +1,8 @@
 // Package quota 是额度：自带读取 Claude Code、Codex、OpenCode Go 的用量（读本机已登录凭据调供应商用量接口，只读），
-// 其余账号本机有 OpenQuota 就用 `openquota pace --json` 补；远程机器上报的读数按账号指纹合并。
+// 其余账号本机有 OpenQuota 就用 `openquota pace --json` 补；远程机器上报的读数按机器/provider 保留。
 // 读取只在服务的后台循环里做（loop），读数存 quota_cache；分派任务、网页、命令都只取存下的读数（Last）。给用户留的份额（缺省 20%）扣掉后才算富余。「工具+模型@机器」撞了额度的标记在 workers。
 //
-// 给 dispatch：Spares(ctx, env) → 账号 → 富余。给 hosts：Local（代理读本机）、Record（服务收远程读数）。
+// Spares/Last 仅展示摘要，不作跨机器选择依据。给 hosts：Local（代理读本机）、Record（服务收远程读数）。
 package quota
 
 import (
@@ -74,40 +74,59 @@ func (l *Local) Due(ctx context.Context, disabled map[string]bool) []Reading {
 
 // ---- 存储 ----
 
+// keyOf 按机器×provider 保留成功和最近失败；Finger 是来源线索，不作主键。
 func keyOf(host string, r Reading) string {
-	switch {
-	case !r.OK:
-		return host + ":" + r.Account + ":fail"
-	case r.Finger != "":
-		return r.Finger
+	key := host + ":" + r.Account
+	if !r.OK {
+		key += ":fail"
 	}
-	return host + ":" + r.Account
+	return key
 }
 
-// Record 存一台机器的读数：读到的按账号指纹一行（多台同一账号合一行，取最新），同时清掉这台这个账号的旧行；
-// 读不到的只记失败原因，不删上次读到的（沿用 6 小时）。
+// CacheRows 是既有缓存的有界预算：每机器×provider 最多成功/失败两行。
+// 最多 250 对来源同时保留两行；达到 500 行明确报错，不能静默 LIMIT 截断。
+const CacheRows = 500
+
+// Record 正常刷新替换该机器/provider 的成功事实并清旧行；失败另记，
+// 不改原成功 Finger/ReadAt。旧指纹主键只随实际正常刷新清理，不能复原已丢机器。
 func Record(ctx context.Context, db *store.DB, host string, readings []Reading) error {
 	return db.Tx(ctx, func(tx *sql.Tx) error {
 		for _, r := range readings {
 			if !isAccount(r.Account) {
-				return api.Usage("不认识的额度账号 %q", r.Account)
+				return api.Usage("不认识的额度来源 %q", r.Account)
 			}
 			key := keyOf(host, r)
 			if r.OK {
 				if _, err := tx.ExecContext(ctx, `DELETE FROM quota_cache WHERE tool = ? AND account != ?
-					AND json_extract(body, '$.host') = ?`, r.Account, key, host); err != nil {
+      AND json_extract(body, '$.host') = ?`, r.Account, key, host); err != nil {
 					return err
 				}
 			}
-			body, _ := json.Marshal(Stored{Host: host, Reading: r})
+			body, err := json.Marshal(Stored{Host: host, Reading: r})
+			if err != nil {
+				return fmt.Errorf("额度来源无法编码：%w", err)
+			}
 			if _, err := tx.ExecContext(ctx, `INSERT INTO quota_cache (account, tool, body, read_at) VALUES (?, ?, ?, ?)
-				ON CONFLICT (account) DO UPDATE SET tool = excluded.tool, body = excluded.body, read_at = excluded.read_at`,
+      ON CONFLICT (account) DO UPDATE SET tool = excluded.tool, body = excluded.body, read_at = excluded.read_at`,
 				key, r.Account, string(body), r.ReadAt); err != nil {
 				return err
 			}
 		}
+		var count int
+		if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM quota_cache WHERE account != ?`, oqKey).Scan(&count); err != nil {
+			return err
+		}
+		if count > CacheRows {
+			return fmt.Errorf("额度缓存 %d/%d 行超限（机器×provider，每对最多成功/失败两行）；先移除不用的来源", count, CacheRows)
+		}
 		return nil
 	})
+}
+
+// DropHost 随既有机器删除清理该机器的来源，无独立关联状态。
+func DropHost(ctx context.Context, q store.Querier, host string) error {
+	_, err := q.ExecContext(ctx, `DELETE FROM quota_cache WHERE account != ? AND json_extract(body, '$.host') = ?`, oqKey, host)
+	return err
 }
 
 func isAccount(a string) bool {
@@ -120,7 +139,7 @@ func isAccount(a string) bool {
 }
 
 func stored(ctx context.Context, q store.Querier) ([]Stored, error) {
-	rows, err := q.QueryContext(ctx, `SELECT body FROM quota_cache WHERE account != ? ORDER BY read_at DESC LIMIT 500`, oqKey)
+	rows, err := q.QueryContext(ctx, `SELECT body FROM quota_cache WHERE account != ? ORDER BY read_at DESC LIMIT ?`, oqKey, CacheRows+1)
 	if err != nil {
 		return nil, err
 	}
@@ -136,6 +155,9 @@ func stored(ctx context.Context, q store.Querier) ([]Stored, error) {
 			return nil, fmt.Errorf("quota_cache 有坏行：%w", err)
 		}
 		out = append(out, s)
+		if len(out) > CacheRows {
+			return nil, fmt.Errorf("额度缓存超过 %d 行，未返回截断结果", CacheRows)
+		}
 	}
 	return out, rows.Err()
 }
@@ -189,6 +211,11 @@ func (p *poller) round(ctx context.Context, db *store.DB) error {
 	rows, err := p.oq(ctx)
 	st := oqStored{Rows: rows}
 	if err != nil {
+		previous, readErr := openquotaStored(ctx, db)
+		if readErr != nil {
+			return readErr
+		}
+		st.Rows = previous.Rows // 失败不换原成功来源或 refreshedAt。
 		st.Error = err.Error()
 	}
 	body, _ := json.Marshal(st)
@@ -278,7 +305,7 @@ func Last(ctx context.Context, env *app.Env) (Overview, error) {
 	if env.Paths.Isolated() {
 		ov.Notes = append(ov.Notes, "隔离实例不读本机额度（自带读取与 OpenQuota）")
 	}
-	for _, line := range Lines(mergeHosts(all, LocalHost, store.Now()), oq.Rows) {
+	for _, line := range Lines(mergeHosts(all, LocalHost, store.Now()), agePaces(oq.Rows, store.Now())) {
 		if !disabled[line.Account] {
 			ov.Lines = append(ov.Lines, line)
 		}
@@ -391,8 +418,8 @@ func Format(ov Overview) string {
 		}
 		fmt.Fprintf(&b, "%-12s", l.Account)
 		fmt.Fprintf(&b, "已用 %s  富余 %s  短窗 %s", pct(l.UsedPercent), pct(l.SparePercent), pct(l.ShortUsedPct))
-		if l.Plan != "" {
-			fmt.Fprintf(&b, "  %s", l.Plan)
+		if l.Plan != nil && *l.Plan != "" {
+			fmt.Fprintf(&b, "  %s", *l.Plan)
 		}
 		if l.Stale {
 			b.WriteString("  旧数")

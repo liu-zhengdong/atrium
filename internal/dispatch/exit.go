@@ -42,14 +42,44 @@ func (d *dispatcher) exited(ctx context.Context, p *proc, code int) error {
 	}
 	same, switches, tried := tries(runs)
 	sig := workers.Classify(code, p.run.Worker, log, time.Now())
+	if sig.Kind == workers.SignalNone && p.stopReason() == "" {
+		tr, err := workers.ReadTrace(p.run.Worker, p.run.Log)
+		if err != nil {
+			return err
+		}
+		delivered := false
+		if workers.Silent(tr, false) {
+			delivered, err = hasRunDelivery(ctx, db, p.task, p.run)
+			if err != nil {
+				return err
+			}
+		}
+		if workers.Silent(tr, delivered) {
+			sig = workers.Signal{Kind: workers.SignalNoStart, Reason: "静默空转：完整零 usage，且无有效动作或产出"}
+
+		}
+	}
 	if p.lost {
 		sig = workers.Signal{Kind: workers.SignalTransient, Reason: "远程执行者退出不明"}
 	}
 	session := p.adapter.SessionOf(head)
 	route := RouteExit(ExitInput{Code: code, Signal: sig, Ending: p.adapter.Ended(log.Text), StopFor: p.stopReason(),
 		Same: same, Switches: switches, Pending: len(pending), CanResume: p.adapter.CanResume() && session != ""})
+	live, err := ledger.Get(ctx, db, p.task)
+	if err != nil {
+		return err
+	}
+	if live.Status != ledger.Running || live.Stage != ledger.StageNone {
+		return recordExit(ctx, db, p.task, p.run, workers.Exit{N: p.run.N, Reason: "任务已停止或进入下一阶段"})
+	}
 	marked, err := markUnavailable(ctx, db, p.run, sig)
 	if err != nil {
+		return err
+	}
+	if err := d.markSharedFailure(ctx, p, sig); err != nil {
+		if isAPI(err) {
+			return d.block(ctx, p.task, "共享池恢复受阻："+err.Error())
+		}
 		return err
 	}
 	// 每轮都记结果，包括空回复，防止新一轮无正文时沿用旧结论。
@@ -77,15 +107,8 @@ func (d *dispatcher) exited(ctx context.Context, p *proc, code int) error {
 		return apply(ledger.ExitOK, note)
 	case "fail":
 		return apply(ledger.ExitFail, note)
-	case "requeue": // 重新挑执行者与机器，避开刚标的不可用
-		if err := apply(ledger.ExitFail, note); err != nil {
-			return err
-		}
-		_, err := Enqueue(ctx, d.env, p.task, Options{Risk: p.run.Risk, Secrets: p.run.Secrets}, actor)
-		if err != nil && isAPI(err) {
-			return ledger.Note(ctx, db, p.task, actor, "重新排队失败："+err.Error())
-		}
-		return err
+	case "block":
+		return apply(ledger.Block, note)
 	}
 	if paused, err := d.paused(ctx, t, p.run.Host); err != nil || paused {
 		if err != nil {
@@ -93,7 +116,7 @@ func (d *dispatcher) exited(ctx context.Context, p *proc, code int) error {
 		}
 		return apply(ledger.Block, note+"；停机中没有重新拉起，恢复后 atrium task run "+p.task)
 	}
-	o := launchOpts{Host: p.run.Host, Risk: p.run.Risk, Secrets: p.run.Secrets}
+	o := launchOpts{Tokens: p.run.Tokens, Host: p.run.Host, Risk: p.run.Risk, Secrets: p.run.Secrets}
 	switch route.Do {
 	case "same", "resume", "restart":
 		o.W, err = workers.Resolve(ctx, db, p.run.Worker)
@@ -106,7 +129,7 @@ func (d *dispatcher) exited(ctx context.Context, p *proc, code int) error {
 		}
 	case "switch":
 		var wait bool
-		o.W, wait, err = d.choose(ctx, t, Options{Risk: p.run.Risk}, tried)
+		o.W, wait, err = d.choose(ctx, t, Options{Risk: p.run.Risk, Tokens: p.run.Tokens}, tried)
 		if err == nil && wait {
 			err = api.Conflict("能换的执行者都正忙")
 		}
@@ -122,7 +145,7 @@ func (d *dispatcher) exited(ctx context.Context, p *proc, code int) error {
 		if !isAPI(err) {
 			return err
 		}
-		return apply(ledger.ExitFail, note+"；重新拉起失败："+err.Error())
+		return apply(ledger.Block, note+"；重新拉起受阻："+err.Error())
 	}
 	return ledger.Note(ctx, db, p.task, actor, "执行者退出："+note+"；已重新拉起（"+o.Why+"，"+o.W.ID+"）")
 }

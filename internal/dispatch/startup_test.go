@@ -67,9 +67,6 @@ func TestStartupProbeAutoDispatch(t *testing.T) {
 			if err := hosts.EnsureLocal(ctx, db, hosts.LocalInfo(dir)); err != nil {
 				t.Fatal(err)
 			}
-			oldSpares := spares
-			spares = func(context.Context, *app.Env) (map[string]Spare, error) { return map[string]Spare{}, nil }
-			defer func() { spares = oldSpares }()
 			tk, err := ledger.Add(ctx, db, ledger.NewTask{Title: name}, "u1")
 			if err != nil {
 				t.Fatal(err)
@@ -85,7 +82,7 @@ func TestStartupProbeAutoDispatch(t *testing.T) {
 			if err != nil || got.Status != ledger.Queued {
 				t.Fatalf("自检前应等待：%+v %v", got, err)
 			}
-			v, err := d.view(ctx, got, "low", nil)
+			v, err := d.view(ctx, got, Options{Risk: "low"}, nil)
 			if err != nil || !v.Waiting || !strings.Contains(v.Reason, "尚未完成工具自检") {
 				t.Fatalf("%+v %v", v, err)
 			}

@@ -63,17 +63,28 @@ func ModelKey(model string) string { return model[strings.LastIndex(model, "/")+
 
 // Resolved 是解析后的执行者：适配器、三层叠加的规则与正文。
 type Resolved struct {
-	ID       string   `json:"id"` // 工具+模型[:强度]（补上默认模型后）
-	Spec     Spec     `json:"spec"`
-	CLIModel string   `json:"cli_model,omitempty"` // 实际交给工具的模型：models/combos 层的 model 优先
-	Rules    Rules    `json:"rules"`
-	Body     string   `json:"body,omitempty"` // 各层正文按 harness、models、combos 拼接，附进提示词
-	Layers   []string `json:"layers"`
-	Adapter  *Driver  `json:"-"`
+	// QuotaBinding 仅由本轮实际解析/启动事实提供，不读档案、不落库。
+	QuotaBinding *ExecutionBinding `json:"-"`
+	ID           string            `json:"id"` // 工具+模型[:强度]（补上默认模型后）
+	Spec         Spec              `json:"spec"`
+	CLIModel     string            `json:"cli_model,omitempty"` // 实际交给工具的模型：models/combos 层的 model 优先
+	Rules        Rules             `json:"rules"`
+	Body         string            `json:"body,omitempty"` // 各层正文按 harness、models、combos 拼接，附进提示词
+	Layers       []string          `json:"layers"`
+	Adapter      *Driver           `json:"-"`
 }
 
-// Account 是额度账号：同一工具的模型共享一份额度。
+// Account 是展示使用的来源类别，不是实际账号或共享套餐身份。
+// 执行组合与 provider 分开；显式 CLI provider 保持原名，不建立别名表。
 func (r Resolved) Account() string {
+	if r.Spec.Tool == "pi" || r.Spec.Tool == "opencode" {
+		if provider, _, ok := strings.Cut(r.CLIModel, "/"); ok {
+			return provider
+		}
+		if provider, _, ok := strings.Cut(r.Spec.Model, "/"); ok {
+			return provider
+		}
+	}
 	if r.Spec.Tool == "agy" {
 		return "antigravity"
 	}

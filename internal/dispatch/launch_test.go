@@ -53,15 +53,14 @@ func TestLaunchFailureKeepsDispatchRunning(t *testing.T) {
 			if err := os.WriteFile(env.Paths.Token(), []byte("test-token"), 0600); err != nil {
 				t.Fatal(err)
 			}
-			oldPick, oldSpares, oldLaunch := pickHost, spares, launchRemote
-			defer func() { pickHost, spares, launchRemote = oldPick, oldSpares, oldLaunch }()
+			oldPick, oldLaunch := pickHost, launchRemote
+			defer func() { pickHost, launchRemote = oldPick, oldLaunch }()
 			pickHost = func(_ context.Context, _ *app.Env, _ HostNeed, host string) (HostChoice, error) {
 				if host == "" {
 					host = LocalHost
 				}
 				return HostChoice{Kind: "run", Host: host}, nil
 			}
-			spares = func(context.Context, *app.Env) (map[string]Spare, error) { return map[string]Spare{}, nil }
 			launchRemote = func(context.Context, *app.Env, string, Remote) (int, int, string, error) {
 				return 0, 0, "", errors.New("非法远程启动参数")
 			}

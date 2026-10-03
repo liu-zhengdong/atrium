@@ -381,7 +381,7 @@ CREATE TABLE IF NOT EXISTS events (
 CREATE INDEX IF NOT EXISTS events_pending ON events (target, acked_at, id);
 CREATE INDEX IF NOT EXISTS events_key ON events (key, target);
 
--- 额度读数：account 是账号指纹（认不出为 hN:工具，读失败为 hN:工具:fail）；body 是读数 JSON（机器、套餐、窗口或失败原因）。
+-- 额度来源：account 是 hN:provider（失败加 :fail；openquota 为既有展示摘要）；body 保留机器、来源指纹、套餐标签、窗口和原成功时刻，不证明账号/共享池。
 CREATE TABLE IF NOT EXISTS quota_cache (
   account TEXT PRIMARY KEY,
   tool    TEXT NOT NULL,

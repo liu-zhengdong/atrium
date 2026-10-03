@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -164,15 +165,23 @@ func hook(env *app.Env) {
 	}
 }
 
-// Requeue 给 watch：卡住或读到信号转失败后重新入队。额度用尽先标「工具+模型@机器」不可用；额度用尽、思考耗尽换人（避开原执行者），其余同一执行者再来。
+// Requeue 给 watch：失败后重新入队；额度先标不可用，额度/思考沿用换人上限。
+// 额度失败按账号与机器范围避开，其他失败避开已试过的组合；被停的任务不再派。
 func Requeue(ctx context.Context, env *app.Env, id string, why watch.Why) error {
+	t, err := ledger.Get(ctx, env.DB, id)
+	if err != nil {
+		return err
+	}
+	if t.Status != ledger.Failed {
+		return nil // 被停、取消或已经进入关卡的任务不能被巡检重新派出。
+	}
 	run, err := workers.LastRun(ctx, env.DB, id)
 	if err != nil {
 		return err
 	}
 	o := Options{Risk: "low"}
 	if run != nil {
-		o.Risk, o.Secrets = run.Risk, run.Secrets
+		o.Risk, o.Secrets, o.Tokens = run.Risk, run.Secrets, run.Tokens
 		outcome := workers.OutFail
 		if why.Signal == watch.SigQuota {
 			outcome = workers.OutQuota
@@ -203,9 +212,22 @@ func Requeue(ctx context.Context, env *app.Env, id string, why watch.Why) error 
 	}
 	switch why.Signal {
 	case watch.SigQuota, watch.SigThinking:
-		if why.Worker != "" {
-			o.Avoid = []string{why.Worker}
+		runs, err := workers.Runs(ctx, env.DB, id, 50)
+		if err != nil {
+			return err
 		}
+		_, switches, tried := tries(runs)
+		if switches >= maxSwitches {
+			if _, err := Enqueue(ctx, env, id, o, actor); err != nil {
+				return err
+			}
+			return get(env).block(ctx, id, why.Reason+"；已换过 "+itoa(switches)+" 次执行者")
+		}
+		for worker := range tried {
+			o.Avoid = append(o.Avoid, worker)
+		}
+		slices.Sort(o.Avoid)
+		o.Avoid = union(o.Avoid, []string{why.Worker})
 	default:
 		o.Worker = why.Worker
 	}

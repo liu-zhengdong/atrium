@@ -2,6 +2,7 @@ package dispatch
 
 import (
 	"context"
+	"maps"
 	"slices"
 
 	"github.com/liu-zhengdong/atrium/internal/app"
@@ -10,7 +11,8 @@ import (
 )
 
 // view 收集事实并挑执行者（task run --dry-run 与自动分派任务同一份）。
-func (d *dispatcher) view(ctx context.Context, t ledger.Task, risk string, exclude map[string]bool, pinned ...string) (PickView, error) {
+func (d *dispatcher) view(ctx context.Context, t ledger.Task, o Options, exclude map[string]bool) (PickView, error) {
+	risk, tokens := o.Risk, o.Tokens
 	db := d.env.DB
 	var preferred []string
 	if t.Skill != "" {
@@ -39,6 +41,11 @@ func (d *dispatcher) view(ctx context.Context, t ledger.Task, risk string, exclu
 	var facts []Fact
 	seen := map[string]bool{}
 	iso := isolated(d.env)
+	available, err := workers.LoadAvailability(ctx, d.env)
+	if err != nil {
+		return PickView{}, app.Global(err)
+	}
+	exclude = maps.Clone(exclude)
 	for i, id := range append(slices.Clone(preferred), catalog...) {
 		r, err := workers.Resolve(ctx, db, id)
 		if err != nil {
@@ -58,6 +65,10 @@ func (d *dispatcher) view(ctx context.Context, t ledger.Task, risk string, exclu
 		f := Fact{ID: r.ID, Tool: r.Spec.Tool, Model: r.Spec.Model, Account: r.Account(), Trust: r.Rules.EffectiveTrust(),
 			MaxRisk: r.Rules.EffectiveMaxRisk(), Refusal: r.Rules.Refusal(risk, true),
 			Exclusive: r.Adapter.Exclusive, Stat: workers.Count(stats[workers.Combo(r.ID)]), Fails: workers.Fails(stats[workers.Combo(r.ID)], ShakyWindow)}
+		f.Cost = r.Rules
+		if available.QuotaMarked(r.Spec) {
+			delete(exclude, r.ID)
+		}
 		if _, builtin := workers.Builtin(r.Spec.Tool); iso && builtin {
 			f.Unavailable = "隔离实例（ATRIUM_DATA 不是缺省目录）不自动挑内置工具"
 		} else {
@@ -67,13 +78,20 @@ func (d *dispatcher) view(ctx context.Context, t ledger.Task, risk string, exclu
 			}
 			// 满载只影响何时拉起，不影响工具与任务能否匹配。
 			need.Urgent = true
-			host := ""
-			if len(pinned) > 0 {
-				host = pinned[0]
-			}
-			choice, err := pickHost(ctx, d.env, need, host)
+			choice, err := pickHost(ctx, d.env, need, o.Host)
 			if err != nil {
 				return PickView{}, err
+			}
+			if choice.Host != "" {
+				r, err = workers.ResolveExecution(ctx, d.env, r, choice.Host)
+				if err != nil {
+					return PickView{}, err
+				}
+				sp, why := available.CheckResolved(r, choice.Host, tokens)
+				f.Quota = &sp
+				if why != "" {
+					f.Unavailable = why
+				}
 			}
 			if choice.Kind == "queue" {
 				f.Waiting = choice.Reason
@@ -98,13 +116,9 @@ func (d *dispatcher) view(ctx context.Context, t ledger.Task, risk string, exclu
 			facts[i].Refusal = why
 		}
 	}
-	sp, err := spares(ctx, d.env)
-	if err != nil {
-		return PickView{}, app.Global(err)
-	}
 	busy, err := busyTools(ctx, db)
 	if err != nil {
 		return PickView{}, err
 	}
-	return Pick(PickInput{Risk: risk, Priority: t.Priority, Facts: facts, Spares: sp, Busy: busy, Exclude: exclude}), nil
+	return Pick(PickInput{Tokens: tokens, Risk: risk, Priority: t.Priority, Facts: facts, Busy: busy, Exclude: exclude}), nil
 }

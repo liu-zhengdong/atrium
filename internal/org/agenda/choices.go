@@ -197,7 +197,7 @@ func splitInts(s string) []int {
 }
 
 // AddChoice 登记一份选项单。task 非空时同一件任务只登记一次（再调返回已有的）。
-func AddChoice(ctx context.Context, db *store.DB, in ChoiceInput, task, actor string) (Choice, error) {
+func AddChoice(ctx context.Context, db *store.DB, data string, in ChoiceInput, task, actor string) (Choice, error) {
 	if err := CheckChoice(in); err != nil {
 		return Choice{}, err
 	}
@@ -222,7 +222,7 @@ func AddChoice(ctx context.Context, db *store.DB, in ChoiceInput, task, actor st
 				}
 			}
 		}
-		if err := checkEvidence(ctx, tx, in.Options); err != nil {
+		if err := checkEvidence(ctx, tx, data, in.Options); err != nil {
 			return err
 		}
 		var open int
@@ -421,7 +421,7 @@ func ParseChoice(raw []byte) (ChoiceInput, error) {
 
 // Settle 是 choice 交付方式的应用（gates 在验收或交付检查通过后之后调）：raw 是工作目录根 choice.json 的内容（远程经代理读），
 // 登记成选项单，挂在任务的部门下。没有这个文件（raw 为 nil）返回 nil；不合法返回 usage 错误。
-func Settle(ctx context.Context, db *store.DB, task string, raw []byte) (*Choice, error) {
+func Settle(ctx context.Context, db *store.DB, data, task string, raw []byte) (*Choice, error) {
 	if raw == nil {
 		return nil, nil
 	}
@@ -437,7 +437,7 @@ func Settle(ctx context.Context, db *store.DB, task string, raw []byte) (*Choice
 		return nil, api.Usage("%s 没挂部门，%s 无处登记", task, ChoiceFile)
 	}
 	in.Org = t.Org
-	c, err := AddChoice(ctx, db, in, task, task)
+	c, err := AddChoice(ctx, db, data, in, task, task)
 	if err != nil {
 		return nil, err
 	}

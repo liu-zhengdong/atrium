@@ -141,7 +141,7 @@ type Module struct {
 - 负责人唤醒：`org.Overview(ctx, q, data, dept)` 总览全文；`org.Materials(…, MaterialFilter{Org})` 细节清单。
 - 删部门（`org edit oN --delete [--into oM]`，`org/delete.go`）：存了部门编号的每张表都登记在那里——并入时挪走（`deptMovables`）、挡着要人先处理（`deptBlockers`）或随部门删掉（`DeleteDept` 的语句表）三者之一。新加这类表时同时登记，否则删部门会留下悬空引用。
 - 权限：`org.CheckReach(ctx, q, actor, dept)`（用户都行；负责人只到自己部门及下属）；`org.CheckUser(actor, 做什么)`（拍板、凭据只有用户）。
-- 交付检查（gates）：没有仓库也没有工作地点的任务读工作目录根的 `choice.json`（远程经代理），交付检查用 `agenda.ParseChoice` 核对（不合法按交付检查未通过交回），应用时 `agenda.Settle(ctx, db, task, raw)` 登记成选项单。
+- 交付检查（gates）：没有仓库也没有工作地点的任务读工作目录根的 `choice.json`（远程经代理），交付检查用 `agenda.ParseChoice` 核对（不合法按交付检查未通过交回），应用时 `agenda.Settle(ctx, db, data, task, raw)` 登记成选项单。它与 CLI 经 `AddChoice` 在分配短号、写单和发事件前共用依据校验；每项须有 `mN/相对路径`，使用实例资料目录，经与 `material ls` 相同的 `Material.ReadFile` 读取实际文件，不只查元数据。
 - 验收人：`org.Acceptor(ctx, q, dept)` → `auto`／`leader`／`user` 与设它的部门；`org.MayAccept(actor, who)`：用户与秘书都能判，负责人不能代用户验收。
 - 负责人的执行者组合与 `task run --worker` 同一种写法；登记时经 `org.CheckWorker`（workers 接上的 `Resolve`）核对。
 - dispatch 装配时设 `agenda.Enqueue = func(ctx, env, task, actor) error`（即 task run）；定时任务每轮建任务后调它。挑机器时经 `agenda.LocalOnly(ctx, q, task)` 判这一轮能不能派远程（体验巡检要开只读网页，只派本机）。

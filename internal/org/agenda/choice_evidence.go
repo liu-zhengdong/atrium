@@ -36,7 +36,7 @@ func evidenceRefs(text string) []string {
 	return refs
 }
 
-func checkEvidence(ctx context.Context, q store.Querier, options []OptionInput) error {
+func checkEvidence(ctx context.Context, q store.Querier, data string, options []OptionInput) error {
 	for i, o := range options {
 		refs := evidenceRefs(o.Evidence)
 		hasFile := false
@@ -47,12 +47,12 @@ func checkEvidence(ctx context.Context, q store.Querier, options []OptionInput) 
 			if rel != "" {
 				hasFile = true
 			}
-			m, err := org.GetMaterial(ctx, q, "", id, 0)
+			m, err := org.GetMaterial(ctx, q, data, id, 0)
 			if err == nil && rel != "" {
 				var decoded string
 				decoded, err = url.PathUnescape(rel)
 				if err == nil {
-					_, _, err = m.File(decoded)
+					_, _, err = m.ReadFile(decoded)
 				}
 			}
 			if err != nil {

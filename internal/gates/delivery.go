@@ -251,7 +251,7 @@ func (g *Gate) landChoice(ctx context.Context, t ledger.Task) (landed, error) {
 	if err != nil {
 		return landed{}, err
 	}
-	c, err := agenda.Settle(ctx, g.DB, t.ID, raw)
+	c, err := agenda.Settle(ctx, g.DB, g.Data, t.ID, raw)
 	if err != nil || c == nil {
 		return landed{}, err
 	}

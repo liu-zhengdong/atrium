@@ -51,7 +51,7 @@ func Routes(r *api.Router, env *app.Env) {
 		if err := q.Decode(&in); err != nil {
 			return nil, err
 		}
-		return AddChoice(q.Context(), db, in, "", q.Actor.ID)
+		return AddChoice(q.Context(), db, env.Paths.Data, in, "", q.Actor.ID)
 	})
 	r.Handle("POST /api/choices/{id}/void", voidRoute(env))
 	r.Handle("POST /api/choices/{id}/decide", func(q *api.Req) (any, error) {

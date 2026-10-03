@@ -27,7 +27,7 @@ func TestSettleRequiresMaterialForEveryOption(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := Settle(ctx, env.DB, task.ID, raw); code(err) != "usage" || !strings.Contains(err.Error(), "options[2].evidence") {
+		if _, err := Settle(ctx, env.DB, env.Paths.Data, task.ID, raw); code(err) != "usage" || !strings.Contains(err.Error(), "options[2].evidence") {
 			t.Fatalf("%s: %v", evidence, err)
 		}
 		var choices, events, lastID int
@@ -63,7 +63,7 @@ func TestChoicePickVoidRace(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		in := sample(3)
 		in.Org = dept
-		c, err := AddChoice(ctx, env.DB, in, "", "a1")
+		c, err := AddChoice(ctx, env.DB, env.Paths.Data, in, "", "a1")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -92,7 +92,7 @@ func TestChoicePickVoidRace(t *testing.T) {
 func TestChoiceEvidenceAndVoid(t *testing.T) {
 	env, dept := setup(t)
 	ctx := context.Background()
-	m, err := org.AddMaterial(ctx, env.DB, t.TempDir(), org.MaterialInput{Org: dept, Note: "22 号参考图，选项依据验证", Files: []org.MaterialFile{{Name: "22.svg", Content: []byte("<svg/>")}}}, "u1")
+	m, err := org.AddMaterial(ctx, env.DB, env.Paths.Data, org.MaterialInput{Org: dept, Note: "22 号参考图，选项依据验证", Files: []org.MaterialFile{{Name: "22.svg", Content: []byte("<svg/>")}}}, "u1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,7 +100,7 @@ func TestChoiceEvidenceAndVoid(t *testing.T) {
 	in.Org = dept
 	for _, ref := range []string{"对比图与动效预览里 01 列", "m1", "m1/#preview", "m1/?download=1", "m999/image.png", m.ID + "/missing.svg", m.ID + "/../22.svg", "先看 " + m.ID + "/22.svg，再看 m999/image.png"} {
 		in.Options[1].Evidence = ref
-		if _, err := AddChoice(ctx, env.DB, in, "", "a1"); code(err) != "usage" || !strings.Contains(err.Error(), "options[2].evidence") {
+		if _, err := AddChoice(ctx, env.DB, env.Paths.Data, in, "", "a1"); code(err) != "usage" || !strings.Contains(err.Error(), "options[2].evidence") {
 			t.Fatalf("%s: %v", ref, err)
 		}
 	}
@@ -109,7 +109,7 @@ func TestChoiceEvidenceAndVoid(t *testing.T) {
 		t.Fatalf("拒绝后不得留单: %v %v", list, err)
 	}
 	in.Options[1].Evidence = "[图](" + m.ID + "/22.svg#preview)"
-	c, err := AddChoice(ctx, env.DB, in, "", "a1")
+	c, err := AddChoice(ctx, env.DB, env.Paths.Data, in, "", "a1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,7 +152,7 @@ func TestChoiceEvidenceAndVoid(t *testing.T) {
 		t.Fatal(err)
 	}
 	in.Options[1].Evidence = "无法解析的自由文字也能建立"
-	if _, err := AddChoice(ctx, env.DB, in, "", "a1"); code(err) != "usage" {
+	if _, err := AddChoice(ctx, env.DB, env.Paths.Data, in, "", "a1"); code(err) != "usage" {
 		t.Fatalf("无引用必须拒绝：%v", err)
 	}
 }

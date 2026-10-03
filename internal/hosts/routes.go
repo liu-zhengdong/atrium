@@ -209,13 +209,6 @@ func agentRoutes(r *api.Router, env *app.Env) {
 			return nil, err
 		}
 		ctx := q.Context()
-		previous, err := Get(ctx, env.DB, host)
-		if err != nil {
-			return nil, err
-		}
-		if previous.Info != nil {
-			b.Info.CLIs = previous.Info.CLIs
-		}
 		if err := touch(ctx, env.DB, host, &b.Info, nil); err != nil {
 			return nil, err
 		}

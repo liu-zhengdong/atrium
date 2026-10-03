@@ -331,7 +331,8 @@ func Verify(ctx context.Context, q store.Querier, token string) (string, bool) {
 	return m[1], subtle.ConstantTimeCompare([]byte(digest(token)), []byte(hash)) == 1
 }
 
-// touch 记心跳；info、load 给了就一并更新。
+// touch 记心跳；info、load 给了就一并更新。info 里的 clis 只归自检（setCLIs）写，这里保留库里的：
+// hello 与自检上报会同时到，各改各的字段、同一条 UPDATE 里合并，谁也不盖掉谁。
 func touch(ctx context.Context, q store.Querier, id string, info *Info, load *Load) error {
 	var infoRaw, loadRaw any
 	if info != nil {
@@ -342,8 +343,16 @@ func touch(ctx context.Context, q store.Querier, id string, info *Info, load *Lo
 		b, _ := json.Marshal(load)
 		loadRaw = string(b)
 	}
-	_, err := q.ExecContext(ctx, `UPDATE hosts SET last_seen_at = ?, info = COALESCE(?, info), load = COALESCE(?, load) WHERE id = ?`,
+	_, err := q.ExecContext(ctx, `UPDATE hosts SET last_seen_at = ?, info = COALESCE(json_set(?, '$.clis', info -> '$.clis'), info), load = COALESCE(?, load) WHERE id = ?`,
 		store.Now(), infoRaw, loadRaw, id)
+	return err
+}
+
+// setCLIs 记一轮自检的可用工具（只改 info 里的 clis）。
+func setCLIs(ctx context.Context, q store.Querier, id string, clis map[string]CLI) error {
+	b, _ := json.Marshal(clis)
+	_, err := q.ExecContext(ctx, `UPDATE hosts SET last_seen_at = ?, info = json_set(COALESCE(info, '{}'), '$.clis', json(?)) WHERE id = ?`,
+		store.Now(), string(b), id)
 	return err
 }
 

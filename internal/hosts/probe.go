@@ -226,21 +226,14 @@ type ProbeReport struct {
 }
 
 func recordProbe(ctx context.Context, db *store.DB, host string, report ProbeReport, tools []workers.Tool) error {
-	h, err := Get(ctx, db, host)
-	if err != nil {
-		return err
-	}
-	if h.Info == nil {
-		h.Info = &Info{}
-	}
-	h.Info.CLIs = map[string]CLI{}
+	clis := map[string]CLI{}
 	for _, tool := range tools {
 		if c, ok := report.CLIs[tool.Name]; ok {
-			h.Info.CLIs[tool.Name] = c
+			clis[tool.Name] = c
 		}
 	}
 	if err := workers.SyncProbes(ctx, db, host, probeMarks(report.Failed, tools), store.Now()); err != nil {
 		return err
 	}
-	return touch(ctx, db, host, h.Info, nil)
+	return setCLIs(ctx, db, host, clis)
 }

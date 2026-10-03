@@ -137,8 +137,7 @@ func TestAgentProbeRoute(t *testing.T) {
 		}
 	}
 	// 这台的 codex 看上去装了、登录了（上报的 CLIs），只有自检不过。
-	info := Info{CLIs: map[string]CLI{"codex": {Installed: true}}}
-	if err := touch(ctx, g.env.DB, host, &info, nil); err != nil {
+	if err := setCLIs(ctx, g.env.DB, host, map[string]CLI{"codex": {Installed: true}}); err != nil {
 		t.Fatal(err)
 	}
 	report([]ProbeFailure{{Tool: "codex", Reason: "自检 codex --version 退出码 1", Output: "No active Node.js version."}, {Tool: "evil", Reason: "x"}})
@@ -161,5 +160,34 @@ func TestAgentProbeRoute(t *testing.T) {
 	}
 	if c, err := Pick(ctx, g.env, Need{Tool: "codex"}, host); err != nil || c.Kind != "run" {
 		t.Fatalf("%+v %v", c, err)
+	}
+}
+
+// 代理上线时 hello 与自检同时到：谁先谁后，自检结果都留下，hello 带的机器信息也留下。
+func TestHelloKeepsConcurrentProbe(t *testing.T) {
+	g := newRig(t)
+	cfg := g.join(t.TempDir())
+	ctx := context.Background()
+	c := &api.Client{Base: g.server.URL, Token: cfg.Token}
+	for i := range 100 {
+		if _, err := g.env.DB.ExecContext(ctx, `UPDATE hosts SET info = '{}' WHERE id = ?`, cfg.Host); err != nil {
+			t.Fatal(err)
+		}
+		errs := make(chan error, 2)
+		go func() {
+			errs <- c.Do(ctx, "POST", "/api/agent/hello", map[string]any{"info": Info{Hostname: "m"}, "runs": []AgentRun{}}, nil)
+		}()
+		go func() {
+			errs <- c.Do(ctx, "POST", "/api/agent/probe", ProbeReport{CLIs: map[string]CLI{}, Failed: []ProbeFailure{}}, nil)
+		}()
+		for range 2 {
+			if err := <-errs; err != nil {
+				t.Fatal(err)
+			}
+		}
+		h, err := Get(ctx, g.env.DB, cfg.Host)
+		if err != nil || h.Info == nil || h.Info.CLIs == nil || h.Info.Hostname != "m" {
+			t.Fatalf("第 %d 轮：自检结果或机器信息被覆盖：%+v %v", i, h.Info, err)
+		}
 	}
 }

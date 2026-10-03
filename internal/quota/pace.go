@@ -83,10 +83,13 @@ func ptr(v float64) *float64 { return &v }
 
 // PaceOf 把一份读数折成一行。
 func PaceOf(r Reading, now int64) Pace {
-	p := Pace{Account: r.Account, Plan: r.Plan,
+	p := Pace{Account: r.Account,
 		RefreshedAt:   time.UnixMilli(r.ReadAt / 1000 * 1000).UTC().Format(time.RFC3339),
 		RefreshedAgoH: round1(float64(max(0, (now-r.ReadAt)/1000)) / 3600),
 		Stale:         now-r.ReadAt >= staleAfter,
+	}
+	if r.Plan != "" {
+		p.Plan = &r.Plan
 	}
 	if c := comparisonWindow(r.Windows); c != nil {
 		p.UsedPercent = ptr(round1(clampPct(c.Used)))

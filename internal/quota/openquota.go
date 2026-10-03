@@ -74,8 +74,9 @@ const OpenquotaBin = "/Applications/OpenQuota.app/Contents/MacOS/openquota"
 
 // Pace 是 `openquota pace --json` 的一行（自带读数也折成同样的结构）。
 type Pace struct {
+	SourceFacts
 	Account       string   `json:"providerId"`
-	Plan          string   `json:"plan"`
+	Plan          *string  `json:"plan"`
 	UsedPercent   *float64 `json:"usedPercent"`
 	ElapsedPct    *float64 `json:"periodElapsedPercent"`
 	SparePercent  *float64 `json:"sparePercent"`
@@ -111,6 +112,9 @@ func readOpenquota(ctx context.Context, env map[string]string) ([]Pace, error) {
 	if err := json.Unmarshal(out, &rows); err != nil {
 		return nil, errors.New("OpenQuota 输出无法解析")
 	}
+	if err := validateSources(rows); err != nil {
+		return nil, err
+	}
 	return rows, nil
 }
 
@@ -120,6 +124,11 @@ func agePaces(rows []Pace, now int64) []Pace {
 	out := append([]Pace(nil), rows...)
 	for i := range out {
 		p := &out[i]
+		if p.Remembered || p.ErrorKind != nil || p.RefreshOutcome == "failed" ||
+			p.DataQuality == "refreshFailed" || p.DataQuality == "empty" ||
+			p.DataQuality == "remembered" || p.DataQuality == "stale" {
+			p.Stale = true
+		}
 		at, err := time.Parse(time.RFC3339, p.RefreshedAt)
 		if err != nil || at.UnixMilli() > now {
 			p.Stale = true

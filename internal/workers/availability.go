@@ -13,15 +13,21 @@ import (
 // t865 在 Launcher 注入侧复用；org 无需依赖 workers。
 type Availability struct {
 	Readings []quota.Stored
-	Marks    []Mark
-	Reserve  int
-	Now      int64
+	// Sources 仅属于 quota.LocalHost；含完整来源事实，不证明执行组合绑定。
+	Sources []quota.Pace
+	Marks   []Mark
+	Reserve int
+	Now     int64
 }
 
 func LoadAvailability(ctx context.Context, env *app.Env) (Availability, error) {
 	a := Availability{Now: store.Now()}
 	var err error
 	a.Readings, err = quota.Cached(ctx, env.DB)
+	if err != nil {
+		return a, err
+	}
+	a.Sources, err = quota.CachedSources(ctx, env.DB, a.Now)
 	if err != nil {
 		return a, err
 	}

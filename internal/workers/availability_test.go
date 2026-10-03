@@ -2,13 +2,58 @@ package workers
 
 import (
 	"context"
+	"encoding/json"
 	"github.com/liu-zhengdong/atrium/internal/app"
 	"github.com/liu-zhengdong/atrium/internal/config"
 	"github.com/liu-zhengdong/atrium/internal/quota"
 	"github.com/liu-zhengdong/atrium/internal/store"
+	"os"
 	"path/filepath"
 	"testing"
 )
+
+func TestAvailabilityActualSourceContract(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	db, err := store.Open(filepath.Join(dir, "a.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	b, err := os.ReadFile("../quota/testdata/pace-m146.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rows []quota.Pace
+	if err := json.Unmarshal(b, &rows); err != nil {
+		t.Fatal(err)
+	}
+	for _, match := range []string{"unknown", "matched", "mismatched"} {
+		rows[0].CacheIdentityMatch = match
+		rows[0].AccountIdentity = &quota.AccountIdentity{Kind: "accountHash", Value: "synthetic", Source: "synthetic"}
+		body, err := json.Marshal(map[string]any{"rows": rows})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.ExecContext(ctx, `INSERT INTO quota_cache VALUES ('openquota','openquota',?,?) ON CONFLICT(account) DO UPDATE SET body=excluded.body`, string(body), store.Now()); err != nil {
+			t.Fatal(err)
+		}
+		a, err := LoadAvailability(ctx, &app.Env{DB: db, Paths: config.Paths{Data: dir}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(a.Sources) != 1 || len(a.Sources[0].Quotas) != 2 || *a.Sources[0].Quotas[1].UsedPercent != 100 {
+			t.Fatal("共同入口丢完整来源")
+		}
+		for _, host := range []string{"h1", "h2"} {
+			sp, why := a.CheckResolved(Resolved{Spec: Spec{Tool: "pi", Model: "opencode-go/a"}}, host)
+			if sp.Percent != nil || sp.Stop != "" || why != "" {
+				t.Fatal("来源卡片匹配不证明实际执行账号/池，不能连坐其他机器", match, host, sp, why)
+			}
+		}
+	}
+	t.Log("预期共同入口保留月100/周25，matched/mismatched/unknown均不补造执行组合绑定或跨机器共享；实际符合")
+}
 
 func TestAvailabilityUnknownScope(t *testing.T) {
 	now := store.Now()

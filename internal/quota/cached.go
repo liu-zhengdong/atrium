@@ -11,3 +11,21 @@ import (
 func Cached(ctx context.Context, q store.Querier) ([]Stored, error) {
 	return stored(ctx, q)
 }
+
+// CachedSources 是本机 OpenQuota 的完整原来源。失败保留原账号与成功时刻，
+// 本次失败只标记陈旧，不将旧 matched 当作当前身份成功解析。远程来源没有
+// pace 上报契约，不能把本机读数移用于其他机器。
+func CachedSources(ctx context.Context, q store.Querier, now int64) ([]Pace, error) {
+	st, err := openquotaStored(ctx, q)
+	if err != nil {
+		return nil, err
+	}
+	rows := agePaces(st.Rows, now)
+	if st.Error != "" {
+		for i := range rows {
+			rows[i].Stale = true
+			rows[i].CacheIdentityMatch = "unknown"
+		}
+	}
+	return rows, nil
+}

@@ -152,7 +152,14 @@ func TestMain(m *testing.M) {
 		if strings.Contains(filepath.Base(os.Args[0]), "mixed") {
 			fmt.Fprintln(os.Stderr, "synthetic corrupt row")
 		}
-		fmt.Println(`[{"providerId":"codex","usedPercent":25,"refreshedAt":"2026-10-03T00:00:00Z"}]`)
+		payload := string(sourceFixture)
+		if strings.Contains(filepath.Base(os.Args[0]), "damaged") {
+			payload = strings.Replace(payload, `"quotaCount":2`, `"quotaCount":1`, 1)
+		}
+		if strings.Contains(filepath.Base(os.Args[0]), "empty") {
+			payload = `[]`
+		}
+		fmt.Println(payload)
 		os.Exit(0)
 	}
 	os.Exit(m.Run())
@@ -170,7 +177,7 @@ func TestOpenquotaMixedDamagedExitZero(t *testing.T) {
 		t.Fatal(err)
 	}
 	dir := t.TempDir()
-	for _, name := range []string{"clean", "mixed"} {
+	for _, name := range []string{"clean", "mixed", "damaged", "empty"} {
 		suffix := ""
 		if strings.HasSuffix(exe, ".exe") {
 			suffix = ".exe"
@@ -180,7 +187,7 @@ func TestOpenquotaMixedDamagedExitZero(t *testing.T) {
 			t.Fatal(err)
 		}
 		rows, err := readOpenquota(ctx, map[string]string{"HOME": dir, "USERPROFILE": dir, "ATRIUM_OPENQUOTA_BIN": bin})
-		if name == "mixed" {
+		if name != "clean" {
 			if err == nil || rows != nil {
 				t.Fatal("exit0+坏行警告不能标成功", rows, err)
 			}

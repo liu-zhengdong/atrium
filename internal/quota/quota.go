@@ -418,8 +418,8 @@ func Format(ov Overview) string {
 		}
 		fmt.Fprintf(&b, "%-12s", l.Account)
 		fmt.Fprintf(&b, "已用 %s  富余 %s  短窗 %s", pct(l.UsedPercent), pct(l.SparePercent), pct(l.ShortUsedPct))
-		if l.Plan != "" {
-			fmt.Fprintf(&b, "  %s", l.Plan)
+		if l.Plan != nil && *l.Plan != "" {
+			fmt.Fprintf(&b, "  %s", *l.Plan)
 		}
 		if l.Stale {
 			b.WriteString("  旧数")

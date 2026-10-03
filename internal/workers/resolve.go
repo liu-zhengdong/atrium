@@ -3,6 +3,8 @@ package workers
 import (
 	"context"
 	"maps"
+	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -104,6 +106,19 @@ func (r Resolved) Endpoint() *Endpoint {
 		}
 	}
 	return &Endpoint{BaseURL: r.Rules.Endpoint, API: r.Rules.EndpointAPI, KeyEnv: key}
+}
+
+// LocalOnly 是只能派本机的原因（纯函数）：端点是回环地址（localhost、127.x、::1）时只有服务那台机器连得上；否则为空。
+func (r Resolved) LocalOnly() string {
+	u, err := url.Parse(r.Rules.Endpoint)
+	if r.Rules.Endpoint == "" || err != nil {
+		return ""
+	}
+	host := u.Hostname()
+	if ip := net.ParseIP(host); host == "localhost" || (ip != nil && ip.IsLoopback()) {
+		return "端点 " + r.Rules.Endpoint + " 是本机回环地址，远程机器连不上"
+	}
+	return ""
 }
 
 // Request 按执行者补上模型、强度、端点与通用命令行写法。

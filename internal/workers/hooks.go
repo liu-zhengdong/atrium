@@ -95,6 +95,9 @@ func LeaderSpec(ctx context.Context, env *app.Env, l leaders.Launch) (platform.S
 	if err != nil {
 		return platform.Spec{}, err
 	}
+	if err := launch.WriteFiles(); err != nil {
+		return platform.Spec{}, err
+	}
 	envs := map[string]string{}
 	for k, v := range l.Env {
 		envs[k] = v

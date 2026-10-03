@@ -159,7 +159,15 @@ func (d *dispatcher) launch(ctx context.Context, t ledger.Task, o launchOpts) er
 		if err != nil {
 			return fmt.Errorf("本机执行者拉起失败：%w", err)
 		}
-		run.PID, p.stdin, wait = pid, stdin, cmdWait
+		tool, log := o.W.Spec.Tool, run.Log
+		run.PID, p.stdin = pid, stdin
+		wait = func() int {
+			code := cmdWait()
+			if err := workers.AfterExit(tool, log, extra); err != nil {
+				d.env.Log.Error("执行者退出后补记用量失败", "task", t.ID, "err", err)
+			}
+			return code
+		}
 	}
 	p.run = run
 	if err := d.record(ctx, t, run); err != nil {

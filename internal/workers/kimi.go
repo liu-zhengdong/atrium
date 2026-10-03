@@ -31,6 +31,8 @@ func readKimi(p *Parser, e event, line string) bool {
 		switch e.str("type") {
 		case "session.resume_hint":
 			p.t.Session = e.str("session_id")
+		case kimiUsageType:
+			readKimiUsage(p, e)
 		case "system.version", "turn.step.retrying":
 		default:
 			return false

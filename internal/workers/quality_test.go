@@ -42,6 +42,18 @@ func TestQualities(t *testing.T) {
 			}
 		}
 	}
+	// 非 USD 花费带着结算时折好的 USD 才算进每次交付花费。
+	cny := []Attempt{
+		{Worker: "trae+m", N: 1, Outcome: OutOK, Usage: Usage{Cost: price(7), Currency: "CNY", USD: price(1)}},
+		{Worker: "trae+m", N: 1, Outcome: OutOK, Usage: Usage{Cost: price(14), Currency: "CNY", USD: price(2)}},
+	}
+	if g := Qualities(cny, nil, Combo); g[0].CostPerDeliveryUSD == nil || *g[0].CostPerDeliveryUSD != 1.5 || g[0].costText() != "USD 1.5" {
+		t.Fatalf("折合后的每次交付花费：%+v", g[0])
+	}
+	cny[1].Usage.USD = nil
+	if g := Qualities(cny, nil, Combo); g[0].CostPerDeliveryUSD != nil || g[0].costText() != "未知（能折成 USD 的完整读数 1/2）" {
+		t.Fatalf("缺一次折合就不能算：%+v", g[0])
+	}
 	// 同率同花费时用时短在前，未知在后；最终名字保证确定顺序。
 	d1, d2 := int64(1000), int64(2000)
 	a := Attempt{Worker: "pi+a", Outcome: OutOK, Usage: ls[7].Usage, DurationMS: &d1}

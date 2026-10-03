@@ -372,6 +372,8 @@ case "$1 $2" in
     jq -n --arg s "$(cat "$state")" --arg h "$(head)" --arg mc "$(cat "$state.commit" 2>/dev/null || true)" \
       '{number:1,url:"https://github.com/o/r/pull/1",state:$s,headRefName:"feat",headRefOid:$h,baseRefName:"main",body:"",
         mergeCommit:(if $mc == "" then null else {oid:$mc} end)}' ;;
+  "pr checks")
+    echo "no checks reported on the 'feat' branch" >&2; exit 1 ;;
   "pr merge")
     want=""; args=("$@"); for i in "${!args[@]}"; do [ "${args[$i]}" = --match-head-commit ] && want=${args[$((i+1))]}; done
     [ "$want" = "$(head)" ] || { echo "头提交 $(head) 与 --match-head-commit $want 不一致" >&2; exit 1; }

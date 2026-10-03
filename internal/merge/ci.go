@@ -66,11 +66,22 @@ type ciOutcome struct {
 
 // runCI 等该 PR 头提交的远端 checks 出结论：全绿才合；有失败或等满上限都交回。
 // 头提交刚推上去时 checks 可能几秒后才上报：查一次为空就等 report 再查一次，仍为空视为没配 CI。
-func runCI(ctx context.Context, q *Queue, repo string, pr int) (ciOutcome, error) {
+func runCI(ctx context.Context, q *Queue, repo string, pr int) (out ciOutcome, err error) {
 	limit := q.CIWait
 	if limit == 0 {
 		limit = 15 * time.Minute
 	}
+	// 上限覆盖查询、上报等待和轮询；服务取消不应被当作 CI 超时交回。
+	parent := ctx
+	ctx, cancel := context.WithTimeout(ctx, limit)
+	defer cancel()
+	defer func() {
+		if parent.Err() != nil {
+			out, err = ciOutcome{}, parent.Err()
+		} else if ctx.Err() == context.DeadlineExceeded {
+			out, err = ciOutcome{Timeout: true, Limit: limit}, nil
+		}
+	}()
 	report := q.CIReport
 	if report == 0 {
 		report = 30 * time.Second
@@ -96,7 +107,6 @@ func runCI(ctx context.Context, q *Queue, repo string, pr int) (ciOutcome, error
 			return ciOutcome{None: true, Pass: true}, nil
 		}
 	}
-	deadline := time.Now().Add(limit)
 	for {
 		verdict, red := ciJudge(checks)
 		switch verdict {
@@ -104,9 +114,6 @@ func runCI(ctx context.Context, q *Queue, repo string, pr int) (ciOutcome, error
 			return ciOutcome{Pass: true}, nil
 		case ciRed:
 			return ciOutcome{Name: red.Name, Link: red.Link}, nil
-		}
-		if time.Now().After(deadline) {
-			return ciOutcome{Timeout: true, Limit: limit}, nil
 		}
 		select {
 		case <-ctx.Done():

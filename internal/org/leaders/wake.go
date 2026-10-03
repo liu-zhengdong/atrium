@@ -121,7 +121,18 @@ func (h *hub) run(ctx context.Context, env *app.Env) error {
 	defer h.wg.Wait()
 	t := time.NewTicker(h.tick)
 	defer t.Stop()
+	var nextPrune int64
 	for {
+		if now := store.Now(); now >= nextPrune {
+			n, err := PruneWakes(ctx, env.DB, now-WakeRetention.Milliseconds())
+			if err != nil {
+				return fmt.Errorf("清理唤醒记录：%w", err)
+			}
+			if n > 0 {
+				env.Log.Info("清理唤醒记录", "deleted", n)
+			}
+			nextPrune = now + time.Hour.Milliseconds()
+		}
 		if err := h.round(ctx, env); err != nil {
 			return err
 		}

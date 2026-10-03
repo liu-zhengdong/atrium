@@ -343,7 +343,8 @@ CREATE TABLE IF NOT EXISTS worker_marks (
   PRIMARY KEY (tool, model, host)
 );
 
--- 负责人唤醒记录：一次唤醒拉起一条，只追加（每天几十条，不清理），workers --quality 与任务拉起一起统计。
+-- 负责人唤醒记录：一次唤醒拉起一条，保留 30 天（leaders.WakeRetention，唤醒循环每小时删过期的；每天几十条，保留期内几千条），
+-- workers --quality 只算保留期内的，与任务拉起一起统计。
 -- profile 是这次用的执行者组合；n 是第几次连续尝试（上次没处理完再唤醒为 2）；outcome 取值同任务拉起（ok、fail、setup）；
 -- usage 是 workers.Usage 的 JSON。leader 不设外键：身份删掉后这个组合的记录照样计入质量统计。
 CREATE TABLE IF NOT EXISTS leader_wakes (

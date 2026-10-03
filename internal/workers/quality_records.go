@@ -10,7 +10,7 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/store"
 )
 
-// ReadQuality 分页读取全部相关经历，每件任务仍由 Settle 判定，不截断历史；负责人唤醒记录另成行。
+// ReadQuality 分页读取全部相关经历，每件任务仍由 Settle 判定，不截断历史；负责人唤醒记录只取保留期内的，另成行。
 func ReadQuality(ctx context.Context, db store.Querier) ([]Quality, error) {
 	byTask := map[string][]Event{}
 	var upper int64
@@ -56,7 +56,7 @@ func ReadQuality(ctx context.Context, db store.Querier) ([]Quality, error) {
 		}
 		all = append(all, ls...)
 	}
-	ws, err := leaders.ReadWakes(ctx, db)
+	ws, err := leaders.ReadWakes(ctx, db, store.Now()-leaders.WakeRetention.Milliseconds())
 	if err != nil {
 		return nil, err
 	}

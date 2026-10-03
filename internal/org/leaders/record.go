@@ -5,11 +5,12 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/liu-zhengdong/atrium/internal/store"
 )
 
-// 唤醒记录（leader_wakes）：一次唤醒拉起一条，只追加；workers 读它与任务拉起一起算执行者质量。
+// 唤醒记录（leader_wakes）：一次唤醒拉起一条，保留 WakeRetention；workers 读它与任务拉起一起算执行者质量。
 
 // 结果取值与任务拉起同一套（workers.OutOK、OutFail、OutSetup；workers 的测试核对），本包引不到 workers。
 const (
@@ -70,13 +71,27 @@ func recordWake(ctx context.Context, db *store.DB, w Wake) error {
 	})
 }
 
-// ReadWakes 分页读全部唤醒记录（按编号正序），不截断。
-func ReadWakes(ctx context.Context, q store.Querier) ([]Wake, error) {
+// WakeRetention 是唤醒记录的保留期：质量统计只算这段时间内的唤醒，过期的由唤醒循环每小时删掉（PruneWakes）。
+// 量级：每天几十次唤醒，保留期内几千条；30 天也跟得上工具与模型的更替，更早的不代表现在的质量。
+const WakeRetention = 30 * 24 * time.Hour
+
+// PruneWakes 删掉早于 before 的唤醒记录，返回删了几条。
+func PruneWakes(ctx context.Context, q store.Querier, before int64) (int64, error) {
+	res, err := q.ExecContext(ctx, `DELETE FROM leader_wakes WHERE at < ?`, before)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
+// ReadWakes 分页读 since（毫秒）及之后的唤醒记录（按编号正序）。调用方传 now - WakeRetention，
+// 口径就不受清理是否已跑到的影响。
+func ReadWakes(ctx context.Context, q store.Querier, since int64) ([]Wake, error) {
 	var out []Wake
 	var cursor int64
 	for {
 		rows, err := q.QueryContext(ctx, `SELECT id, leader, profile, n, model, outcome, reason, usage, duration_ms, at
-			FROM leader_wakes WHERE id > ? ORDER BY id LIMIT 1000`, cursor)
+			FROM leader_wakes WHERE id > ? AND at >= ? ORDER BY id LIMIT 1000`, cursor, since)
 		if err != nil {
 			return nil, err
 		}

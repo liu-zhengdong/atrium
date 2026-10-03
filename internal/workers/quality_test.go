@@ -100,14 +100,18 @@ func TestReadQualityLeaderWakes(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	ins := func(outcome, usage string) {
+	now := store.Now()
+	insAt := func(outcome, usage string, at int64) {
 		t.Helper()
-		if _, err := db.ExecContext(ctx, `INSERT INTO leader_wakes (leader, profile, n, outcome, usage, duration_ms, at) VALUES ('a9', 'pi+opencode-go/glm-5.3-flash:high', 1, ?, ?, 1000, 1)`, outcome, usage); err != nil {
+		if _, err := db.ExecContext(ctx, `INSERT INTO leader_wakes (leader, profile, n, outcome, usage, duration_ms, at) VALUES ('a9', 'pi+opencode-go/glm-5.3-flash:high', 1, ?, ?, 1000, ?)`, outcome, usage, at); err != nil {
 			t.Fatal(err)
 		}
 	}
+	ins := func(outcome, usage string) { t.Helper(); insAt(outcome, usage, now) }
 	ins(OutOK, `{"cost":0.5,"currency":"USD"}`)
 	ins(OutFail, `{"cost":0.5,"currency":"USD"}`)
+	// 保留期外的（还没被清理）不计入，坏了也不读。
+	insAt(OutFail, "{", now-leaders.WakeRetention.Milliseconds()-60_000)
 	got, err := ReadQuality(ctx, db)
 	if err != nil {
 		t.Fatal(err)

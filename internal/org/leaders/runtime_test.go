@@ -554,7 +554,7 @@ func TestWake(t *testing.T) {
 	}
 
 	// 每次唤醒一条记录；用量只拿这次的日志段；没拉起来的不读日志、没有用时。
-	ws, err := ReadWakes(ctx, env.DB)
+	ws, err := ReadWakes(ctx, env.DB, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -593,7 +593,7 @@ func TestWake(t *testing.T) {
 	f.ack = true
 	events.Emit(ctx, env.DB, events.Event{Kind: events.TaskStatus, Task: "t1", Dept: "o2", Target: "a2", Level: events.Act})
 	round()
-	if ws, err = ReadWakes(ctx, env.DB); err != nil || len(ws) != 6 || ws[5].Outcome != WakeOK || ws[5].Usage != "{}" {
+	if ws, err = ReadWakes(ctx, env.DB, 0); err != nil || len(ws) != 6 || ws[5].Outcome != WakeOK || ws[5].Usage != "{}" {
 		t.Fatalf("用量取不到也要落记录：%+v %v", ws, err)
 	}
 }
@@ -647,6 +647,47 @@ func TestWakeTimeout(t *testing.T) {
 	h.wg.Wait()
 	if time.Since(start) > 5*time.Second || h.fails["a2"] != 1 {
 		t.Fatalf("超时应结束并记失败：%s fails=%d", time.Since(start), h.fails["a2"])
+	}
+}
+
+// 唤醒循环一起来就删过期记录；ReadWakes 只读 since 之后的，清理没跑到也不多算。
+func TestWakeRetention(t *testing.T) {
+	env, h, _ := fixture(t)
+	t.Setenv("ATRIUM_LEADER_WAKE", "1")
+	ctx := context.Background()
+	now := store.Now()
+	edge := now - WakeRetention.Milliseconds()
+	for i, at := range []int64{edge - 1000, edge + 60_000, now} {
+		if err := recordWake(ctx, env.DB, Wake{Leader: "a2", Profile: "fake", N: 1, Outcome: WakeOK, At: at}); err != nil {
+			t.Fatal(i, err)
+		}
+	}
+	if ws, err := ReadWakes(ctx, env.DB, edge); err != nil || len(ws) != 2 || ws[0].At != edge+60_000 {
+		t.Fatalf("只读保留期内：%+v %v", ws, err)
+	}
+	if ws, _ := ReadWakes(ctx, env.DB, 0); len(ws) != 3 {
+		t.Fatalf("清理前三条都在：%d", len(ws))
+	}
+	runCtx, cancel := context.WithCancel(ctx)
+	done := make(chan error, 1)
+	go func() { done <- h.run(runCtx, env) }()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		ws, err := ReadWakes(ctx, env.DB, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(ws) == 2 && ws[0].At == edge+60_000 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("唤醒循环应删掉过期记录：%+v", ws)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	cancel()
+	if err := <-done; err != nil && !errors.Is(err, context.Canceled) {
+		t.Fatal(err)
 	}
 }
 

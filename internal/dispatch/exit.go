@@ -55,8 +55,7 @@ func (d *dispatcher) exited(ctx context.Context, p *proc, code int) error {
 			}
 		}
 		if workers.Silent(tr, delivered) {
-			sig = workers.Signal{Kind: workers.SignalNoStart, Reason: "静默空转：完整零 usage，且无有效动作或产出"}
-
+			sig = workers.SilentSignal(tr.Error, time.Now())
 		}
 	}
 	if p.lost {

@@ -223,13 +223,8 @@ func Classify(exitCode int, worker string, log LogTail, now time.Time) Signal {
 	}
 	plain := lastPlainLines(tail, 12)
 	for _, text := range []string{report, plain} {
-		for _, st := range setups {
-			if line := matchLine(st.re, text); line != "" {
-				return Signal{Kind: SignalSetup, Reason: st.reason, Evidence: oneLine(line)}
-			}
-		}
-		if modelNameRE.MatchString(text) {
-			return Signal{Kind: SignalModel, Reason: "模型名无效", Evidence: oneLine(text)}
+		if s, ok := setupSignal(text); ok {
+			return s
 		}
 	}
 	text := report
@@ -244,6 +239,32 @@ func Classify(exitCode int, worker string, log LogTail, now time.Time) Signal {
 		return Signal{Kind: SignalNoStart, Reason: "零步骤出错退出（" + code + "，原因不明）", Evidence: oneLine(text)}
 	}
 	return Signal{Kind: SignalTransient, Reason: "做过事之后出错退出（" + code + "），按临时错误重试", Evidence: oneLine(text)}
+}
+
+// setupSignal：报文是起不来（没登录、缺运行环境、工具版本过旧）或模型名无效时给出信号。
+func setupSignal(text string) (Signal, bool) {
+	for _, st := range setups {
+		if line := matchLine(st.re, text); line != "" {
+			return Signal{Kind: SignalSetup, Reason: st.reason, Evidence: oneLine(line)}, true
+		}
+	}
+	if modelNameRE.MatchString(text) {
+		return Signal{Kind: SignalModel, Reason: "模型名无效", Evidence: oneLine(text)}, true
+	}
+	return Signal{}, false
+}
+
+// SilentSignal 判静默空转（见 Silent）这一轮的信号（纯函数）：执行者正常退出、一步没做，但在消息里报了错（Trace.Error）——
+// 如 pi 撞了 429 仍以 agent_settled 收尾、退出码 0，Classify 只看退出码非 0 的报文，判不到。报文按 Classify 的同一套规则认；
+// 认不出或没报文的照旧是静默空转。
+func SilentSignal(report string, now time.Time) Signal {
+	if s, ok := quotaSignal(report, now); ok {
+		return s
+	}
+	if s, ok := setupSignal(report); ok {
+		return s
+	}
+	return Signal{Kind: SignalNoStart, Reason: "静默空转：完整零 usage，且无有效动作或产出", Evidence: oneLine(report)}
 }
 
 // quotaSignal：报文是额度用尽时给出信号，读得出恢复时刻的带上。

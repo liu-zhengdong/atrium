@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -514,6 +515,51 @@ func TestClassifyGrokErrors(t *testing.T) {
 		m, ok := MarkOf(s, Spec{Tool: "grok"}, "h3", now)
 		if !ok || m.Target() != c.target || m.Until != c.until {
 			t.Errorf("%s：标记 %v %+v", c.name, ok, m)
+		}
+	}
+}
+
+// pi 撞了 429 仍以 agent_settled 收尾、退出码 0（t1006 现场）：报错只在 assistant 的 message_end 里，
+// 收尾的 agent_end 一行带整场对话，把它挤出 Tail 的尾巴。要读整份日志（ReadTrace）才认得出。
+func TestSilentSignalPiError(t *testing.T) {
+	now := time.Date(2026, 10, 3, 19, 25, 0, 0, time.UTC)
+	zero := `"usage":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"totalTokens":0,"cost":{"total":0}}`
+	piLog := func(msg string) string {
+		end := `{"type":"message_end","message":{"role":"assistant","content":[],"provider":"opencode-go","model":"glm-5.3-flash",` + zero + `,"stopReason":"error","errorMessage":` + strconv.Quote(msg) + `}}`
+		return `{"type":"session","version":3,"id":"s1","cwd":"/w"}` + "\n" + `{"type":"agent_start"}` + "\n" + end + "\n" +
+			`{"type":"agent_end","messages":[{"role":"system","content":"` + strings.Repeat("x", TailBytes+1024) + `"}]}` + "\n" +
+			`{"type":"agent_settled"}` + "\n"
+	}
+	cases := []struct{ name, log, kind, reason string }{
+		{"429 额度", piLog(`429: {"type":"GoUsageLimitError","message":"Go usage limit exceeded"}`), SignalQuota, "额度用尽"},
+		{"没登录", piLog("Not logged in. Please run /login"), SignalSetup, "没登录"},
+		{"认不出照旧空转", piLog("500 Internal Server Error"), SignalNoStart, "静默空转：完整零 usage，且无有效动作或产出"},
+		{"之后有正常回复的不算", strings.Replace(piLog("429: Go usage limit exceeded"), `{"type":"agent_end"`,
+			`{"type":"message_end","message":{"role":"assistant","content":[],`+zero+`,"stopReason":"stop"}}`+"\n"+`{"type":"agent_end"`, 1),
+			SignalNoStart, "静默空转：完整零 usage，且无有效动作或产出"},
+	}
+	for _, c := range cases {
+		path := filepath.Join(t.TempDir(), "run-1.log")
+		if err := os.WriteFile(path, []byte(c.log), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		tail, err := Tail(path, TailBytes)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if s := Classify(0, "pi", tail, now); s.Kind != SignalNone {
+			t.Errorf("%s：退出码 0 时 Classify 应判不出，得到 %+v", c.name, s)
+		}
+		tr, err := ReadTrace("pi", path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !Silent(tr, false) {
+			t.Errorf("%s：应判静默空转，Trace %+v", c.name, tr)
+			continue
+		}
+		if s := SilentSignal(tr.Error, now); s.Kind != c.kind || s.Reason != c.reason {
+			t.Errorf("%s：得到 %+v", c.name, s)
 		}
 	}
 }

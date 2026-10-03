@@ -324,9 +324,6 @@ func Commands(t *cli.Table) {
 		Flags: []cli.Flag{
 			{Name: "clear", Value: "工具[+模型][@机器]", Help: "解除不可用标记（额度用尽、没登录、缺运行环境、工具版本过旧、模型名无效、零步骤出错退出；自检不过的下次自检跑通自动解除，还不过会再标上）；没写模型或机器就解除这个工具在全部模型或机器上的"},
 			{Name: "wait-subscription", Value: "工具[+模型][@机器]", Help: "把已有的不可用标记转成等订阅恢复（订阅已封号、重登修不好）：照样不派活，但不进网页「等你」、不出登录指引；用户明说恢复后再 --clear。匹配规则同 --clear"},
-=======
-			{Name: "clear", Value: "工具[+模型][@机器]", Help: "解除不可用标记（额度用尽、没登录、缺运行环境、工具版本过旧、模型名无效、零步骤出错退出；自检不过的下次自检跑通自动解除，还不过会再标上）；没写模型或机器就解除这个工具在全部模型或机器上的"},
->>>>>>> 9d577c0d (执行者退出信号读出 grok 的 errors 报文：余额用尽判额度、CLI 版本过旧判起不来)
 			{Name: "file", Value: "路径", Help: "整份替换这层档案：--- 包住的 YAML 规则 + 正文（正文附进提示词）"},
 			{Name: "set", Value: "键=值", Multi: true, Help: "改一条规则（值按 YAML：auto=false（只点名）、prefer=true（自动挑人时优先，--unset prefer 解除）、trust=medium、checks=[pr_exists]）"},
 			{Name: "unset", Value: "键", Multi: true, Help: "删一条规则"},

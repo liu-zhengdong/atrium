@@ -14,10 +14,14 @@ import (
 
 // 执行者可用性：某个「工具+模型」在某台机器上此刻能不能接活。执行者退出时按信号记不可用（MarkOf），
 // 机器定期自检（hosts 跑 --version）不过的记 MarkProbe、跑通了自动解除（SyncProbes）；
-// 挑执行者与挑机器时跳过（Blocked）；workers 列出，workers edit --clear 手动解除。
+// 挑执行者与挑机器时跳过（Blocked）；workers 列出，workers edit --wait-subscription 转成等订阅恢复，--clear 手动解除。
 
 // MarkProbe 是自检不过的标记种类：只由下一次自检解除，退出信号记的标记不归它管。
 const MarkProbe = "probe"
+
+// MarkSubscription 是等订阅恢复的标记种类（如订阅已封号，重登修不好）：只由 workers edit --wait-subscription
+// 从已有标记转来，用户明说恢复后才 --clear；照样挡活，但不进「等你」、不出登录指引。退出信号不自动判这一类。
+const MarkSubscription = "subscription"
 
 // Hold 是会自己恢复、但不知道何时恢复的标记挡多久：额度用尽而报文没写恢复时刻，或零步骤出错退出（原因不明）。
 const Hold = 4 * time.Hour
@@ -27,7 +31,7 @@ type Mark struct {
 	Tool     string `json:"tool"`
 	Model    string `json:"model,omitempty"` // 空表示这台上这个工具的全部模型（起不来）
 	Host     string `json:"host"`
-	Kind     string `json:"kind"`   // 同 Signal.Kind：quota setup model nostart
+	Kind     string `json:"kind"`   // 同 Signal.Kind：quota setup model nostart；另有 probe、subscription
 	Reason   string `json:"reason"` // 额度用尽、没登录、缺运行环境、模型名无效、零步骤出错退出
 	Evidence string `json:"evidence,omitempty"`
 	Until    int64  `json:"until"` // 到这个时刻自动恢复；0 等人处理后 workers edit --clear
@@ -57,6 +61,8 @@ func (m Mark) Fix() string {
 		return "修好后自检跑通自动解除，或 atrium workers edit --clear " + m.Target()
 	case SignalModel:
 		return "改对模型名后 atrium workers edit --clear " + m.Target()
+	case MarkSubscription:
+		return "等订阅恢复，用户明说后 atrium workers edit --clear " + m.Target()
 	}
 	return "登录或装好运行环境后 atrium workers edit --clear " + m.Target()
 }
@@ -189,10 +195,9 @@ func Marks(ctx context.Context, q store.Querier, now int64) ([]Mark, error) {
 
 // ClearMarks 手动解除「工具[+模型][@机器]」：没写模型解除这个工具的全部，没写机器解除全部机器上的。返回解除了几条。
 func ClearMarks(ctx context.Context, q store.Querier, target string) (int64, error) {
-	who, host, _ := strings.Cut(strings.TrimSpace(target), "@")
-	s, err := ParseWorker(who)
+	s, host, err := parseMarkTarget("clear", target)
 	if err != nil {
-		return 0, api.Usage("--clear: 写成 工具[+模型][@机器]，如 agy+claude-opus-4-6-thinking@h1（%s）", err.(*api.Error).Message)
+		return 0, err
 	}
 	res, err := q.ExecContext(ctx, `DELETE FROM worker_marks WHERE tool = ? AND (? = '' OR model = ?) AND (? = '' OR host = ?)`,
 		s.Tool, s.Model, s.Model, host, host)
@@ -200,4 +205,29 @@ func ClearMarks(ctx context.Context, q store.Querier, target string) (int64, err
 		return 0, err
 	}
 	return res.RowsAffected()
+}
+
+// WaitSubscription 把「工具[+模型][@机器]」此刻有效的标记转成等订阅恢复（until=0，since 与证据保留），匹配规则同 ClearMarks。
+// 不经 setMark：人已在处理，不再发 worker.down。返回转了几条。
+func WaitSubscription(ctx context.Context, q store.Querier, target string, now int64) (int64, error) {
+	s, host, err := parseMarkTarget("wait-subscription", target)
+	if err != nil {
+		return 0, err
+	}
+	res, err := q.ExecContext(ctx, `UPDATE worker_marks SET kind = ?, reason = '订阅已封号', until = 0
+		WHERE tool = ? AND (? = '' OR model = ?) AND (? = '' OR host = ?) AND (until = 0 OR until > ?)`,
+		MarkSubscription, s.Tool, s.Model, s.Model, host, host, now)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
+func parseMarkTarget(flag, target string) (Spec, string, error) {
+	who, host, _ := strings.Cut(strings.TrimSpace(target), "@")
+	s, err := ParseWorker(who)
+	if err != nil {
+		return Spec{}, "", api.Usage("--%s: 写成 工具[+模型][@机器]，如 agy+claude-opus-4-6-thinking@h1（%s）", flag, err.(*api.Error).Message)
+	}
+	return s, host, nil
 }

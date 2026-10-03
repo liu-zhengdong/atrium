@@ -253,7 +253,7 @@ func loadNav(ctx context.Context, q store.Querier) (Nav, error) {
 
 // Ask 是「等你」的一件：选项单等你挑，交付等你验收（部门的验收人是你），负责人在问你、等你回话的任务（回话后消失），
 // 卡住的任务递到了你这层（往上没有负责人），负责人上报到秘书这层还没处理的事，或等人处理的执行者不可用标记（没登录、缺环境、
-// 模型名无效、自检不过；从 worker_marks 现读，解除就消失；额度用尽这类会自己恢复的不算）。
+// 模型名无效、自检不过；从 worker_marks 现读，解除就消失；额度用尽这类会自己恢复的、等订阅恢复的不算）。
 type Ask struct {
 	Kind     string `json:"kind"` // choose | accept | reply | stuck | escalate | worker
 	ID       string `json:"id"`
@@ -333,7 +333,7 @@ func loadAsks(ctx context.Context, q store.Querier, ix *orgIndex) ([]Ask, error)
 		return nil, err
 	}
 	for _, m := range marks {
-		if m.Until == 0 {
+		if m.Until == 0 && m.Kind != workers.MarkSubscription {
 			spec := workers.Spec{Tool: m.Tool, Model: m.Model}.String()
 			ups = append(ups, Ask{Kind: "worker", ID: m.Target(), Title: spec + "（" + ix.name(m.Host) + "）" + m.Reason, Sub: m.Fix(), At: m.Since})
 		}

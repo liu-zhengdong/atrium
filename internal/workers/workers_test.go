@@ -603,6 +603,7 @@ func TestMarkOf(t *testing.T) {
 		{"临时错误不标", Signal{Kind: SignalTransient}, false, "", 0},
 		{"零步骤出错退出标工具+模型、到期解除", Signal{Kind: SignalNoStart, Reason: "零步骤出错退出（退出码 1，原因不明）"}, true, "agy+claude-opus-4-6-thinking@h3", now.Add(Hold).UnixMilli()},
 		{"思考耗尽不标", Signal{Kind: SignalThinking}, false, "", 0},
+		{"等订阅恢复不由退出信号判", Signal{Kind: MarkSubscription, Reason: "订阅已封号"}, false, "", 0},
 	}
 	for _, c := range cases {
 		m, ok := MarkOf(c.sig, agy, "h3", now)
@@ -670,6 +671,66 @@ func TestMarksStore(t *testing.T) {
 	}
 	if got, _ := Marks(ctx, db, now.UnixMilli()); len(got) != 0 {
 		t.Errorf("应全部解除：%+v", got)
+	}
+}
+
+// 等订阅恢复：只从已有的有效标记转来（匹配同 --clear），since 与证据保留，不发 worker.down；文案不出登录指引。
+func TestWaitSubscription(t *testing.T) {
+	ctx := context.Background()
+	db, err := store.Open(filepath.Join(t.TempDir(), "a.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	now := time.Now().UnixMilli()
+	for _, m := range []Mark{
+		{Tool: "claude", Host: "h1", Kind: SignalSetup, Reason: "没登录", Evidence: "OAuth token revoked", Since: now - 1000},
+		{Tool: "claude", Host: "h3", Kind: SignalSetup, Reason: "没登录", Since: now},
+		{Tool: "agy", Model: "old", Host: "h1", Kind: SignalQuota, Reason: "额度用尽", Until: now - 1, Since: now - 2},
+	} {
+		if err := SetMark(ctx, db, m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	downs := func() int {
+		var n int
+		db.QueryRowContext(ctx, `SELECT COUNT(*) FROM events WHERE kind = ?`, events.WorkerDown).Scan(&n)
+		return n
+	}
+	before := downs()
+	if _, err := WaitSubscription(ctx, db, "claude+bad model", now); err == nil || !strings.HasPrefix(err.Error(), "--wait-subscription:") {
+		t.Errorf("写错的应以参数名开头报错：%v", err)
+	}
+	for _, c := range []struct {
+		target string
+		n      int64
+	}{{"grok", 0}, {"agy+old@h1", 0}, {"claude@h1", 1}, {"claude", 2}} {
+		if n, err := WaitSubscription(ctx, db, c.target, now); err != nil || n != c.n {
+			t.Errorf("转 %s：%d %v", c.target, n, err)
+		}
+	}
+	if got := downs(); got != before {
+		t.Errorf("转等订阅恢复不该再发 worker.down：%d → %d", before, got)
+	}
+	ms, _ := Marks(ctx, db, now)
+	if len(ms) != 2 {
+		t.Fatalf("%+v", ms)
+	}
+	m := ms[0]
+	if m.Target() != "claude@h1" || m.Kind != MarkSubscription || m.Until != 0 || m.Since != now-1000 || m.Evidence != "OAuth token revoked" {
+		t.Errorf("转后的标记：%+v", m)
+	}
+	if _, ok := Blocked(ms, "claude", "opus", "h1"); !ok {
+		t.Error("等订阅恢复照样挡活")
+	}
+	if got := m.Text(); got != "订阅已封号，等订阅恢复，用户明说后 atrium workers edit --clear claude@h1" {
+		t.Error(got)
+	}
+	if got := (Mark{Tool: "claude", Model: "opus", Host: "h1", Kind: MarkSubscription, Reason: "订阅已封号"}).Fix(); got != "等订阅恢复，用户明说后 atrium workers edit --clear claude+opus@h1" {
+		t.Error(got)
+	}
+	if n, _ := ClearMarks(ctx, db, "claude"); n != 2 {
+		t.Errorf("--clear 仍能解除：%d", n)
 	}
 }
 

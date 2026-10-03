@@ -382,6 +382,20 @@ func TestRoutes(t *testing.T) {
 	if nav, err := loadNav(ctx, db); err != nil || nav.Asks != 2 {
 		t.Errorf("侧栏件数：%+v %v", nav, err)
 	}
+	// 转成等订阅恢复后照样挂在执行者下，但不进「等你」。
+	if n, err := workers.WaitSubscription(ctx, db, "claude@h1", store.Now()); err != nil || n != 1 {
+		t.Fatalf("转等订阅恢复：%d %v", n, err)
+	}
+	read("today", &today)
+	if len(today.Asks) != 1 || today.Asks[0].Kind == "worker" {
+		t.Errorf("等订阅恢复不该进等你：%+v", today.Asks)
+	}
+	read("legion", &legion)
+	for _, w := range legion.Workers {
+		if w.ID == "claude+opus" && (len(w.Marks) != 1 || w.Marks[0].Kind != workers.MarkSubscription || w.Marks[0].Reason != "订阅已封号") {
+			t.Errorf("执行者页应看得到等订阅恢复：%+v", w.Marks)
+		}
+	}
 	workers.ClearMarks(ctx, db, "claude@h1")
 	// 部门有了负责人，卡住的活先归负责人，不再递到「等你」；详情里当前等待对象是负责人。
 	a, err := org.AddLeader(ctx, db, org.NewLeader{Name: "运行时负责人", Workers: []string{"claude"}})

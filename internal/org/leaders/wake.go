@@ -29,6 +29,16 @@ type Launch struct {
 	Prompt  string
 	Dir     string
 	Env     map[string]string
+	Attempt *Attempt
+}
+
+// Attempt 是注入边界的一次运行结果。Finish 只判退出及写共用不可用标记；
+// 事件确认、身份、权限、停止与次数仍由 leaders 拥有，不存第二份状态。
+type Attempt struct {
+	Preferred []string
+	Tried     []string
+	Profile   string
+	Finish    func(context.Context, string, int, bool) (retry bool, reason string, err error)
 }
 
 // Launcher 把一次唤醒翻成进程调用（不拉起，拉起、限时、结束由本包经 platform 做）。
@@ -225,41 +235,89 @@ func pendingByLeader(ctx context.Context, q store.Querier) ([]Pending, error) {
 // 用上了执行者组合的唤醒都落一条唤醒记录；服务停下的不记。
 func (h *hub) wake(ctx context.Context, env *app.Env, p Pending) {
 	log := env.Log.With("leader", p.Leader)
-	run, err := h.launch(ctx, env, p)
-	if ctx.Err() != nil {
-		return // 服务停下：不算这位的失败，下次起来重新唤醒
-	}
-	if err != nil {
-		log.Warn("负责人唤醒失败", "err", err)
-	}
-	bg := context.WithoutCancel(ctx)
-	left, lerr := unacked(bg, env.DB, p.Leader, p.IDs)
-	if lerr != nil {
-		log.Error("查这批事件是否确认失败", "err", lerr)
-		return
-	}
-	h.mu.Lock()
-	next, forward := Outcome(len(left), h.fails[p.Leader])
-	h.fails[p.Leader] = next
-	h.mu.Unlock()
-	var to []string
-	var ferr error
-	switch {
-	case forward:
-		var n int64
-		if to, n, ferr = forwardUp(bg, env.DB, p.Leader, left); ferr != nil {
-			log.Error("转交上一层失败", "err", ferr)
-		} else {
-			log.Warn("负责人连续没处理完，事件已转交上一层", "to", to, "events", n)
+	attempt := &Attempt{}
+	for {
+		paused, perr := h.paused(ctx, env, p.Leader)
+		if perr != nil {
+			log.Error("查停机状态失败", "err", perr)
+			return
 		}
-	case len(left) > 0:
-		log.Warn("负责人这次没处理完", "left", len(left), "fails", next)
-	}
-	if run.profile == "" {
+		if paused || ctx.Err() != nil {
+			return
+		}
+		run, err := h.launch(ctx, env, p, attempt)
+		if ctx.Err() != nil {
+			return // 服务停下：不算这位的失败，下次起来重新唤醒
+		}
+		if err != nil {
+			log.Warn("负责人唤醒失败", "err", err)
+		}
+		bg := context.WithoutCancel(ctx)
+		left, lerr := unacked(bg, env.DB, p.Leader, p.IDs)
+		if lerr != nil {
+			log.Error("查这批事件是否确认失败", "err", lerr)
+			return
+		}
+		retry := false
+		if run.started && attempt.Finish != nil {
+			paused, perr := h.paused(bg, env, p.Leader)
+			if perr != nil {
+				log.Error("查停机状态失败", "err", perr)
+				return
+			}
+			if paused {
+				return
+			}
+			seg, serr := readFrom(run.log, run.from)
+			if serr != nil {
+				log.Error("读取唤醒日志失败", "err", serr)
+				return
+			}
+			code := 0
+			if err != nil {
+				code = 1
+			}
+			again, reason, ferr := attempt.Finish(bg, seg, code, len(left) < len(p.IDs))
+			retry = again && ferr == nil && len(left) > 0
+			if ferr != nil {
+				err = ferr
+			} else if reason != "" {
+				err = fmt.Errorf("%s", reason)
+			}
+		}
+		h.mu.Lock()
+		next, forward := Outcome(len(left), h.fails[p.Leader])
+		h.fails[p.Leader] = next
+		h.mu.Unlock()
+		if retry && !forward {
+			if rerr := h.record(bg, env, p, run, err, len(left), nil, nil); rerr != nil {
+				log.Error("记唤醒记录失败", "err", rerr)
+				return
+			}
+			attempt.Tried = append(attempt.Tried, run.profile)
+			attempt.Finish = nil
+			continue
+		}
+		var to []string
+		var ferr error
+		switch {
+		case forward:
+			var n int64
+			if to, n, ferr = forwardUp(bg, env.DB, p.Leader, left); ferr != nil {
+				log.Error("转交上一层失败", "err", ferr)
+			} else {
+				log.Warn("负责人连续没处理完，事件已转交上一层", "to", to, "events", n)
+			}
+		case len(left) > 0:
+			log.Warn("负责人这次没处理完", "left", len(left), "fails", next)
+		}
+		if run.profile == "" {
+			return
+		}
+		if rerr := h.record(bg, env, p, run, err, len(left), to, ferr); rerr != nil {
+			log.Error("记唤醒记录失败", "err", rerr)
+		}
 		return
-	}
-	if rerr := h.record(bg, env, p, run, err, len(left), to, ferr); rerr != nil {
-		log.Error("记唤醒记录失败", "err", rerr)
 	}
 }
 

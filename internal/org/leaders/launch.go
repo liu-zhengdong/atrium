@@ -18,7 +18,7 @@ import (
 )
 
 // launch 签发令牌、组提示词、经 Launcher 与 platform 拉起，等到退出或超时；令牌在返回时作废。
-func (h *hub) launch(ctx context.Context, env *app.Env, p Pending) (wakeRun, error) {
+func (h *hub) launch(ctx context.Context, env *app.Env, p Pending, attempt *Attempt) (wakeRun, error) {
 	var run wakeRun
 	who, err := org.GetIdentity(ctx, env.DB, p.Leader)
 	if err != nil {
@@ -27,10 +27,13 @@ func (h *hub) launch(ctx context.Context, env *app.Env, p Pending) (wakeRun, err
 	h.mu.Lock()
 	fails := h.fails[p.Leader]
 	h.mu.Unlock()
-	run.profile, run.n = PickWorker(who.Workers, fails), fails+1
-	if run.profile == "" {
+	run.n = fails + 1
+	if len(who.Workers) == 0 {
 		return run, fmt.Errorf("%s 没有登记执行者组合", who.ID)
 	}
+	run.profile = who.Workers[0]
+	attempt.Profile, attempt.Finish = "", nil
+	attempt.Preferred = who.Workers
 	l := getLauncher()
 	if l == nil {
 		return run, errors.New("拉起接口还没接上（leaders.SetLauncher）")
@@ -57,7 +60,10 @@ func (h *hub) launch(ctx context.Context, env *app.Env, p Pending) (wakeRun, err
 	}
 	defer h.revoke(token)
 	spec, err := l(ctx, Launch{Leader: who.ID, Profile: run.profile, Prompt: prompt, Dir: dir,
-		Env: leaderEnv(platform.EnvMap(os.Environ()), token, env.Paths.Data, tmp)})
+		Attempt: attempt, Env: leaderEnv(platform.EnvMap(os.Environ()), token, env.Paths.Data, tmp)})
+	if attempt != nil && attempt.Profile != "" {
+		run.profile = attempt.Profile
+	}
 	if err != nil {
 		return run, err
 	}
@@ -67,10 +73,10 @@ func (h *hub) launch(ctx context.Context, env *app.Env, p Pending) (wakeRun, err
 		return run, err
 	}
 	defer logf.Close()
+	fmt.Fprintf(logf, "\n=== %s 唤醒 %s（%s），事件 %v\n", time.Now().Format(time.RFC3339), who.ID, run.profile, p.IDs)
 	if run.from, err = logf.Seek(0, io.SeekCurrent); err != nil {
 		return run, err
 	}
-	fmt.Fprintf(logf, "\n=== %s 唤醒 %s（%s），事件 %v\n", time.Now().Format(time.RFC3339), who.ID, run.profile, p.IDs)
 	spec.Stdout, spec.Stderr, spec.Detached = logf, logf, true
 	if spec.Dir == "" {
 		spec.Dir = dir

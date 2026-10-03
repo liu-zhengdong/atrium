@@ -580,8 +580,8 @@ func TestWake(t *testing.T) {
 		t.Fatalf("只有拉起来的唤醒取用量：%d", len(segs))
 	}
 	for _, s := range segs {
-		if strings.Count(s, "=== ") != 1 || !strings.Contains(s, "本次输出") {
-			t.Fatalf("日志段应只含这一次唤醒：%q", s)
+		if strings.Contains(s, "=== ") || !strings.Contains(s, "本次输出") {
+			t.Fatalf("日志段应只含这一次进程输出、不含运行时标题：%q", s)
 		}
 	}
 

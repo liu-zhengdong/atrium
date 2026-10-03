@@ -325,8 +325,8 @@ out=$(json secret ls --node o2); has '.result[0].name == "BOT_TOKEN" and (tostri
 private "$ATRIUM_DATA/secrets/o1/BOT_TOKEN" || fail "凭据文件别人能读"
 grep -q sekrit "$ATRIUM_DATA/service.log" && fail "凭据值进了日志"
 out=$(json secret set o1 BOT_TOKEN --rm); has '.ok'
-opt='{"title":"T","gain":"g","why_now":"w","cost":"c","if_not":"i","evidence":"e"}'
-opt3='{"title":"T","gain":"g","why_now":"w","cost":"c","if_not":"i","evidence":"e","org":"o1"}'
+opt='{"title":"T","gain":"g","why_now":"w","cost":"c","if_not":"i","evidence":"m3/report.md"}'
+opt3='{"title":"T","gain":"g","why_now":"w","cost":"c","if_not":"i","evidence":"m3/report.md","org":"o1"}'
 echo "{\"title\":\"下一步\",\"options\":[$opt,$opt,$opt3],\"recommend\":[1],\"reason\":\"快\"}" >"$work/choice.json"
 out=$(json choice add o2 "$work/choice.json"); has '.result.id == "c1" and .result.status == "open" and .result.options[2].org == "o1"'
 out=$(json choice ls); has '(.result|length) == 1'

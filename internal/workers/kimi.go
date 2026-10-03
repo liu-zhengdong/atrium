@@ -9,7 +9,12 @@ func kimiReply(e event) string {
 	return e.str("content")
 }
 
-func readKimi(p *Parser, e event, _ string) bool {
+func readKimi(p *Parser, e event, line string) bool {
+	// Bash 的 stdout 也会直接写进日志；没有 role 的 JSON 是命令输出，不是 Kimi 事件。
+	if _, ok := e["role"]; !ok {
+		p.raw(line)
+		return true
+	}
 	switch e.str("role") {
 	case "assistant":
 		p.say(e.str("content"))

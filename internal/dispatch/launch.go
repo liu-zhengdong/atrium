@@ -19,6 +19,9 @@ import (
 	"strings"
 )
 
+// originRunner 查仓库 origin 用的执行器；测试换成假的注入临时故障。
+var originRunner = func() gates.Runner { return gates.NewExec() }
+
 // launch 拉起一次执行者：备好工作目录与提示词、算出进程调用、白名单环境加凭据、记录结果、跟着等它退出。
 func (d *dispatcher) launch(ctx context.Context, t ledger.Task, o launchOpts) error {
 	db, data := d.env.DB, d.env.Paths.Data
@@ -59,7 +62,7 @@ func (d *dispatcher) launch(ctx context.Context, t ledger.Task, o launchOpts) er
 	}
 	secrets := o.Secrets
 	in := PromptInput{Task: t.ID, Org: t.Org, Title: t.Title, Profile: o.W.Body, Repo: t.Repo, Dir: t.Dir, Branch: branch}
-	if in.Origin, err = gates.Origin(ctx, gates.NewExec(), t.Repo); err != nil {
+	if in.Origin, err = gates.Origin(ctx, originRunner(), t.Repo); err != nil {
 		return err
 	}
 	if in.Global, err = org.Principles(); err != nil {

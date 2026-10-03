@@ -16,6 +16,7 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/app"
 	"github.com/liu-zhengdong/atrium/internal/config"
 	"github.com/liu-zhengdong/atrium/internal/events"
+	"github.com/liu-zhengdong/atrium/internal/gates"
 	"github.com/liu-zhengdong/atrium/internal/hosts"
 	"github.com/liu-zhengdong/atrium/internal/ledger"
 	"github.com/liu-zhengdong/atrium/internal/org"
@@ -730,6 +731,28 @@ func gatesLast(ctx context.Context, env *app.Env, task, kind string) (string, bo
 	var body string
 	err := env.DB.QueryRowContext(ctx, `SELECT body FROM task_events WHERE task = ? AND kind = ? ORDER BY id DESC LIMIT 1`, task, kind).Scan(&body)
 	return body, err == nil, err
+}
+
+// 审阅任务（gates 建的，经历里有 review_of）的提示词不附交付结论那条：它的最后一行是审阅结论，
+// 两条都附执行者会把交付结论写在审阅结论之后，原任务的 ParseReview 严格末行读不到（t877 第 3 轮）。
+func TestFlowReviewPrompt(t *testing.T) {
+	env, d := setup(t)
+	ctx := context.Background()
+	tk, _ := ledger.Add(ctx, env.DB, ledger.NewTask{Title: "审阅 t1"}, "gates")
+	if err := ledger.Record(ctx, env.DB, tk.ID, gates.KindReviewOf, "gates", "t1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Enqueue(ctx, env, tk.ID, Options{Worker: "claude"}, "u1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.pump(ctx); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, env, tk.ID, func(x ledger.Task) bool { return x.Stage == ledger.StageGate })
+	prompt, _ := os.ReadFile(filepath.Join(TaskDir(env.Paths.Data, tk.ID), "prompt-1.md"))
+	if strings.Contains(string(prompt), "交付结论") {
+		t.Errorf("审阅任务的提示词不该附交付结论：%s", prompt)
+	}
 }
 
 // 依赖没完成的任务先进队列等；依赖完成（done）后分派任务循环照常拉起它。

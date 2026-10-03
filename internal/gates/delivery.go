@@ -48,7 +48,8 @@ type landed struct {
 
 var noRepoRules = []string{"这件活没有仓库：在当前目录干，交付物是最后一条消息里的结论（写清调查结果与依据）。"}
 
-// endRule 每件活都附：没有改动可查时（message、dir），交付检查只凭最后一行判（ParseEnding）。分派任务时分不出会不会有改动，所以一律附。
+// endRule 没有改动可查的交付（message、dir），交付检查只凭最后一行判（ParseEnding）。分派任务时分不出会不会有改动，所以除审阅任务外一律附。
+// 审阅任务不附：它的最后一行是审阅结论（ReviewBrief 与 ParseReview），附了这条执行者会把交付结论写在审阅结论之后，原任务的 ParseReview 严格末行读不到（t877 第 3 轮）。
 const endRule = "最后一行单独写 `交付结论：完成`；没做成、或停在动手前等人定，写 `交付结论：没做成`，原因写在它上面（任务详述另定了最后一行的照详述）。"
 
 var (
@@ -103,11 +104,15 @@ func localRepo(repo, origin string) bool {
 
 // PromptRules 是分派任务时提示词里怎么交（dispatch 附进「通用约束」）；origin 见 Origin。分派任务时还没有改动，有仓库按要改代码写
 // （规则里说了不用改代码时怎么交）；choice 与 message 分派任务时分不出来，提示词相同，要不要写 choice.json 由任务详述（调研定时任务）说。
-func PromptRules(repo, dir, origin, branch string) []string {
+// review 是审阅任务：不附交付结论那条（见 endRule）。
+func PromptRules(repo, dir, origin, branch string, review bool) []string {
 	d := pick(repo, dir, origin, true, false)
 	out := make([]string, len(d.Rules), len(d.Rules)+1)
 	for i, r := range d.Rules {
 		out[i] = strings.ReplaceAll(r, "%s", branch)
+	}
+	if review {
+		return out
 	}
 	return append(out, endRule)
 }

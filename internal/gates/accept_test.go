@@ -204,22 +204,27 @@ func TestAcceptDir(t *testing.T) {
 }
 
 // 提示词里怎么交由交付方式定：GitHub 仓库更新或新开 PR，本机仓库只提交不推送，没有仓库不提 PR。
+// 审阅任务不附交付结论那条：它的最后一行是审阅结论，两条都写会让审阅结论不在末行（t877 第 3 轮）。
 func TestPromptRules(t *testing.T) {
-	pr := strings.Join(gates.PromptRules("o/r", "", "", "task-t1"), "\n")
+	pr := strings.Join(gates.PromptRules("o/r", "", "", "task-t1", false), "\n")
 	if !strings.Contains(pr, "当前任务工作树的分支 task-t1 上提交、推送") ||
 		!strings.Contains(pr, "已有 PR 就更新它") || !strings.Contains(pr, "不要进入其他任务的工作树") {
 		t.Fatalf("pr：%s", pr)
 	}
-	local := strings.Join(gates.PromptRules(filepath.Join(t.TempDir(), "site"), "", "", "task-t1"), "\n")
+	local := strings.Join(gates.PromptRules(filepath.Join(t.TempDir(), "site"), "", "", "task-t1", false), "\n")
 	if !strings.Contains(local, "在分支 task-t1 上提交；不要推送") || strings.Contains(local, "PR") {
 		t.Fatalf("local 不该要求推送、开 PR：%s", local)
 	}
-	msg := strings.Join(gates.PromptRules("", "", "", ""), "\n")
-	if strings.Contains(msg, "PR") || !strings.Contains(msg, "没有仓库") {
-		t.Fatalf("message 不该要求开 PR：%s", msg)
+	msg := strings.Join(gates.PromptRules("", "", "", "", false), "\n")
+	if strings.Contains(msg, "PR") || !strings.Contains(msg, "没有仓库") || !strings.Contains(msg, "交付结论") {
+		t.Fatalf("message 不该要求开 PR、要附交付结论：%s", msg)
 	}
-	dir := strings.Join(gates.PromptRules("", filepath.Join(t.TempDir(), "blog"), "", ""), "\n")
+	dir := strings.Join(gates.PromptRules("", filepath.Join(t.TempDir(), "blog"), "", "", false), "\n")
 	if strings.Contains(dir, "PR") || !strings.Contains(dir, "原地干") {
 		t.Fatalf("dir 应在原地干、不开 PR：%s", dir)
+	}
+	review := strings.Join(gates.PromptRules("", "", "", "", true), "\n")
+	if strings.Contains(review, "交付结论") {
+		t.Fatalf("审阅任务不该附交付结论：%s", review)
 	}
 }

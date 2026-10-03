@@ -52,7 +52,8 @@ func (c *Client) Do(ctx context.Context, method, path string, body, out any) err
 		// 按拨号失败判定，不比对 ECONNREFUSED：Windows 上拒绝连接是 WSAECONNREFUSED（10061），syscall 里没有这个常量。
 		var op *net.OpError
 		if errors.As(err, &op) && op.Op == "dial" {
-			return (&Error{Code: "not_running", Message: "连不上服务（" + c.Base + "）"}).WithNext("atrium start")
+			return (&Error{Code: "not_running", Message: "连不上服务（" + c.Base + "）：" + op.Error()}).
+				WithNext("atrium start；若这是远程机器的代理端口，多为反向隧道断开，稍候重试")
 		}
 		return err
 	}

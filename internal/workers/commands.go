@@ -21,6 +21,7 @@ import (
 type Row struct {
 	ID        string   `json:"id"`
 	Auto      bool     `json:"auto"`
+	Prefer    bool     `json:"prefer,omitempty"`
 	Trust     string   `json:"trust"`
 	MaxRisk   string   `json:"max_risk"`
 	Installed bool     `json:"installed"`
@@ -105,7 +106,7 @@ func List(ctx context.Context, q store.Querier) ([]Row, error) {
 		seen[r.ID] = true
 		combo := Combo(r.ID)
 		counted[combo] = true
-		out = append(out, Row{ID: r.ID, Auto: r.Rules.EffectiveAuto(), Trust: r.Rules.EffectiveTrust(), MaxRisk: r.Rules.EffectiveMaxRisk(),
+		out = append(out, Row{ID: r.ID, Auto: r.Rules.EffectiveAuto(), Prefer: r.Rules.Prefer, Trust: r.Rules.EffectiveTrust(), MaxRisk: r.Rules.EffectiveMaxRisk(),
 			Installed: Installed(r.Adapter), Layers: r.Layers, Stat: Count(stats[combo]), Recent: recentOutcomes(stats[combo]), Marks: marksOf(marks, r.Spec)})
 	}
 	// 拉起过、目录里没有的组合（写死派过的）也列出来，统计不丢。
@@ -307,6 +308,8 @@ func Commands(t *cli.Table) {
 				inst := ""
 				if !r.Auto {
 					inst = "  只点名"
+				} else if r.Prefer {
+					inst = "  优先"
 				}
 				if !r.Installed {
 					inst += "  没装"
@@ -322,7 +325,7 @@ func Commands(t *cli.Table) {
 			{Name: "clear", Value: "工具[+模型][@机器]", Help: "解除不可用标记（额度用尽、没登录、缺运行环境、模型名无效、零步骤出错退出；自检不过的下次自检跑通自动解除，还不过会再标上）；没写模型或机器就解除这个工具在全部模型或机器上的"},
 			{Name: "wait-subscription", Value: "工具[+模型][@机器]", Help: "把已有的不可用标记转成等订阅恢复（订阅已封号、重登修不好）：照样不派活，但不进网页「等你」、不出登录指引；用户明说恢复后再 --clear。匹配规则同 --clear"},
 			{Name: "file", Value: "路径", Help: "整份替换这层档案：--- 包住的 YAML 规则 + 正文（正文附进提示词）"},
-			{Name: "set", Value: "键=值", Multi: true, Help: "改一条规则（值按 YAML：auto=false（只点名）、trust=medium、checks=[pr_exists]）"},
+			{Name: "set", Value: "键=值", Multi: true, Help: "改一条规则（值按 YAML：auto=false（只点名）、prefer=true（自动挑人时优先，--unset prefer 解除）、trust=medium、checks=[pr_exists]）"},
 			{Name: "unset", Value: "键", Multi: true, Help: "删一条规则"},
 			{Name: "delete", Bool: true, Help: "删掉这层档案"},
 			{Name: "recount", Value: "tN", Help: "按当前档案从日志重新结算这件任务每次拉起的 token 与花费，覆盖退出记录里的结果（改了 usage 或 prices 后补算历史用；日志不在就报错）"},

@@ -26,7 +26,8 @@ var (
 type Rules struct {
 	Billing     string     `yaml:"billing,omitempty" json:"billing,omitempty"`
 	Prices      *Prices    `yaml:"prices,omitempty" json:"prices,omitempty"`
-	Auto        *bool      `yaml:"auto,omitempty" json:"auto,omitempty"` // nil：缺省参与自动挑人
+	Auto        *bool      `yaml:"auto,omitempty" json:"auto,omitempty"`     // nil：缺省参与自动挑人
+	Prefer      bool       `yaml:"prefer,omitempty" json:"prefer,omitempty"` // 自动挑人时排在没标的前面（仍在技能偏好之后、近期不稳之外）
 	Trust       string     `yaml:"trust,omitempty" json:"trust,omitempty"`
 	MaxRisk     string     `yaml:"max_risk,omitempty" json:"max_risk,omitempty"`
 	Checks      []string   `yaml:"checks,omitempty" json:"checks,omitempty"` // nil：没写（交付检查用缺省）；空：不加查

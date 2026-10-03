@@ -24,9 +24,9 @@ type Fact struct {
 	Unavailable string // 没有符合任务条件的可用主机，或隔离实例不允许
 	Waiting     string // 主机暂未就绪；仍符合条件，等待后再派
 	Exclusive   bool
-	Preferred   int          // 技能里的优先顺序（1 起）；0 不是
-	Stat        workers.Stat // 近 StatWindow 次表现；拉起次数用于同档轮转
-	Fails       int          // 这个「工具+模型」近 ShakyWindow 次拉起里启动失败几次（workers.Fails）
+	Preferred   int           // 技能里的优先顺序（1 起）；0 不是
+	Stat        workers.Stat  // 近 StatWindow 次表现；拉起次数用于同档轮转
+	Fails       int           // 这个「工具+模型」近 ShakyWindow 次拉起里启动失败几次（workers.Fails）
 	Quota       *Spare        // 对应所选机器的已关联额度；未知也覆盖摘要，不能猜身份
 	Cost        workers.Rules // 生效档案中的计费与单价，不新增价格来源
 }

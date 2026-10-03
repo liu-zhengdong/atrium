@@ -8,6 +8,7 @@ import (
 
 	"github.com/liu-zhengdong/atrium/internal/cli"
 	"github.com/liu-zhengdong/atrium/internal/events"
+	"github.com/liu-zhengdong/atrium/internal/org"
 )
 
 func taskList(c *cli.Ctx) error {
@@ -37,9 +38,24 @@ func taskList(c *cli.Ctx) error {
 			}
 		}
 	}
+	var names map[string]string
+	if !c.JSON && len(shown) > 0 {
+		var err error
+		if names, err = events.ReadNames(c); err != nil {
+			return err
+		}
+	}
+	ids := make([]string, len(shown))
+	for i, t := range shown {
+		ids[i] = t.ID
+	}
+	owners, err := readOwnerTexts(c, ids, names)
+	if err != nil {
+		return err
+	}
 	var b strings.Builder
 	for _, t := range shown {
-		fmt.Fprintf(&b, "%s  %s  %s  %s\n", t.ID, stateLabel(t), t.Priority, t.Title)
+		fmt.Fprintf(&b, "%s  %s  %s  %s%s\n", t.ID, stateLabel(t), t.Priority, t.Title, owners[t.ID])
 	}
 	lsDrafts := "atrium task ls --status draft"
 	if o := c.Str("org"); o != "" {
@@ -79,12 +95,18 @@ func taskShow(c *cli.Ctx) error {
 			return err
 		}
 	}
+	var names map[string]string
+	if !c.JSON && detailNeedsNames(d) {
+		if names, err = events.ReadNames(c); err != nil {
+			return err
+		}
+	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s「%s」\n状态：%s  优先级：%s\n", t.ID, t.Title, stateLabel(t), t.Priority)
 	if h.Holder.Text != "" {
 		fmt.Fprintf(&b, "现在：%s\n", h.Holder.Text)
 	}
-	for _, kv := range [][2]string{{"部门", t.Org}, {"父任务", t.Parent}, {"任务分派人", d.Parties.By}, {"处理人", d.Parties.Owner}} {
+	for _, kv := range [][2]string{{"部门", t.Org}, {"父任务", t.Parent}, {"任务分派人", org.DisplayIdentity(d.Parties.By, names)}, {"处理人", org.DisplayIdentity(d.Parties.Owner, names)}} {
 		if kv[1] != "" {
 			fmt.Fprintf(&b, "%s：%s\n", kv[0], kv[1])
 		}
@@ -114,7 +136,10 @@ func taskShow(c *cli.Ctx) error {
 			if err != nil {
 				return fmt.Errorf("经历 %d：%w", e.ID, err)
 			}
-			fmt.Fprintf(&b, "  %s  %s  %s  %s\n", time.UnixMilli(e.At).Format("01-02 15:04"), e.Actor, e.Kind, text)
+			fmt.Fprintf(&b, "  %s  %s  %s  %s\n", time.UnixMilli(e.At).Format("01-02 15:04"), org.DisplayIdentity(e.Actor, names), e.Kind, text)
+			if reporter := escalationReporter(e, names); reporter != "" {
+				fmt.Fprintf(&b, "    上报人：%s\n", reporter)
+			}
 		}
 	}
 	next := "atrium task wait " + t.ID
@@ -164,6 +189,28 @@ func taskTree(c *cli.Ctx) error {
 	if len(roots) == 0 {
 		return c.Done(roots, "没有没结束的顶层任务", "atrium task add <标题>")
 	}
+	var names map[string]string
+	if !c.JSON {
+		var err error
+		if names, err = events.ReadNames(c); err != nil {
+			return err
+		}
+	}
+	var ids []string
+	var collectIDs func(*TreeNode)
+	collectIDs = func(n *TreeNode) {
+		ids = append(ids, n.ID)
+		for _, ch := range n.Children {
+			collectIDs(ch)
+		}
+	}
+	for _, r := range roots {
+		collectIDs(r)
+	}
+	owners, err := readOwnerTexts(c, ids, names)
+	if err != nil {
+		return err
+	}
 	var b strings.Builder
 	next := "atrium task show " + roots[0].ID
 	var walk func(n *TreeNode, depth int)
@@ -184,7 +231,7 @@ func taskTree(c *cli.Ctx) error {
 		if n.Summary != nil {
 			fmt.Fprintf(&b, "（%s）", n.Summary)
 		}
-		b.WriteString("\n")
+		b.WriteString(owners[n.ID] + "\n")
 		for _, ch := range n.Children {
 			walk(ch, depth+1)
 		}

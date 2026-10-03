@@ -65,6 +65,7 @@ func TestLeaderRulesCoverRealRoutes(t *testing.T) {
 		"POST /api/skills":                    leaders.RuleDeny,
 		"POST /api/workers/edit":              leaders.RuleWorkerProfile, // 管辖包含档案所属部门才放行
 		"POST /api/workers/clear":             leaders.RuleWorkerProfile,
+		"POST /api/workers/wait-subscription": leaders.RuleWorkerProfile,
 		"POST /api/workers/recount":           leaders.RuleWorkerProfile,
 		"POST /api/hosts":                     leaders.RuleDeny,
 		"PATCH /api/hosts/{id}":               leaders.RuleDeny,

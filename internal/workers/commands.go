@@ -231,6 +231,22 @@ func Routes(r *api.Router, env *app.Env) {
 		}
 		return map[string]any{"target": in.Target, "cleared": n}, nil
 	})
+	r.Handle("POST /api/workers/wait-subscription", func(q *api.Req) (any, error) {
+		var in struct {
+			Target string `json:"target"`
+		}
+		if err := q.Decode(&in); err != nil {
+			return nil, err
+		}
+		n, err := WaitSubscription(q.Context(), env.DB, in.Target, store.Now())
+		if err != nil {
+			return nil, err
+		}
+		if n == 0 {
+			return nil, api.NotFound("--wait-subscription: %s 没有不可用标记，先有标记才能转成等订阅恢复", in.Target).WithNext("atrium workers")
+		}
+		return map[string]any{"target": in.Target, "changed": n}, nil
+	})
 	r.Handle("POST /api/workers/recount", func(q *api.Req) (any, error) {
 		var in struct {
 			Task string `json:"task"`
@@ -304,6 +320,7 @@ func Commands(t *cli.Table) {
 		Summary: "改一层档案（--file/--set/--unset/--delete）；--clear 解除不可用标记；--recount 按当前档案补算一件任务的用量",
 		Flags: []cli.Flag{
 			{Name: "clear", Value: "工具[+模型][@机器]", Help: "解除不可用标记（额度用尽、没登录、缺运行环境、模型名无效、零步骤出错退出；自检不过的下次自检跑通自动解除，还不过会再标上）；没写模型或机器就解除这个工具在全部模型或机器上的"},
+			{Name: "wait-subscription", Value: "工具[+模型][@机器]", Help: "把已有的不可用标记转成等订阅恢复（订阅已封号、重登修不好）：照样不派活，但不进网页「等你」、不出登录指引；用户明说恢复后再 --clear。匹配规则同 --clear"},
 			{Name: "file", Value: "路径", Help: "整份替换这层档案：--- 包住的 YAML 规则 + 正文（正文附进提示词）"},
 			{Name: "set", Value: "键=值", Multi: true, Help: "改一条规则（值按 YAML：auto=false（只点名）、trust=medium、checks=[pr_exists]）"},
 			{Name: "unset", Value: "键", Multi: true, Help: "删一条规则"},
@@ -313,6 +330,9 @@ func Commands(t *cli.Table) {
 		Run: func(c *cli.Ctx) error {
 			if c.Has("clear") {
 				return clearCmd(c)
+			}
+			if c.Has("wait-subscription") {
+				return waitSubscriptionCmd(c)
 			}
 			if c.Has("recount") {
 				return recountCmd(c)
@@ -336,6 +356,23 @@ func clearCmd(c *cli.Ctx) error {
 		return err
 	}
 	return c.Done(out, fmt.Sprintf("已解除 %s 的 %d 条不可用标记", target, out.Cleared), "atrium workers")
+}
+
+func waitSubscriptionCmd(c *cli.Ctx) error {
+	if err := c.MaxArgs(0); err != nil {
+		return err
+	}
+	target := c.Str("wait-subscription")
+	if target == "" {
+		return api.Usage("--wait-subscription: 不能为空")
+	}
+	var out struct {
+		Changed int `json:"changed"`
+	}
+	if err := c.Call("POST", "/api/workers/wait-subscription", map[string]any{"target": target}, &out); err != nil {
+		return err
+	}
+	return c.Done(out, fmt.Sprintf("已把 %s 的 %d 条不可用标记转成等订阅恢复", target, out.Changed), "atrium workers")
 }
 
 func recountCmd(c *cli.Ctx) error {

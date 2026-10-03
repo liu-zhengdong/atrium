@@ -174,6 +174,8 @@ type Record struct {
 	Socket    string `json:"socket"`
 	Kind      string `json:"kind,omitempty"` // pi 或 claude-code；早期登记没有这个字段
 	StartedAt int64  `json:"started_at"`
+	Failure   string `json:"failure,omitempty"`   // 最近一次送入会话失败的原因；送成功后清掉
+	FailedAt  int64  `json:"failed_at,omitempty"` // 那次失败的时刻（毫秒）
 }
 
 // Claim 判定起 bridge 前怎么办：同一会话的已在跑就不再起；别的会话的在跑，新的接手（旧的看到登记换了人就退出）。

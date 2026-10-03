@@ -281,3 +281,36 @@ func TestSessionInbox(t *testing.T) {
 		t.Fatalf("收件地址认不出应报错：%v", err)
 	}
 }
+
+func TestStatusText(t *testing.T) {
+	failed := &Record{PID: 42, Kind: kindPi, Failure: "会话没收下：unauthorized", FailedAt: time.Date(2026, 10, 3, 9, 56, 1, 0, time.Local).UnixMilli()}
+	ok := &Record{PID: 42, Kind: kindPi}
+	l := &events.Listener{Via: "Pi 会话，经注入"}
+	cases := []struct {
+		name  string
+		cur   *Record
+		alive bool
+		l     *events.Listener
+		want  []string
+		not   string
+	}{
+		{"在重试：失败压过在听", failed, true, l, []string{"最近一次投递失败（10-03 09:56:01）", "unauthorized", "在重试"}, "秘书在听"},
+		{"已退出：留着失败", failed, false, nil, []string{"bridge 已退出（pid 42，Pi 会话）", "10-03 09:56:01", "unauthorized"}, "在重试"},
+		{"送成功：正常", ok, true, l, []string{"秘书在听（Pi 会话，经注入）", "bridge pid 42"}, "失败"},
+		{"进程没了且没失败：当没有", ok, false, nil, []string{"没有 bridge 在听"}, "pid 42"},
+		{"在跑没报在听", ok, true, nil, []string{"bridge 在跑（pid 42）"}, "失败"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			text, _ := statusText(c.cur, c.alive, c.l, "bridge.log")
+			for _, w := range c.want {
+				if !strings.Contains(text, w) {
+					t.Errorf("应含 %q：%s", w, text)
+				}
+			}
+			if strings.Contains(text, c.not) {
+				t.Errorf("不应含 %q：%s", c.not, text)
+			}
+		})
+	}
+}

@@ -240,15 +240,16 @@ button.lead:hover{background:var(--hover)}
 
 
 /* 执行者 */
-.accts{display:grid;grid-template-columns:auto 1fr fit-content(240px);gap:16px 14px;align-items:center;padding:8px 0} /* 各行共用列宽：条对齐，右列按最长的说明定宽 */
-.acct{display:contents}
+.accts{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:16px 14px;align-items:center;padding:8px 0} /* 右列只留短状态，说明另起宽行 */
+.acct{display:grid;grid-template-columns:subgrid;grid-column:1/-1;gap:4px 14px;align-items:center}
 .acct .n{display:flex;align-items:center;gap:8px;white-space:nowrap}
 .acct .logo{width:16px;height:16px;flex:none;color:var(--ink2)}
 b.logo{display:grid;place-items:center;border-radius:4px;background:var(--raise);font:500 10px/1 var(--sans)} /* 没有图标的账号：首字母 */
 .bar{height:8px;border-radius:4px;background:var(--raise);position:relative;overflow:hidden}
 .bar i{position:absolute;inset:0 auto 0 0;border-radius:4px;background:var(--ink)}
 .bar .reserve{position:absolute;top:0;bottom:0;right:0;width:20%;background:repeating-linear-gradient(135deg,transparent 0 3px,color-mix(in srgb,var(--ink3) 35%,transparent) 3px 4px)}
-.acct .r{font-size:12px;color:var(--ink3);text-align:right}
+.acct .r{font-size:12px;color:var(--ink3);text-align:right;white-space:nowrap}
+.acct-note{grid-column:1/-1;font-size:12px;color:var(--ink3);overflow-wrap:anywhere}
 .hosts{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px}
 .host{padding:14px 16px;border-radius:12px;background:var(--raise)}
 .host .n{font-weight:500;display:flex;align-items:center;gap:8px}
@@ -274,8 +275,8 @@ b.logo{display:grid;place-items:center;border-radius:4px;background:var(--raise)
 .worker-section h4{font-size:13px;font-weight:500;color:var(--ink3);margin:0 0 12px}
 .worker-runs>div{padding:10px 0;line-height:1.7;overflow-wrap:anywhere}
 .worker-runs>div{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:6px 12px}
-.worker-runs .run-outcome{max-width:160px;text-align:right}
-@media(max-width:600px){.worker-runs>div{display:block}.worker-runs .run-outcome{display:block;max-width:none;text-align:left}}
+.worker-runs .run-outcome{white-space:nowrap;text-align:right}
+.worker-runs .run-reason{grid-column:1/-1}
 .worker-runs a{margin-left:8px}
 .worker-body{font-size:14px}.worker-body h1,.worker-body h2,.worker-body h3{font-size:15px}
 .md-wait,.layer pre{white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.8}
@@ -309,8 +310,6 @@ b.logo{display:grid;place-items:center;border-radius:4px;background:var(--raise)
   .today .row .time{display:block}
   .today .row.trouble .who{display:block}.today .row.trouble .time{display:none}
   .goals{margin-left:0;flex-basis:100%} /* 窄屏三个目标另起一行 */
-  .accts{grid-template-columns:auto 1fr;row-gap:4px}
-  .acct .r{grid-column:2;text-align:left}
 }
 
 /* 只读版补充 */

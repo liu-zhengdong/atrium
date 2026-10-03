@@ -291,7 +291,7 @@ function renderLegion(d) {
     const left = a.left ?? 0;
     const note = [a.note, a.stale && a.at ? readAt(a.at) : ""].filter(Boolean).join(" · ");
     return `<div class="acct"><span class="n">${brandMark(a.name)}${esc(a.name)}</span><div class="bar"><i style="width:${left}%;${left < 20 ? "background:var(--bad)" : ""}"></i><span class="reserve" style="width:${reserve}%"></span></div>
-    <span class="r">${a.left === null ? esc(a.note || "没有读数") : `剩 <span class="num">${a.left}%</span>${note ? " · " + esc(note) : ""}`}</span></div>`;
+    <span class="r">${a.left === null ? "没有读数" : `剩 <span class="num">${a.left}%</span>`}</span>${note ? `<div class="acct-note">${esc(note)}</div>` : ""}</div>`;
   }).join("")}</div>` : `<div class="empty">还没有额度读数</div>`;
   const hosts = d.hosts.length ? `<div class="hosts">${d.hosts.map(h => `
     <div class="host"><div class="n"><span class="dot ${h.online ? (h.busy ? "run" : "idle") : "off"}"></span><span class="id">${esc(h.id)}</span>${esc(h.name)}</div>
@@ -336,7 +336,7 @@ function renderWorker(d) {
     <section class="worker-section"><h4>拉起</h4><p class="quiet">${st.launches ? `近 ${st.launches} 次：交付 ${st.ok} · 被交回 ${st.bounce} · 额度 ${st.quota} · 起不来 ${st.setup} · 其他失败 ${st.fail}` : "还没有拉起记录"}</p>
     <p class="quiet">${esc(d.timing)}</p>
     ${outcomePips((d.attempts || []).map(a => a.outcome))}
-    <div class="worker-runs">${(d.attempts || []).map(a => `<div><div class="run-ref"><span class="quiet">${date(a.at)} ${clock(a.at)}</span><a href="#today/${esc(a.task)}">${esc(a.task)}</a> 第 ${a.n} 次 ${esc(a.worker)}（${esc(nameOf(a.host))}）${a.model ? `（${esc(a.model)}）` : ""}</div><span class="run-outcome ${a.outcome === "ok" ? "quiet" : "mark"}">${esc(outName[a.outcome])}${a.reason && a.outcome !== "ok" ? "：" + esc(a.reason) : ""}</span></div>`).join("")}</div></section>
+    <div class="worker-runs">${(d.attempts || []).map(a => `<div><div class="run-ref"><span class="quiet">${date(a.at)} ${clock(a.at)}</span><a href="#today/${esc(a.task)}">${esc(a.task)}</a> 第 ${a.n} 次 ${esc(a.worker)}（${esc(nameOf(a.host))}）${a.model ? `（${esc(a.model)}）` : ""}</div><span class="run-outcome ${a.outcome === "ok" ? "quiet" : "mark"}">${esc(outName[a.outcome])}</span>${a.reason && a.outcome !== "ok" ? `<div class="run-reason mark">${esc(a.reason)}</div>` : ""}</div>`).join("")}</div></section>
     <section class="worker-section"><h4>正文</h4>${r.body ? `<article class="doc worker-body">${mdBlock(r.body, () => renderWorker(d), r.id)}</article>` : `<p class="quiet">没有正文</p>`}</section>
     <section class="worker-section"><h4>各层原文</h4>${d.layers.map(p => `<details class="layer"><summary>${icon.chev}${esc(p.name)}<span class="quiet">${date(p.updated_at)}</span></summary><pre>${esc(p.source)}</pre><code>atrium workers edit ${esc(p.name)} --file &lt;档案&gt;</code></details>`).join("") || '<p class="quiet">没有档案</p>'}</section>`);
 }

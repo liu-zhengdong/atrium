@@ -511,7 +511,7 @@ func TestNoteUnknown(t *testing.T) {
 		t.Fatalf("同一工具只记一条，详述带行数与前两行：%+v", got)
 	}
 	// 认得出的日志、纯文本工具不记。
-	if err := noteUnknown(ctx, db, tk.ID, workers.Run{Worker: "kimi", Log: log}); err != nil || len(drafts()) != 1 {
+	if err := noteUnknown(ctx, db, tk.ID, workers.Run{Worker: "my-cli", Log: log}); err != nil || len(drafts()) != 1 {
 		t.Fatalf("纯文本工具不该记：%v %d", err, len(drafts()))
 	}
 	if err := noteUnknown(ctx, db, tk.ID, workers.Run{Worker: "codex", Log: log}); err != nil || len(drafts()) != 2 {

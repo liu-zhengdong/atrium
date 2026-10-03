@@ -64,7 +64,7 @@ func TestBuild(t *testing.T) {
 		{tool: "codex", in: Request{Prompt: "x", PromptFile: pf, Dir: dir, Session: "0123abcd-0123-0123-0123-0123456789ab"}, want: []string{"exec", "resume", "--json", "--skip-git-repo-check", "--ignore-user-config", "--dangerously-bypass-approvals-and-sandbox", "--disable", "apps", "0123abcd-0123-0123-0123-0123456789ab", "-"}},
 		{tool: "codex", in: Request{Prompt: "x", PromptFile: pf, Dir: dir, ComputerUse: []string{`mcp_servers={computer-use={command="cu"}}`}}, want: []string{"--ignore-user-config", "-C", dir, "-c", "-"}},
 		{tool: "opencode", in: in("p/m", "low"), want: []string{"run", "--format", "json", "--auto", "-m", "p/m", "--variant", "low"}},
-		{tool: "kimi", in: in("k2", ""), want: []string{"-p", "请先完整读取任务说明文件 " + pf + "，然后按文件内容执行。", "-m", "k2"}},
+		{tool: "kimi", in: in("k2", ""), want: []string{"-p", "请先完整读取任务说明文件 " + pf + "，然后按文件内容执行。", "--output-format", "stream-json", "-m", "k2"}},
 		{tool: "kimi", in: in("", "high"), bad: "不接受思考强度"},
 		{tool: "grok", in: in("g", "low"), want: []string{"--prompt-file", pf, "--output-format", "streaming-messages-json", "-m", "g", "--reasoning-effort", "low", "--always-approve", "--cwd", dir}},
 		{tool: "pi", in: in("opencode-go/glm-5.3-flash", "high"), want: []string{"-p", "--mode", "json", "-na", "--model", "opencode-go/glm-5.3-flash", "--thinking", "high"}},

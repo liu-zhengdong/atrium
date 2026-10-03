@@ -374,9 +374,9 @@ func agyAdapter() *Driver {
 
 // kimi -p：非交互单次运行。CLI 2.1.1 只接受参数提示词，让它读取任务文件，避免把正文放入命令行。
 func kimiAdapter() *Driver {
-	a := &Driver{Tool: "kimi", Exe: "kimi", Tell: TellRestart}
+	a := &Driver{Tool: "kimi", Exe: "kimi", Tell: TellRestart, JSON: true, read: readKimi}
 	a.build = func(in Request) (Launch, error) {
-		args := []string{"-p", "请先完整读取任务说明文件 " + in.PromptFile + "，然后按文件内容执行。"}
+		args := []string{"-p", "请先完整读取任务说明文件 " + in.PromptFile + "，然后按文件内容执行。", "--output-format", "stream-json"}
 		if in.Model != "" {
 			args = append(args, "-m", in.Model)
 		}

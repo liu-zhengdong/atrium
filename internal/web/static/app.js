@@ -255,7 +255,7 @@ function renderDept(d, id, tab) {
   if (tab === "rules") {
     const rule = (r, i) => `<div class="rule ${i === null ? "inh" : ""}"><span class="i">${i === null ? "" : i + 1}</span>
       <span class="t">${esc(r.text)}${r.why ? `<span class="why">${esc(r.why)}</span>` : ""}</span>
-      <span class="w">${esc(i === null ? r.dept_name : r.by.replace(/^\S+/, nameOf))}</span></div>`;
+      <span class="w">${esc(i === null ? r.dept_name : identityText(r.by, nav.names))}</span></div>`;
     body = (d.rules.length ? d.rules.map((r, i) => rule(r, i)).join("") : `<div class="empty">本部门没有自己的规矩</div>`) +
       (d.inherited.length ? `<div class="inh-h">从上级继承</div>${d.inherited.map(r => rule(r, null)).join("")}` : "");
   }
@@ -270,7 +270,7 @@ function renderDept(d, id, tab) {
     ${deptHead(id)}
     ${dept.what ? `<p class="dept-what">${esc(dept.what)}</p>` : ""}
     ${intro.length ? `<dl class="intro">${intro.map(x => `<dt>${x[0]}</dt><dd>${esc(x[1])}</dd>`).join("")}</dl>` : ""}
-    ${d.leader ? `<button class="lead" data-open="${esc(d.leader.id)}"><b>${esc([...d.leader.name][0] || "负")}</b>${esc(d.leader.name)}${d.leader.inherited ? "（上级）" : ""}${icon.chev}</button>` : `<div class="lead"><b>你</b>你直接管<span>秘书帮你盯着</span></div>`}
+    ${d.leader ? `<button class="lead" data-open="${esc(d.leader.id)}"><b>${esc([...d.leader.name][0] || "负")}</b>${esc(identityText(d.leader.id, nav.names))}${d.leader.inherited ? "（上级）" : ""}${icon.chev}</button>` : `<div class="lead"><b>你</b>你直接管<span>秘书帮你盯着</span></div>`}
     ${sched}
     ${d.subs.length ? `<section class="section"><h2>下属部门</h2><div class="subs">${subCards}</div></section>` : ""}
     <section class="section">
@@ -465,7 +465,7 @@ function renderChoice(c) {
   drawerChoice = c;
   const status = c.status === "open" ? "" : c.status === "picked" ? "已拍板" : c.status === "void" ? "已作废" : "这轮都不做";
   const rec = new Set(c.recommend || []);
-  drawer(c.id, c.dept_name, `<h3>${esc(c.title)}</h3><p class="sub-t">${c.task ? "出自 " + esc(c.task) + " · " : ""}${esc(ago(c.created_at))}前${status ? " · " + status : ""}</p>
+  drawer(c.id, c.dept_name, `<h3>${esc(c.title)}</h3><p class="sub-t">${c.task ? "出自 " + esc(c.task) + " · " : ""}${esc(identityText(c.created_by, nav.names))} · ${esc(ago(c.created_at))}前${status ? " · " + status : ""}</p>
       ${c.reason ? `<p class="status-line">${esc(c.reason)}</p>` : ""}
       <div class="opts">${c.options.map(o => {
         const open = openOpts.has(c.id + ":" + o.pos);
@@ -489,7 +489,7 @@ function renderSchedule(s) {
   const facts = [[s.once ? "做什么" : "每轮", kindDoes[s.kind] || firstPara(s.detail)], ["技能", s.skill]].filter(x => x[1]);
   const day = r => (r.title.match(/（(\d\d-\d\d)）$/) || [])[1];
   drawer(s.id, s.dept_name, `<h3>${esc(s.title)}</h3>
-      <p class="sub-t">${esc([s.cadence, s.kind].filter(Boolean).join(" · "))} · ${esc(nameOf(s.by))} ${esc(date(s.created_at))} 建</p>
+      <p class="sub-t">${esc([s.cadence, s.kind].filter(Boolean).join(" · "))} · ${esc(identityText(s.by, nav.names))} ${esc(date(s.created_at))} 建</p>
       <div class="holder"><b>${s.once ? "到点" : "下一轮"}</b>　${esc(when)}</div>
       ${facts.length ? `<dl class="facts">${facts.map(f => `<dt>${f[0]}</dt><dd>${esc(f[1])}</dd>`).join("")}</dl>` : ""}
       ${s.once ? `<div class="quiet-line">到点生成一件任务并派发，之后这条自动删除</div>` : `<div class="jh"><b>最近几轮</b>${s.skips ? `<span>跳过过 ${s.skips} 轮</span>` : ""}</div>
@@ -506,7 +506,7 @@ function renderLeader(deptPage, id) {
   const l = deptPage.leader;
   if (l?.id !== id) throw new Error(id + " 不是这个部门的负责人");
   const n = [...l.memo].length;
-  drawer(l.id, "负责人", `<h3>${esc(l.name)}</h3>
+  drawer(l.id, "负责人", `<h3>${esc(identityText(l.id, nav.names))}</h3>
     ${l.inherited ? `<p class="sub-t">${esc(deptPage.dept.name)}没有自己的负责人，由上级的这一位管</p>` : ""}
     <dl class="facts"><dt>执行者</dt><dd>${esc(l.workers)}</dd>
       <dt>负责</dt><dd>${l.depts.map(p => `<a href="#${esc(p.id)}">${esc(p.name)}</a>`).join("、")}</dd></dl>
@@ -623,7 +623,7 @@ function renderMaterial(deptPage, id) {
     + (["file", "docx", "xlsx", "set"].includes(kind) ? "" // 浏览器自己打不开的，新窗口只会变成下载
       : `<a class="tool" href="${esc(kind === "html" ? frameURL(m) : namedURL(m))}" target="_blank" rel="noopener" ${tip("新窗口打开")}>${icon.out}</a>`)
     + (kind === "set" ? "" : `<a class="tool" href="${esc(matURL(m))}" download="${esc(baseName(m.entry))}" ${tip("下载正文")}>${icon.down}</a>`);
-  const meta = [m.kind === "overview" ? "总览" : "", "v" + m.rev, matAmount(m), date(m.created_at)].filter(Boolean);
+  const meta = [m.kind === "overview" ? "总览" : "", "v" + m.rev, matAmount(m), identityText(m.created_by, nav.names), date(m.created_at)].filter(Boolean);
   // 有正文的目录资料：正文下面折起全部文件（图源、没被正文引用的图也找得到）
   const all = kind !== "set" && m.files.length > 1
     ? `<details class="full"><summary>${icon.chev}这条资料里的 ${m.files.length} 个文件</summary>${fileList(m)}</details>` : "";
@@ -677,7 +677,7 @@ const skeleton = `<div class="skel">${`<section class="section"><i class="h"></i
 let shownPage = "", shownKey = "", shownDrawer = "";
 function showPage(force) {
   const { page, tab } = parseHash(), p = pageOf(page, tab), d = last.get(p.path);
-  const key = page + "/" + tab + JSON.stringify(d ?? null);
+  const key = page + "/" + tab + JSON.stringify([d ?? null, nav.names]);
   if (key === shownKey && !force) return;
   const top = page === shownPage ? $("#scroll").scrollTop : 0; // 换了页回到顶，同一页（含换页签）保留滚动
   shownPage = page; shownKey = key;
@@ -685,7 +685,7 @@ function showPage(force) {
   $("#scroll").scrollTop = top;
 }
 function showDrawer(open, page) {
-  const dr = drawerOf(open, page), d = last.get(dr.path), key = open + JSON.stringify(d ?? null);
+  const dr = drawerOf(open, page), d = last.get(dr.path), key = open + JSON.stringify([d ?? null, nav.names]);
   if (key === shownDrawer) return;
   shownDrawer = key;
   if (d) dr.draw(d); else drawer(open, "", skeleton);

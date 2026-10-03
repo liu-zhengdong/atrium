@@ -1,7 +1,6 @@
 package web
 
 import (
-	"cmp"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -341,7 +340,7 @@ func escalations(ctx context.Context, q store.Querier, ix *orgIndex) ([]Ask, err
 		if err := json.Unmarshal([]byte(raw), &b); err != nil {
 			return nil, fmt.Errorf("上报事件的内容坏了：%w", err)
 		}
-		out = append(out, Ask{Kind: "escalate", ID: task, Title: b.Note, Sub: ix.name(b.From) + " 上报：" + b.Label, Dept: dept, DeptName: ix.name(dept), At: at})
+		out = append(out, Ask{Kind: "escalate", ID: task, Title: b.Note, Sub: identityText(b.From, ix.names) + " 上报：" + b.Label, Dept: dept, DeptName: ix.name(dept), At: at})
 	}
 	return out, rows.Err()
 }
@@ -911,7 +910,7 @@ func recorder(ctx context.Context, q store.Querier, d *TaskDetail, names map[str
 	if err != nil || p.By == "" {
 		return err
 	}
-	d.ByName = cmp.Or(names[p.By], p.By)
+	d.ByName = identityText(p.By, names)
 	leaders, err := org.LeaderMap(ctx, q)
 	if err != nil {
 		return err
@@ -1013,7 +1012,7 @@ func holderText(t ledger.Task, h watch.Holder, names map[string]string) string {
 	}
 	switch h.Kind {
 	case "leader", "secretary":
-		return cmp.Or(names[h.Who], h.Who) + "：" + h.Text
+		return identityText(h.Who, names) + "：" + h.Text
 	case "worker":
 		return "执行者在做"
 	}

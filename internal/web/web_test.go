@@ -422,7 +422,7 @@ func TestRoutes(t *testing.T) {
 		Body: map[string]any{"from": a.ID, "label": "无法解决", "note": "证书要你签"}})
 	read("today", &today)
 	if len(today.Asks) != 1 || today.Asks[0].Kind != "escalate" || today.Asks[0].Title != "证书要你签" || today.Asks[0].ID != task.ID ||
-		today.Asks[0].Sub != "运行时负责人 上报：无法解决" {
+		today.Asks[0].Sub != "运行时负责人（"+a.ID+"） 上报：无法解决" {
 		t.Errorf("上报应进等你：%+v", today.Asks)
 	}
 	// 页面上提到身份、机器都写名字：侧栏带着名字表，抽屉里等负责人时写负责人的名字。
@@ -432,7 +432,7 @@ func TestRoutes(t *testing.T) {
 	}
 	running := ledger.Task{Status: ledger.Running}
 	for h, want := range map[watch.Holder]string{
-		{Kind: "leader", Who: a.ID, Text: "等负责人验收"}:             "运行时负责人：等负责人验收",
+		{Kind: "leader", Who: a.ID, Text: "等负责人验收"}:             "运行时负责人（" + a.ID + "）：等负责人验收",
 		{Kind: "secretary", Who: org.Secretary, Text: "待分派"}:    "秘书：待分派",
 		{Kind: "worker", Who: "claude+opus", Text: "执行者在做（h1）"}: "执行者在做",
 		{Kind: "user", Who: "u1", Text: "等你验收"}:                 "等你验收",
@@ -447,7 +447,7 @@ func TestRoutes(t *testing.T) {
 		t.Errorf("负责人（没写备忘时为空串，抽屉写用量/上限）：%+v memo_max=%d", page.Leader, page.MemoMax)
 	}
 	// 来源一行的记录人：负责人记的给名字和他的负责人抽屉地址（部门/身份），秘书记的只给名字，没来源的不给。
-	for _, c := range []struct{ by, name, lead, src string }{{a.ID, "运行时负责人", sub.ID + "/" + a.ID, "org"}, {org.Secretary, "秘书", "", "org"}, {a.ID, "", "", ""}} {
+	for _, c := range []struct{ by, name, lead, src string }{{a.ID, "运行时负责人（" + a.ID + "）", sub.ID + "/" + a.ID, "org"}, {org.Secretary, "秘书", "", "org"}, {a.ID, "", "", ""}} {
 		dr, err := ledger.Add(ctx, db, ledger.NewTask{Title: "发现", Org: sub.ID, Draft: true, Source: ledger.Source(c.src)}, c.by)
 		if err != nil {
 			t.Fatal(err)

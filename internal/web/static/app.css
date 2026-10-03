@@ -100,6 +100,7 @@ a.quiet{color:inherit}a.quiet:hover{color:var(--ink)}
 .ask .meta{margin-left:auto;text-align:right;flex:none;color:var(--ink3);font-size:12px}
 .ask .body{min-width:0;display:flex;flex-direction:column;gap:1px}
 .ask .body>*{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ask.escalate .s{white-space:normal;overflow-wrap:break-word;line-break:strict}
 
 .rows{display:flex;flex-direction:column}
 .dept-h{display:flex;align-items:baseline;gap:8px;padding:14px 0 4px;font-size:13px;color:var(--ink2)}
@@ -127,8 +128,8 @@ a.quiet{color:inherit}a.quiet:hover{color:var(--ink)}
 .crumb a:hover{color:var(--ink)}
 .dept-title{font-size:28px;font-weight:600;margin:10px 0 6px}
 .dept-what{color:var(--ink2);max-width:600px;margin:0}
-.lead{display:inline-flex;align-items:center;gap:10px;margin-top:18px;padding:6px 12px 6px 6px;border-radius:20px;background:var(--raise);font-size:13px}
-.lead b{width:24px;height:24px;border-radius:50%;background:var(--hover);color:var(--ink);display:grid;place-items:center;font-weight:600;font-size:11px}
+.lead{max-width:100%;text-align:left;display:inline-flex;align-items:center;gap:10px;margin-top:18px;padding:6px 12px 6px 6px;border-radius:20px;background:var(--raise);font-size:13px}
+.lead b{flex:none;width:24px;height:24px;border-radius:50%;background:var(--hover);color:var(--ink);display:grid;place-items:center;font-weight:600;font-size:11px}
 .lead span{color:var(--ink2)}
 button.lead:hover{background:var(--hover)}
 .lead .chev{color:var(--ink3)}
@@ -143,9 +144,9 @@ button.lead:hover{background:var(--hover)}
 .tabs button:hover{background:var(--raise)}
 .tabs button.on{background:var(--raise);color:var(--ink);font-weight:500}
 .tabs .cap{margin-left:auto;align-self:center;font-size:12px;font-variant-numeric:tabular-nums;color:var(--ink3)}
-.rule{display:grid;grid-template-columns:22px 1fr auto;gap:10px;padding:10px 0}
+.rule{display:grid;grid-template-columns:22px minmax(0,1fr) minmax(0,45%);gap:10px;padding:10px 0}
 .rule .i{font:12px/22px var(--mono);color:var(--ink3)}
-.rule .w{color:var(--ink3);font-size:12px}
+.rule .w{color:var(--ink3);font-size:12px;overflow-wrap:break-word;line-break:strict}
 .rule.inh .t{color:var(--ink2)}
 .inh-h{font-size:12px;color:var(--ink3);margin:16px 0 2px}
 .empty{color:var(--ink3);padding:24px 0;text-align:center}

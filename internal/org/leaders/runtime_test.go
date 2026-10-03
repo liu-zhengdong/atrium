@@ -499,6 +499,11 @@ func TestEscalateInbox(t *testing.T) {
 	if hist[len(hist)-1].Kind != "escalated" || !strings.Contains(hist[len(hist)-1].Body, "回交") {
 		t.Fatalf("协作回执应记在任务经历里：%+v", hist[len(hist)-1])
 	}
+	up(a1, EscalateIn{Kind: "cross", Note: "要 o3 配合改接口", Task: "t1"}, org.Secretary)
+	if act, _ := events.Pending(ctx, env.DB, org.Secretary, false, 50); len(act) != 1 || act[0].Level != events.Act ||
+		!strings.Contains(string(act[0].Body), "配合改接口") {
+		t.Fatalf("顶层负责人挂未完成任务的协作请求应进秘书的要处理：%+v", act)
+	}
 
 	up(a2, EscalateIn{Kind: "ask", Note: "挑几号？", Task: "t1"}, org.Secretary)
 	up(a2, EscalateIn{Kind: "notify", Note: "将改测试应用配置"}, org.Secretary)
@@ -508,8 +513,8 @@ func TestEscalateInbox(t *testing.T) {
 		t.Fatal(err)
 	}
 	act, _ := events.Pending(ctx, env.DB, org.Secretary, false, 50)
-	if len(act) != 5 {
-		t.Fatalf("ask、notify、stuck、beyond、overdue 应都是秘书的要处理：%+v", act)
+	if len(act) != 6 {
+		t.Fatalf("协作请求与 ask、notify、stuck、beyond、overdue 应都是秘书的要处理：%+v", act)
 	}
 	bl, err := events.Backlogs(ctx, env.DB)
 	if err != nil {
@@ -519,8 +524,8 @@ func TestEscalateInbox(t *testing.T) {
 	for _, b := range bl {
 		got[b.Target] = b.Count
 	}
-	if got[org.Secretary] != 4 {
-		t.Fatalf("秘书积压应为 4（不含 overdue 与知会）：%+v", bl)
+	if got[org.Secretary] != 5 {
+		t.Fatalf("秘书积压应为 5（不含 overdue 与知会）：%+v", bl)
 	}
 }
 

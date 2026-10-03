@@ -216,7 +216,7 @@ func TestSecretaryAct(t *testing.T) {
 		{"知会用户", LeaderEscalate, esc("notify"), true},
 		{"卡住", LeaderEscalate, esc("stuck"), true},
 		{"越权", LeaderEscalate, esc("beyond"), true},
-		{"跨部门", LeaderEscalate, esc("cross"), false},
+		{"跨部门（级别由 leaders 定）", LeaderEscalate, esc("cross"), true},
 		{"旧的里程碑上报", LeaderEscalate, esc("shipped"), false},
 		{"选项单", ChoiceOpen, nil, true},
 		{"等用户验收", TaskStatus, map[string]any{"to": "running", "accept_by": "user"}, true},
@@ -243,9 +243,10 @@ func TestSecretaryAct(t *testing.T) {
 // 秘书的要处理只收四类：其余落到秘书的降为知会（仍落库可查），负责人收的不降；积压只数四类（overdue 本就不计积压）。
 func TestSecretaryInbox(t *testing.T) {
 	db, ctx := openDB(t), context.Background()
-	for _, kind := range []string{"ask", "stuck", "beyond", "notify", "cross"} {
+	for _, kind := range []string{"ask", "stuck", "beyond", "notify"} {
 		emit(t, db, Event{Kind: LeaderEscalate, Target: Secretary, Body: map[string]any{"kind": kind}})
 	}
+	emit(t, db, Event{Kind: LeaderEscalate, Target: Secretary, Level: Info, Body: map[string]any{"kind": "cross"}})
 	emit(t, db, Event{Kind: Overdue, Target: Secretary})
 	emit(t, db, Event{Kind: TaskStatus, Target: Secretary, Body: map[string]any{"to": "done", "by": "a1"}})
 	emit(t, db, Event{Kind: TaskStatus, Target: "a1", Body: map[string]any{"to": "done", "by": "worker"}})

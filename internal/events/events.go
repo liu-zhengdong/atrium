@@ -1,7 +1,7 @@
 // Package events：待投递事件先落库，再由订阅者 events wait 取走（起 15 分钟租约）、events ack 确认。
 //
 // 分两级：act（要处理）与 info（知会）；wait 缺省只取要处理的，--all 连知会一起取。
-// 秘书的要处理只收四类（SecretaryAct），其余落到秘书的在 Emit 里降为知会。
+// 秘书的要处理只收四类（SecretaryAct），其余落到秘书的在 Emit 里降为知会；cross 上报的级别由 leaders 定，这里不改。
 // 投递对象（target）留空时调 org.Recipient：部门往上最近的负责人，没有投 secretary。
 // 任务事件经 EmitTask 只投要动手的那一位（Route）：等验收投验收人，负责人自己引起的结果投任务分派人，其他结果投处理人或部门负责人，过程不投。
 // 同一投递对象同一去重键、还没取走也没确认的事件合并成一条（count 加一，级别随最新一条），免得刷屏。

@@ -47,15 +47,16 @@ func (d *dispatcher) exited(ctx context.Context, p *proc, code int) error {
 		if err != nil {
 			return err
 		}
-		delivered := false
-		if workers.Silent(tr, false) {
-			delivered, err = hasRunDelivery(ctx, db, p.task, p.run)
+		if s, ok := workers.ReportedSignal(tr.Error, time.Now()); ok {
+			sig = s
+		} else if workers.Silent(tr, false) {
+			delivered, err := hasRunDelivery(ctx, db, p.task, p.run)
 			if err != nil {
 				return err
 			}
-		}
-		if workers.Silent(tr, delivered) {
-			sig = workers.SilentSignal(tr.Error, time.Now())
+			if !delivered {
+				sig = workers.SilentSignal(tr.Error)
+			}
 		}
 	}
 	if p.lost {

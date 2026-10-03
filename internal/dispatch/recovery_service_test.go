@@ -45,11 +45,25 @@ func recoveryPi() int {
 			return 2
 		}
 	}
+	if mode == "error-busy" {
+		// 501 个旧文件让产出扫描触顶（按可能有产出处理），明确的 429 仍要判额度。
+		old := time.Now().Add(-time.Hour)
+		for i := range 501 {
+			name := fmt.Sprintf("old-%03d.txt", i)
+			if os.WriteFile(name, nil, 0600) != nil || os.Chtimes(name, old, old) != nil {
+				return 2
+			}
+		}
+	}
 	content := []any{}
 	if mode == "zero-action" || mode == "missing" {
 		content = append(content, map[string]string{"type": "text", "text": "交付完成"})
 	}
 	m := map[string]any{"role": "assistant", "model": mode, "provider": "opencode-go", "content": content}
+	if mode == "error-busy" {
+		m["stopReason"] = "error"
+		m["errorMessage"] = `429: {"type":"GoUsageLimitError","message":"Go usage limit exceeded"}`
+	}
 	if mode != "missing" {
 		m["usage"] = map[string]int{"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0}
 	}
@@ -71,7 +85,7 @@ func recoveryCLI(mode string) int {
 // 实际隔离服务 HTTP task run → 账本 → 分派循环 → 假执行者进程 → 退出恢复。
 // 不装配 hosts/quota 后台循环，不读取真实登录/额度，不启负责人。
 func TestRecoveryServiceEntry(t *testing.T) {
-	for _, mode := range []string{"quota", "unknown-other-host", "silent", "silent-quota", "old-pr", "fresh-pr", "zero-action", "missing", "output", "stopped", "no-candidate", "bounded", "known-pool", "known-pool-other-host", "different-account", "token-pick", "token-recovery"} {
+	for _, mode := range []string{"quota", "unknown-other-host", "silent", "silent-quota", "error-busy", "old-pr", "fresh-pr", "zero-action", "missing", "output", "stopped", "no-candidate", "bounded", "known-pool", "known-pool-other-host", "different-account", "token-pick", "token-recovery"} {
 		t.Run(mode, func(t *testing.T) {
 			dir := t.TempDir()
 			t.Setenv("HOME", dir)
@@ -150,7 +164,7 @@ func TestRecoveryServiceEntry(t *testing.T) {
 				}
 				save("harness/"+name, profile+"---\n")
 			}
-			if mode == "no-candidate" || mode == "bounded" || mode == "silent" || mode == "silent-quota" || mode == "old-pr" || mode == "fresh-pr" || mode == "token-pick" || mode == "token-recovery" {
+			if mode == "no-candidate" || mode == "bounded" || mode == "silent" || mode == "silent-quota" || mode == "error-busy" || mode == "old-pr" || mode == "fresh-pr" || mode == "token-pick" || mode == "token-recovery" {
 				save("harness/pi", "---\nmodel: opencode-go/quota\nauto: false\n---\n")
 			}
 			remoteHost := ""
@@ -310,7 +324,7 @@ func TestRecoveryServiceEntry(t *testing.T) {
 				t.Fatal(err)
 			}
 			wantRuns := 1
-			if mode == "quota" || mode == "silent" || mode == "silent-quota" || mode == "unknown-other-host" || mode == "old-pr" || mode == "known-pool" || mode == "known-pool-other-host" || mode == "different-account" || mode == "token-recovery" {
+			if mode == "quota" || mode == "silent" || mode == "silent-quota" || mode == "error-busy" || mode == "unknown-other-host" || mode == "old-pr" || mode == "known-pool" || mode == "known-pool-other-host" || mode == "different-account" || mode == "token-recovery" {
 				wantRuns = 2
 			}
 			if mode == "bounded" {
@@ -353,7 +367,7 @@ func TestRecoveryServiceEntry(t *testing.T) {
 			if (mode == "silent" || mode == "old-pr" || mode == "silent-quota") && (len(marks) != 1 || marks[0].Kind != workers.SignalNoStart) {
 				t.Fatalf("空转不能冒充 quota：%+v", marks)
 			}
-			if mode == "quota" {
+			if mode == "quota" || mode == "error-busy" {
 				if len(marks) != 1 || marks[0].Kind != workers.SignalQuota {
 					t.Fatalf("报文有独立额度失败证据：%+v", marks)
 				}

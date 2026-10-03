@@ -254,16 +254,18 @@ func setupSignal(text string) (Signal, bool) {
 	return Signal{}, false
 }
 
-// SilentSignal 判静默空转（见 Silent）这一轮的信号（纯函数）：执行者正常退出、一步没做，但在消息里报了错（Trace.Error）——
-// 如 pi 撞了 429 仍以 agent_settled 收尾、退出码 0，Classify 只看退出码非 0 的报文，判不到。报文按 Classify 的同一套规则认；
-// 认不出或没报文的照旧是静默空转。
-func SilentSignal(report string, now time.Time) Signal {
+// ReportedSignal 判执行者在自己消息里报、之后没被正常回复盖过的错（Trace.Error）（纯函数）：
+// 如 pi 撞了 429 仍以 agent_settled 收尾、退出码 0，Classify 只看退出码非 0 的报文，判不到。报文按 Classify 的同一套规则认，
+// 认出额度用尽、起不来或模型名无效才给信号；它是明确的失败证据，不看这一轮有没有产出（产出扫描可能不完整）。
+func ReportedSignal(report string, now time.Time) (Signal, bool) {
 	if s, ok := quotaSignal(report, now); ok {
-		return s
+		return s, true
 	}
-	if s, ok := setupSignal(report); ok {
-		return s
-	}
+	return setupSignal(report)
+}
+
+// SilentSignal 是静默空转（见 Silent）且报文认不出（或没报文）时的信号。
+func SilentSignal(report string) Signal {
 	return Signal{Kind: SignalNoStart, Reason: "静默空转：完整零 usage，且无有效动作或产出", Evidence: oneLine(report)}
 }
 

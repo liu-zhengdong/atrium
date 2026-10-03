@@ -521,7 +521,7 @@ func TestClassifyGrokErrors(t *testing.T) {
 
 // pi 撞了 429 仍以 agent_settled 收尾、退出码 0（t1006 现场）：报错只在 assistant 的 message_end 里，
 // 收尾的 agent_end 一行带整场对话，把它挤出 Tail 的尾巴。要读整份日志（ReadTrace）才认得出。
-func TestSilentSignalPiError(t *testing.T) {
+func TestReportedSignalPiError(t *testing.T) {
 	now := time.Date(2026, 10, 3, 19, 25, 0, 0, time.UTC)
 	zero := `"usage":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"totalTokens":0,"cost":{"total":0}}`
 	piLog := func(msg string) string {
@@ -558,7 +558,11 @@ func TestSilentSignalPiError(t *testing.T) {
 			t.Errorf("%s：应判静默空转，Trace %+v", c.name, tr)
 			continue
 		}
-		if s := SilentSignal(tr.Error, now); s.Kind != c.kind || s.Reason != c.reason {
+		s, ok := ReportedSignal(tr.Error, now)
+		if !ok {
+			s = SilentSignal(tr.Error)
+		}
+		if s.Kind != c.kind || s.Reason != c.reason {
 			t.Errorf("%s：得到 %+v", c.name, s)
 		}
 	}

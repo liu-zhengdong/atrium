@@ -82,8 +82,12 @@ func (d *dispatcher) exited(ctx context.Context, p *proc, code int) error {
 		}
 		return err
 	}
+	reply, err := p.adapter.ReadReply(p.run.Log)
+	if err != nil {
+		return err
+	}
 	// 每轮都记结果，包括空回复，防止新一轮无正文时沿用旧结论。
-	if err := ledger.Record(ctx, db, p.task, gates.KindResult, actor, p.adapter.LastReply(log.Text)); err != nil {
+	if err := ledger.Record(ctx, db, p.task, gates.KindResult, actor, reply); err != nil {
 		return err
 	}
 	note := route.Reason

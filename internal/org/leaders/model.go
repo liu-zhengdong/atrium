@@ -121,14 +121,6 @@ func Outcome(left, fails int) (next int, forward bool) {
 	return fails + 1, false
 }
 
-// PickWorker 纯函数：第 fails 次重试用组合里的第几个（轮换）；组合为空返回空串。
-func PickWorker(workers []string, fails int) string {
-	if len(workers) == 0 {
-		return ""
-	}
-	return workers[fails%len(workers)]
-}
-
 // Upstream 纯判定：负责人 who 上报（或转交）发给谁。从 dept 往上找到 who 负责的那一层
 // （dept 不在 who 的链上或没给时，用 who 负责的第一个部门），再往上找最近的另一位负责人；没有投秘书。
 func Upstream(parents, leaders map[string]string, who, dept string) string {

@@ -82,6 +82,15 @@ func LeaderUsage(ctx context.Context, q store.Querier, profile, log string) (str
 // LeaderSpec 把一次负责人唤醒翻成进程调用：按登记的执行者组合解析档案，提示词从标准输入或参数给（不即时补充说明）。
 func LeaderSpec(ctx context.Context, env *app.Env, l leaders.Launch) (platform.Spec, error) {
 	r, err := Resolve(ctx, env.DB, l.Profile)
+	if l.Attempt != nil {
+		r, err = selectLeader(ctx, env, l)
+		if err == nil {
+			l.Attempt.Profile = r.ID
+			l.Attempt.Finish = func(ctx context.Context, log string, code int, confirmed bool) (bool, string, error) {
+				return finishLeader(ctx, env, r, log, code, confirmed)
+			}
+		}
+	}
 	if err != nil {
 		return platform.Spec{}, err
 	}

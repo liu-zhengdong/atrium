@@ -116,7 +116,7 @@ func Merge(pending, rows []events.Row) []events.Row {
 }
 
 // Prompt 是送进会话的一条消息：「【Atrium 事件】」开头，每条一行摘要，末尾给看详情与确认的命令。
-func Prompt(b Batch, remind time.Duration) string {
+func Prompt(b Batch, now int64, remind time.Duration) string {
 	all := append(append([]events.Row{}, b.Fresh...), b.Remind...)
 	minutes := int(remind.Minutes())
 	var lines []string
@@ -125,14 +125,20 @@ func Prompt(b Batch, remind time.Duration) string {
 	} else {
 		lines = append(lines, fmt.Sprintf("【Atrium 事件】提醒：%d 条送过 %d 分钟还没确认：", len(b.Remind), minutes))
 	}
+	for _, r := range all {
+		if now-r.At > time.Hour.Milliseconds() {
+			lines[0] += fmt.Sprintf("断线期间积了 %d 条，处理前先对照任务现状核实", len(all))
+			break
+		}
+	}
 	for _, r := range b.Fresh {
-		lines = append(lines, "- "+events.Line(r))
+		lines = append(lines, "- "+promptEventLine(r, now))
 	}
 	if len(b.Fresh) > 0 && len(b.Remind) > 0 {
 		lines = append(lines, fmt.Sprintf("送过 %d 分钟还没确认：", minutes))
 	}
 	for _, r := range b.Remind {
-		lines = append(lines, "- "+events.Line(r))
+		lines = append(lines, "- "+promptEventLine(r, now))
 	}
 	var ids, tasks []string
 	seen := map[string]bool{}
@@ -149,6 +155,20 @@ func Prompt(b Batch, remind time.Duration) string {
 	}
 	lines = append(lines, "处理完确认：atrium events ack "+strings.Join(ids, " "))
 	return strings.Join(lines, "\n")
+}
+
+// promptEventLine 按事件发生时刻标出条龄，不以更新或上次送入时刻计算。
+func promptEventLine(r events.Row, now int64) string {
+	line := events.Line(r)
+	age := now - r.At
+	if age > (10 * time.Minute).Milliseconds() {
+		if age >= time.Hour.Milliseconds() {
+			line += fmt.Sprintf("（积压 %d 小时）", age/time.Hour.Milliseconds())
+		} else {
+			line += fmt.Sprintf("（积压 %d 分钟）", age/time.Minute.Milliseconds())
+		}
+	}
+	return line
 }
 
 // InboxLines 是收件 socket 的两行：先认证，再一条用户消息。

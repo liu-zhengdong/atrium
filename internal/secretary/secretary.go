@@ -349,7 +349,7 @@ func (b *bridge) run(ctx context.Context) string {
 			pending = nil
 			continue
 		}
-		err := b.send(Prompt(batch, RemindAfter))
+		err := b.send(Prompt(batch, store.Now(), RemindAfter))
 		b.noteDelivery(err)
 		if errors.Is(err, platform.ErrPiRejected) {
 			// 连得上但拒收，不进 Liveness 计时（2 分钟连不上的判定对它永不触发）；send 已重读口令重试过。

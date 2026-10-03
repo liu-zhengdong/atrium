@@ -56,6 +56,32 @@ func TestCLISessionValidation(t *testing.T) {
 	}
 }
 
+func TestCLISessionOpaqueID(t *testing.T) {
+	spec := CLISpec{Command: "fake", Args: []string{"{session_args}", "{prompt}"},
+		SessionArgs: []string{"--resume", "{session}"}, SessionMatch: `"sessionId":"([^"]+)"`}
+	a := cliAdapter("fake", spec)
+	id := "sess_1bf49c3a-1128-49a2-a023-9c434bb616c0"
+	if got := a.SessionOf(`{"sessionId":"` + id + `"}`); got != id {
+		t.Fatalf("会话 id = %q", got)
+	}
+	for _, tc := range []struct {
+		id    string
+		valid bool
+	}{
+		{id, true}, {cliSessionID, true}, {strings.Repeat("a", 128), true},
+		{strings.Repeat("a", 129), false}, {"--bad", false}, {"../session", false},
+		{"a/b", false}, {"a\\b", false}, {"a\narg", false}, {"a b", false},
+	} {
+		_, err := Build("fake", Request{CLI: &spec, Dir: t.TempDir(), Prompt: "x", Session: tc.id})
+		if (err == nil) != tc.valid {
+			t.Errorf("会话 %q：err=%v", tc.id, err)
+		}
+	}
+	if _, err := Build("codex", Request{Dir: t.TempDir(), Prompt: "x", Session: id}); err == nil {
+		t.Fatal("内置工具的会话约束不应改变")
+	}
+}
+
 // 假 CLI 只读写测试工作目录，两次进程通过会话文件验证续接时保留了第一轮内容。
 func TestCLISessionProcess(t *testing.T) {
 	if os.Getenv("ATRIUM_FAKE_CLI_SESSION") != "1" {

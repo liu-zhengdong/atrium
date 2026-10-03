@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/liu-zhengdong/atrium/internal/hosts"
 	"github.com/liu-zhengdong/atrium/internal/platform"
@@ -33,7 +34,7 @@ func NewExec() *Exec {
 	return &Exec{Env: env}
 }
 
-// CmdError 是命令非零退出：带标准错误的末尾，给人看、也原样交回执行者。
+// CmdError 是命令非零退出：标准错误过长时保留头尾、中间省略，给人看、也原样交回执行者。
 type CmdError struct {
 	Cmd    string
 	Stderr string
@@ -42,8 +43,18 @@ type CmdError struct {
 
 func (e *CmdError) Error() string {
 	msg := strings.TrimSpace(e.Stderr)
-	if len(msg) > 800 {
-		msg = "…" + msg[len(msg)-800:]
+	// 按字节限制记录大小：头 400 + 尾 800 + 省略标记，最多 1205 字节。
+	const head, tail = 400, 800
+	if len(msg) > head+tail {
+		i, j := head, len(msg)-tail
+		// 向保留片段内部收齐 UTF-8 边界，不把中文等多字节字符切坏。
+		for i > 0 && !utf8.RuneStart(msg[i]) {
+			i--
+		}
+		for j < len(msg) && !utf8.RuneStart(msg[j]) {
+			j++
+		}
+		msg = msg[:i] + "\n…\n" + msg[j:]
 	}
 	return fmt.Sprintf("%s：%v：%s", e.Cmd, e.Err, msg)
 }

@@ -647,7 +647,7 @@ func flowRemote(t *testing.T, repo string) {
 	}
 }
 
-// 本机克隆读不出 GitHub 上的 origin、有工作地点（本机文件夹）、体验巡检的一轮：只派本机。
+// 本机克隆读不出 GitHub 上的 origin、有工作地点（本机文件夹）、体验巡检的一轮、端点是本机回环地址：只派本机。
 func TestHostNeedLocalOnly(t *testing.T) {
 	ctx := context.Background()
 	db, err := store.Open(filepath.Join(t.TempDir(), "atrium.db"))
@@ -686,6 +686,18 @@ func TestHostNeedLocalOnly(t *testing.T) {
 	}
 	if n, err := hostNeed(ctx, db, claude, tk); err != nil || n.LocalOnly == "" {
 		t.Errorf("体验巡检的一轮应只派本机：%+v %v", n, err)
+	}
+	for name, endpoint := range map[string]string{"combos/pi+gw-local": "http://127.0.0.1:3425/v1", "combos/pi+gw-remote": "https://gw.example.com/v1"} {
+		src := "---\nendpoint: " + endpoint + "\nendpoint_api: openai\nmodel: zhipu/glm-5.3\n---\n"
+		if _, err := workers.SaveProfile(ctx, db, name, workers.Edit{Source: &src}, "u1"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for model, local := range map[string]bool{"gw-local": true, "gw-remote": false} {
+		n, err := hostNeed(ctx, db, workers.Spec{Tool: "pi", Model: model}, ledger.Task{Repo: "owner/name"})
+		if err != nil || (n.LocalOnly != "") != local {
+			t.Errorf("端点 %s：%+v %v", model, n, err)
+		}
 	}
 }
 

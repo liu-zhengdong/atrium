@@ -185,6 +185,9 @@ func startLocal(tool string, req workers.Request, extra map[string]string, c con
 	if err != nil {
 		return nil, 0, nil, err
 	}
+	if err := l.WriteFiles(); err != nil {
+		return nil, 0, nil, err
+	}
 	if err := os.MkdirAll(tempDir, 0o700); err != nil {
 		return nil, 0, nil, err
 	}

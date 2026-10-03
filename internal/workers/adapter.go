@@ -71,6 +71,20 @@ type Launch struct {
 	StdinData string            `json:"stdin_data,omitempty"` // 工具要求结构化标准输入时的内容
 	Live      bool              `json:"live,omitempty"`       // 标准输入是消息流：先写 StdinFile 内容作第一条消息，之后写补充说明
 	Env       map[string]string `json:"env,omitempty"`        // 白名单环境之上额外设的变量（不放密钥）
+	Files     map[string]string `json:"files,omitempty"`      // 拉起前写好的文件：绝对路径 → 内容（不放密钥）
+}
+
+// WriteFiles 写出 Launch.Files；本机与远程拉起前都调。
+func (l Launch) WriteFiles() error {
+	for path, src := range l.Files {
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			return err
+		}
+		if err := os.WriteFile(path, []byte(src), 0o600); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Adapter 把一次请求翻成进程调用（经 platform.Start 拉起）。远程代理（hosts）按它拉起；*Driver 实现它。
@@ -157,7 +171,7 @@ func (a *Driver) check(in Request) error {
 	}
 	if in.Endpoint != nil && !slices.Contains(a.Endpoints, in.Endpoint.API) {
 		if len(a.Endpoints) == 0 {
-			return api.Usage("%s 不支持自定义模型端点；能接的：opencode（openai、anthropic）、codex（responses）、claude（anthropic），其他用通用命令行执行者（protocol: cli）", a.Tool)
+			return api.Usage("%s 不支持自定义模型端点；能接的：opencode、pi（openai、anthropic）、codex（responses）、claude（anthropic），其他用通用命令行执行者（protocol: cli）", a.Tool)
 		}
 		return api.Usage("%s 只能接 %s 接口的端点，档案写的是 %s", a.Tool, strings.Join(a.Endpoints, "、"), in.Endpoint.API)
 	}
@@ -424,13 +438,26 @@ func commandCodeAdapter() *Driver {
 // --session-id 精确打开那个会话（没有就建），继续时把新提示词当作新一轮写进去。
 // -na（--no-approve）：不信工作树里的 .pi/ 项目配置与资源，与 claude 不带 local 设置同源；用户个人的 ~/.pi/agent 设置照用。
 // 模型写 provider/id（模型 id 在不同 provider 下会重名）；思考强度单独给。
+// 档案写了端点：-e 加载生成的扩展、模型换成 atrium/<模型>（见 pi_endpoint.go）。
 func piAdapter() *Driver {
 	a := &Driver{Tool: "pi", Exe: "pi", Efforts: []string{"minimal", "low", "medium", "high", "xhigh"},
-		Tell: TellResume, JSON: true, read: readPi, session: regexp.MustCompile(`"type":"session"[^\n]*?"id":"([0-9a-f-]{36})"`)}
+		Tell: TellResume, JSON: true, Endpoints: []string{"openai", "anthropic"}, read: readPi,
+		session: regexp.MustCompile(`"type":"session"[^\n]*?"id":"([0-9a-f-]{36})"`)}
 	a.build = func(in Request) (Launch, error) {
 		args := []string{"-p", "--mode", "json", "-na"}
-		if in.Model != "" {
-			args = append(args, "--model", in.Model)
+		var files map[string]string
+		model := in.Model
+		if in.Endpoint != nil {
+			path, src, err := piEndpointExt(in)
+			if err != nil {
+				return Launch{}, err
+			}
+			files = map[string]string{path: src}
+			args = append(args, "-e", path)
+			model = piEndpointProvider + "/" + in.Model
+		}
+		if model != "" {
+			args = append(args, "--model", model)
 		}
 		if in.Effort != "" {
 			if in.Model == "" {
@@ -447,7 +474,7 @@ func piAdapter() *Driver {
 		if in.PromptFile != "" {
 			args = append(args, "--session-dir", filepath.Join(filepath.Dir(in.PromptFile), "pi-sessions"))
 		}
-		return Launch{Exe: a.Exe, Args: args, Dir: in.Dir, StdinFile: in.PromptFile}, nil
+		return Launch{Exe: a.Exe, Args: args, Dir: in.Dir, StdinFile: in.PromptFile, Files: files}, nil
 	}
 	return a
 }
@@ -477,6 +504,9 @@ func (a *Driver) Spec(req Request, env map[string]string) (platform.Spec, error)
 	}
 	l, err := Build(a.Tool, req)
 	if err != nil {
+		return platform.Spec{}, err
+	}
+	if err := l.WriteFiles(); err != nil {
 		return platform.Spec{}, err
 	}
 	envs := maps.Clone(env)

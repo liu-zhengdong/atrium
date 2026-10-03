@@ -130,6 +130,78 @@ func TestBuild(t *testing.T) {
 	}
 }
 
+func TestPiEndpoint(t *testing.T) {
+	dir := t.TempDir()
+	pf := filepath.Join(dir, "p.md")
+	a, _ := Builtin("pi")
+	ext := filepath.Join(dir, piEndpointFile)
+	cases := []struct {
+		name string
+		in   Request
+		want []string // 扩展里必须出现的片段
+		bad  string
+	}{
+		{name: "本机网关不要 key", in: Request{Model: "zhipu/glm-5.3", Endpoint: &Endpoint{BaseURL: "http://127.0.0.1:3425/v1", API: "openai"}},
+			want: []string{`"baseUrl":"http://127.0.0.1:3425/v1"`, `"api":"openai-completions"`, `"apiKey":"atrium"`, `"id":"zhipu/glm-5.3"`, `"reasoning":false`, `"cacheWrite":0`}},
+		{name: "带凭据名与强度", in: Request{Model: "m", Effort: "high", Endpoint: &Endpoint{BaseURL: "https://gw", API: "anthropic", KeyEnv: "GW_KEY"}},
+			want: []string{`"api":"anthropic-messages"`, `"apiKey":"$GW_KEY"`, `"reasoning":true`}},
+		{name: "引号不破坏脚本", in: Request{Model: "m", Endpoint: &Endpoint{BaseURL: `https://gw/"});x("`, API: "openai"}},
+			want: []string{`"baseUrl":"https://gw/\"});x(\""`}},
+		{name: "没写模型", in: Request{Endpoint: &Endpoint{BaseURL: "https://gw", API: "openai"}}, bad: "要写模型名"},
+		{name: "responses 不接", in: Request{Model: "m", Endpoint: &Endpoint{BaseURL: "https://gw", API: "responses"}}, bad: "只能接 openai、anthropic"},
+	}
+	for _, c := range cases {
+		c.in.Prompt, c.in.PromptFile, c.in.Dir = "x", pf, dir
+		l, err := a.Build(c.in)
+		if c.bad != "" {
+			if err == nil || !strings.Contains(err.Error(), c.bad) {
+				t.Errorf("%s：应报 %q，得到 %v", c.name, c.bad, err)
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatalf("%s：%v", c.name, err)
+		}
+		if !inOrder(l.Args, []string{"-p", "--mode", "json", "-na", "-e", ext, "--model", "atrium/" + c.in.Model}) {
+			t.Errorf("%s 参数：%q", c.name, l.Args)
+		}
+		src := l.Files[ext]
+		for _, w := range c.want {
+			if !strings.Contains(src, w) {
+				t.Errorf("%s 扩展里没有 %s：%s", c.name, w, src)
+			}
+		}
+		if err := l.WriteFiles(); err != nil {
+			t.Fatal(err)
+		}
+		if b, err := os.ReadFile(ext); err != nil || string(b) != src {
+			t.Errorf("%s 扩展没写出：%v", c.name, err)
+		}
+	}
+	// 没写端点：不加 -e、模型原样、不写文件。
+	l, err := a.Build(Request{Prompt: "x", PromptFile: pf, Dir: dir, Model: "zai-coding-cn/glm-5.3"})
+	if err != nil || slices.Contains(l.Args, "-e") || len(l.Files) != 0 || !inOrder(l.Args, []string{"--model", "zai-coding-cn/glm-5.3"}) {
+		t.Errorf("直连：%q %v %v", l.Args, l.Files, err)
+	}
+}
+
+func TestLocalOnly(t *testing.T) {
+	for endpoint, local := range map[string]bool{
+		"":                         false,
+		"http://127.0.0.1:3425/v1": true,
+		"http://127.8.0.1/v1":      true,
+		"http://localhost:3425":    true,
+		"http://[::1]:3425/v1":     true,
+		"https://open.bigmodel.cn": false,
+		"http://10.0.0.2:3425/v1":  false,
+		"http://localhost.evil.cn": false,
+	} {
+		if got := (Resolved{Rules: Rules{Endpoint: endpoint}}).LocalOnly(); (got != "") != local {
+			t.Errorf("%q → %q", endpoint, got)
+		}
+	}
+}
+
 func TestWindowsBatchLongPrompt(t *testing.T) {
 	dir := t.TempDir()
 	for _, prompt := range []string{"第一行\n第二行", strings.Repeat("长说明", 10000)} {

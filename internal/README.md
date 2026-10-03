@@ -167,7 +167,7 @@ type Module struct {
 
 接入时逐项核对，工具能拉起不等于已经接齐：
 
-- **拉起与模型**：在 `workers/adapter.go` 接适配器，或用 `workers/cli.go` 的 `protocol: cli` 档案，核对提示词、模型、强度、端点与凭据环境的传递（叠加与模型映射在 `workers/resolve.go`）。
+- **拉起与模型**：在 `workers/adapter.go` 接适配器，或用 `workers/cli.go` 的 `protocol: cli` 档案，核对提示词、模型、强度、端点与凭据环境的传递（叠加与模型映射在 `workers/resolve.go`）。工具没有端点参数、要配置文件才能接时，`Build` 把文件放进 `Launch.Files`（路径在提示词文件旁），本机、远程、负责人唤醒拉起前都经 `Launch.WriteFiles` 写出（pi 的端点扩展见 `workers/pi_endpoint.go`）。档案端点是本机回环地址的组合只派本机（`Resolved.LocalOnly`，`dispatch.hostNeed` 用）。
 - **完成与日志**：核对 `workers/signals.go` 的 `Ended` 与 `workers/cli.go` 的完成匹配，并在 `workers/tracers.go`、`workers/trace.go` 验证 JSON 事件解析或纯文本原文，日志样本放 `workers/testdata/`。
 - **可用性**：用没登录、额度用尽、模型名无效的日志样本验证 `workers/signals.go` 的 `Classify` 与 `workers/marks.go` 的 `MarkOf`，确认失败能分类并挡住后续分派任务。
 - **额度**：`workers.Resolved.Account()` 只给展示的来源类别，不证明账号/共享池。`quota.Cached` 保留每机器/provider 的成功与最近失败读数，成功刷新替换本机旧行，失败不改成功 Finger/ReadAt，机器移除经 `quota.DropHost` 清理；旧指纹键只随正常刷新清理，不能复原已丢关系。既有预算 500 行按机器×provider 核算，每对最多成功/失败两行（250 对满配）；第 501 行写入回滚、读取明确报错，不返回静默截断。OpenQuota 失败保留旧行的原 refreshedAt，消费按当前时间重算年龄；pace exit=0 有 stderr 诊断也不认整轮成功。pace 按 m146 实际契约保留完整窗口/valueMetrics、原单位/0与null、账号hash来源边界/共享范围、匹配/质量与原成功时刻；空输出、损坏字段、计数不符或64卡片/窗口/指标超限整轮拒绝，不静默截断。旧缓存不补造身份；失败时保存原成功事实，消费重算年龄并将旧matched降为unknown。共享范围现有来源均未知，没有同池同窗token分母；不按百分比/美元/套餐名猜绝对 token 或免费授权。

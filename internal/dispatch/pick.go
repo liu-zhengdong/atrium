@@ -25,6 +25,7 @@ type Fact struct {
 	Waiting     string // 主机暂未就绪；仍符合条件，等待后再派
 	Exclusive   bool
 	Preferred   int           // 技能里的优先顺序（1 起）；0 不是
+	Prefer      bool          // 档案标了 prefer：技能偏好之后、其余之前
 	Stat        workers.Stat  // 近 StatWindow 次表现；拉起次数用于同档轮转
 	Fails       int           // 这个「工具+模型」近 ShakyWindow 次拉起里启动失败几次（workers.Fails）
 	Quota       *Spare        // 对应所选机器的已关联额度；未知也覆盖摘要，不能猜身份
@@ -92,17 +93,18 @@ func NeedTrust(priority ledger.Priority, risk string) (min, why string) {
 }
 
 // Pick 挑执行者（纯函数）：档案能接、装了、本机没标不可用、trust 够活的分量（NeedTrust）、额度没见底；
-// 能接的先按 Shaky、技能偏好、近期拉起次数与富余排序，再比较明确的免费/订阅价格；
+// 能接的先按 Shaky、技能偏好、档案 prefer、近期拉起次数与富余排序，再在同一 prefer 组里比较明确的免费/订阅价格；
 // 未知价格保持原位置，正忙的跳过。额度优先使用对应机器的读数。
 func Pick(in PickInput) PickView {
 	minTrust, heavy := NeedTrust(in.Priority, in.Risk)
 	v := PickView{Risk: in.Risk, Candidates: []Candidate{}}
 	type row struct {
-		c     Candidate
-		wait  string
-		pref  int
-		order int
-		cost  workers.Rules
+		c      Candidate
+		wait   string
+		pref   int
+		prefer bool
+		order  int
+		cost   workers.Rules
 	}
 	var ok, no []row
 	anyData := false
@@ -145,9 +147,9 @@ func Pick(in PickInput) PickView {
 			pref = 1 << 30
 		}
 		if c.Eligible {
-			ok = append(ok, row{c, f.Waiting, pref, i, f.Cost})
+			ok = append(ok, row{c, f.Waiting, pref, f.Prefer, i, f.Cost})
 		} else {
-			no = append(no, row{c, f.Waiting, pref, i, f.Cost})
+			no = append(no, row{c, f.Waiting, pref, f.Prefer, i, f.Cost})
 		}
 	}
 	sort.SliceStable(ok, func(i, j int) bool {
@@ -157,6 +159,9 @@ func Pick(in PickInput) PickView {
 		}
 		if a.pref != b.pref {
 			return a.pref < b.pref
+		}
+		if a.prefer != b.prefer {
+			return a.prefer
 		}
 		if a.c.Stat.Launches != b.c.Stat.Launches {
 			return a.c.Stat.Launches < b.c.Stat.Launches
@@ -174,7 +179,7 @@ func Pick(in PickInput) PickView {
 	costChanged := false
 	for i := range ok {
 		for j := i + 1; j < len(ok); j++ {
-			if Shaky(ok[i].c.Fails) == Shaky(ok[j].c.Fails) && workers.Cheaper(ok[j].cost, ok[i].cost) {
+			if Shaky(ok[i].c.Fails) == Shaky(ok[j].c.Fails) && ok[i].prefer == ok[j].prefer && workers.Cheaper(ok[j].cost, ok[i].cost) {
 				ok[i], ok[j] = ok[j], ok[i]
 				costChanged = true
 			}
@@ -195,6 +200,8 @@ func Pick(in PickInput) PickView {
 		switch {
 		case r.pref < 1<<30:
 			v.Reason = fmt.Sprintf("技能指定的第 %d 优先执行者", r.pref)
+		case r.prefer:
+			v.Reason = "档案标了优先（prefer）"
 		case r.c.Spare != nil:
 			v.Reason = "能接的里额度富余最多（" + strconv.FormatFloat(*r.c.Spare, 'f', 1, 64) + " 个百分点）"
 		case anyData:

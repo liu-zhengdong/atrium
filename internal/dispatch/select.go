@@ -66,6 +66,7 @@ func (d *dispatcher) view(ctx context.Context, t ledger.Task, o Options, exclude
 			MaxRisk: r.Rules.EffectiveMaxRisk(), Refusal: r.Rules.Refusal(risk, true),
 			Exclusive: r.Adapter.Exclusive, Stat: workers.Count(stats[workers.Combo(r.ID)]), Fails: workers.Fails(stats[workers.Combo(r.ID)], ShakyWindow)}
 		f.Cost = r.Rules
+		f.Prefer = r.Rules.Prefer
 		if available.QuotaMarked(r.Spec) {
 			delete(exclude, r.ID)
 		}

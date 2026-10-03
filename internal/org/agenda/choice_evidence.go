@@ -12,7 +12,7 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/store"
 )
 
-// 识别自由文字和 Markdown 链接中的 mN[/相对路径]；不要求自由文字改写为引用。
+// 识别文字说明和 Markdown 链接中的 mN[/相对路径]。
 var materialMention = regexp.MustCompile(`m[1-9][0-9]*(?:/[^\s\x60"'<>\[\]()（）。，；：、！？]+)?`)
 
 func evidenceRefs(text string) []string {
@@ -38,10 +38,15 @@ func evidenceRefs(text string) []string {
 
 func checkEvidence(ctx context.Context, q store.Querier, options []OptionInput) error {
 	for i, o := range options {
-		for _, ref := range evidenceRefs(o.Evidence) {
+		refs := evidenceRefs(o.Evidence)
+		hasFile := false
+		for _, ref := range refs {
 			id, rel, _ := strings.Cut(ref, "/")
 			rel, _, _ = strings.Cut(rel, "#")
 			rel, _, _ = strings.Cut(rel, "?")
+			if rel != "" {
+				hasFile = true
+			}
 			m, err := org.GetMaterial(ctx, q, "", id, 0)
 			if err == nil && rel != "" {
 				var decoded string
@@ -53,6 +58,9 @@ func checkEvidence(ctx context.Context, q store.Querier, options []OptionInput) 
 			if err != nil {
 				return api.Usage("options[%d].evidence: 依据 %s 无法取得：%s", i+1, ref, err.Error())
 			}
+		}
+		if !hasFile {
+			return api.Usage("options[%d].evidence: 每项依据须包含可直接打开的资料引用 mN/相对路径；可保留文字说明", i+1)
 		}
 	}
 	return nil

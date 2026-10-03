@@ -143,7 +143,7 @@ func TestCadence(t *testing.T) {
 func sample(n int) ChoiceInput {
 	in := ChoiceInput{Title: "下一步", Recommend: []int{1}, Reason: "最快见效"}
 	for i := 0; i < n; i++ {
-		in.Options = append(in.Options, OptionInput{Title: "方向" + string(rune('A'+i)), Gain: "多", WhyNow: "现在", Cost: "少", IfNot: "慢", Evidence: "数据"})
+		in.Options = append(in.Options, OptionInput{Title: "方向" + string(rune('A'+i)), Gain: "多", WhyNow: "现在", Cost: "少", IfNot: "慢", Evidence: "数据见 m1/27.svg"})
 	}
 	return in
 }
@@ -204,6 +204,9 @@ func setup(t *testing.T) (*app.Env, string) {
 	t.Cleanup(func() { db.Close() })
 	d, err := org.Add(context.Background(), db, org.NewDept{Name: "公司"})
 	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := org.AddMaterial(context.Background(), db, dir, org.MaterialInput{Org: d.ID, Note: "测试依据", Files: []org.MaterialFile{{Name: "27.svg", Content: []byte("<svg/>")}}}, "u1"); err != nil {
 		t.Fatal(err)
 	}
 	return &app.Env{DB: db, Pause: &pause.Store{DB: db}, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}, d.ID
@@ -293,8 +296,8 @@ func TestSettle(t *testing.T) {
 	if _, err := Settle(ctx, env.DB, task.ID, []byte(`{"title":"x","options":[],"extra":1}`)); code(err) != "usage" {
 		t.Fatalf("不认识的字段应拒绝：%v", err)
 	}
-	raw := []byte(`{"title":"下一步","options":[` + strings.Repeat(`{"title":"A","gain":"g","why_now":"w","cost":"c","if_not":"i","evidence":"e"},`, 2) +
-		`{"title":"B","gain":"g","why_now":"w","cost":"c","if_not":"i","evidence":"e"}],"recommend":[2],"reason":"r"}`)
+	raw := []byte(`{"title":"下一步","options":[` + strings.Repeat(`{"title":"A","gain":"g","why_now":"w","cost":"c","if_not":"i","evidence":"m1/27.svg"},`, 2) +
+		`{"title":"B","gain":"g","why_now":"w","cost":"c","if_not":"i","evidence":"m1/27.svg"}],"recommend":[2],"reason":"r"}`)
 	c, err := Settle(ctx, env.DB, task.ID, raw)
 	if err != nil || c.Org != dept || c.Task != task.ID {
 		t.Fatalf("%+v %v", c, err)
@@ -312,7 +315,7 @@ func TestChoiceAddStrict(t *testing.T) {
 	dir := t.TempDir()
 	env := func(k string) string { return map[string]string{"ATRIUM_DATA": dir}[k] }
 	file := filepath.Join(dir, "choice.json")
-	raw := `{"title":"下一步","options":[{"title":"A","gain":"g","why_now":"w","cost":"c","if_not":"i","evidence":"e","orgs":"o2"}],"recommend":[1],"reason":"r"}`
+	raw := `{"title":"下一步","options":[{"title":"A","gain":"g","why_now":"w","cost":"c","if_not":"i","evidence":"m1/27.svg","orgs":"o2"}],"recommend":[1],"reason":"r"}`
 	if err := os.WriteFile(file, []byte(raw), 0o600); err != nil {
 		t.Fatal(err)
 	}

@@ -2,6 +2,7 @@ package agenda
 
 import (
 	"context"
+	"encoding/json"
 	"reflect"
 	"strings"
 	"sync"
@@ -11,6 +12,33 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/org"
 	"github.com/liu-zhengdong/atrium/internal/store"
 )
+
+func TestSettleRequiresMaterialForEveryOption(t *testing.T) {
+	env, dept := setup(t)
+	ctx := context.Background()
+	task, err := ledger.Add(ctx, env.DB, ledger.NewTask{Title: "调研", Org: dept}, "u1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, evidence := range []string{"对比图与动效预览里 01 列", "m1", "m999/22.svg", "m1/22.svg"} {
+		in := sample(3)
+		in.Options[1].Evidence = evidence
+		raw, err := json.Marshal(in)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Settle(ctx, env.DB, task.ID, raw); code(err) != "usage" || !strings.Contains(err.Error(), "options[2].evidence") {
+			t.Fatalf("%s: %v", evidence, err)
+		}
+		var choices, events, lastID int
+		env.DB.QueryRow(`SELECT count(*) FROM choices`).Scan(&choices)
+		env.DB.QueryRow(`SELECT count(*) FROM events WHERE kind = 'choice.open'`).Scan(&events)
+		env.DB.QueryRow(`SELECT coalesce((SELECT last FROM ids WHERE prefix = 'c'), 0)`).Scan(&lastID)
+		if choices != 0 || events != 0 || lastID != 0 {
+			t.Fatalf("拒绝后留下选项单、事件或占号：%d %d %d", choices, events, lastID)
+		}
+	}
+}
 
 func TestEvidenceRefs(t *testing.T) {
 	for _, tc := range []struct {
@@ -70,7 +98,7 @@ func TestChoiceEvidenceAndVoid(t *testing.T) {
 	}
 	in := sample(3)
 	in.Org = dept
-	for _, ref := range []string{"m999/image.png", m.ID + "/missing.svg", m.ID + "/../22.svg", "先看 " + m.ID + "/22.svg，再看 m999/image.png"} {
+	for _, ref := range []string{"对比图与动效预览里 01 列", "m1", "m1/#preview", "m1/?download=1", "m999/image.png", m.ID + "/missing.svg", m.ID + "/../22.svg", "先看 " + m.ID + "/22.svg，再看 m999/image.png"} {
 		in.Options[1].Evidence = ref
 		if _, err := AddChoice(ctx, env.DB, in, "", "a1"); code(err) != "usage" || !strings.Contains(err.Error(), "options[2].evidence") {
 			t.Fatalf("%s: %v", ref, err)
@@ -84,6 +112,9 @@ func TestChoiceEvidenceAndVoid(t *testing.T) {
 	c, err := AddChoice(ctx, env.DB, in, "", "a1")
 	if err != nil {
 		t.Fatal(err)
+	}
+	if c.ID != "c1" {
+		t.Fatalf("拒绝后占号：%s", c.ID)
 	}
 	if _, err := Void(ctx, env.DB, c.ID, " ", "a1"); code(err) != "usage" {
 		t.Fatal(err)
@@ -121,7 +152,7 @@ func TestChoiceEvidenceAndVoid(t *testing.T) {
 		t.Fatal(err)
 	}
 	in.Options[1].Evidence = "无法解析的自由文字也能建立"
-	if _, err := AddChoice(ctx, env.DB, in, "", "a1"); err != nil {
-		t.Fatal(err)
+	if _, err := AddChoice(ctx, env.DB, in, "", "a1"); code(err) != "usage" {
+		t.Fatalf("无引用必须拒绝：%v", err)
 	}
 }

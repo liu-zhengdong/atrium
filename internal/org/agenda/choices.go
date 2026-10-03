@@ -38,7 +38,7 @@ var ChoiceFormat = fmt.Sprintf(`格式（JSON；不认识的字段直接报错�
 - title：必填，最多 %d 字
 - options：%d–%d 项；每项 title（最多 %d 字）和 gain、why_now、cost、if_not、evidence 五栏都必填，五栏各最多 %d 字
 - options[].org：可选，这一项归哪个部门（oN，不写归出选项单的部门），选中后交给那里的负责人设计、拆分任务
-- evidence：自由文字；可识别的 mN 或 mN/相对路径须在资料中存在，否则拒绝建单
+- evidence：每项至少包含一个可直接打开的 mN/相对路径，可保留文字说明；所有可识别的资料引用都须存在，否则拒绝建单
 - recommend：推荐第几项，从 1 起，至少一项、不重复
 - reason：必填，最多 %d 字`, maxChoiceTitle, org.MinOptions, org.MaxOptions, maxOptionTitle, maxOptionField, maxReason)
 

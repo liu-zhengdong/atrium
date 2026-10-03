@@ -150,6 +150,7 @@ func TestLeaderAcceptsAfterReview(t *testing.T) {
 func TestAcceptNoRepo(t *testing.T) {
 	e := setup(t)
 	o := e.dept(org.AcceptUser)
+	e.choiceMaterial(o)
 	msg := e.inDept(o, "", "claude+opus", t.TempDir())
 	e.sweep()
 	if got := e.state(msg.ID); got != "done/gate" {
@@ -157,7 +158,7 @@ func TestAcceptNoRepo(t *testing.T) {
 	}
 
 	choiceDir := t.TempDir()
-	opt := `{"title":"T","gain":"g","why_now":"w","cost":"c","if_not":"i","evidence":"e"}`
+	opt := `{"title":"T","gain":"g","why_now":"w","cost":"c","if_not":"i","evidence":"m1/27.svg"}`
 	os.WriteFile(filepath.Join(choiceDir, agenda.ChoiceFile), []byte(`{"title":"下一步","options":[`+opt+`,`+opt+`,`+opt+`],"recommend":[1],"reason":"快"}`), 0o600)
 	research := e.inDept(o, "", "claude+opus", choiceDir)
 	e.sweep()

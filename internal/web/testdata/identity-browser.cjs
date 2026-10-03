@@ -106,6 +106,19 @@ const pause = ms => new Promise(r => setTimeout(r, ms));
    }
   }
  }
+ // 上报回执的展开状态不能被实时重绘丢掉：展开后经真接口制造一次数据变化，SSE 推 changed → 整段重画，展开仍在。
+ await page.goto(info.base+'/');
+ const receipts=page.locator('details.receipts');
+ await receipts.waitFor();
+ assert.equal(await receipts.evaluate(d=>d.open),false,'回执默认收起');
+ await page.locator('details.receipts > summary').click();
+ assert.equal(await receipts.evaluate(d=>d.open),true,'回执可展开');
+ await receipts.evaluate(d=>{d.dataset.probe='1';}); // 重画会换掉这个元素，probe 随之消失
+ const made=await fetch(info.base+'/api/tasks',{method:'POST',headers:{Authorization:'Bearer isolated-test','Content-Type':'application/json'},body:JSON.stringify({title:'触发重绘的草稿',org:info.dept,draft:true})});
+ assert.equal(made.status,200,'建草稿触发数据变化');
+ await page.waitForFunction(()=>{const d=document.querySelector('details.receipts');return !!d && !d.dataset.probe;},{timeout:15000});
+ assert.equal(await receipts.evaluate(d=>d.open),true,'实时重绘后回执仍展开');
+ report.push('实时重绘保留回执展开:通过');
  assert.deepEqual(errors,[]);
  await fs.writeFile(path.join(dir,'report.json'),JSON.stringify({checks:report.length,errors,report},null,2));
  console.log(`实际网页 ${report.length} 屏通过；2倍、1280/390px、明暗、长名、HTML名字、改名刷新、JSON结构与原ID、原文及链接回归通过`);

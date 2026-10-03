@@ -680,6 +680,44 @@ func TestWake(t *testing.T) {
 	}
 }
 
+// 负责人连续没收尾、接不住的事件转给秘书时，要就此落一条 stuck 级要处理上报：
+// 转过去的 cross 会在 Retarget 里降为知会，别让这个阻塞一起被藏起来（也不把普通回执升为要处理）。
+func TestWakeForwardToSecretaryReportsStuck(t *testing.T) {
+	env, h, _ := fixture(t)
+	ctx := context.Background()
+	SetLauncher(nil) // 没接拉起接口：每次都算失败
+	t.Cleanup(func() { SetLauncher(nil) })
+	// a1 是顶层：挂未完成任务的协作请求（要处理）落在它手上。
+	if err := events.Emit(ctx, env.DB, events.Event{Kind: events.LeaderEscalate, Task: "t1", Dept: "o1",
+		Target: "a1", Level: events.Act, Body: map[string]any{"from": "a2", "kind": "cross", "note": "要 o3 配合改接口"}}); err != nil {
+		t.Fatal(err)
+	}
+	for range MaxFails {
+		if err := h.round(ctx, env); err != nil {
+			t.Fatal(err)
+		}
+		h.wg.Wait()
+	}
+	act, err := events.Pending(ctx, env.DB, org.Secretary, false, 50)
+	if err != nil || len(act) != 1 {
+		t.Fatalf("负责人接不住转给秘书，应有一条卡住级要处理：%+v %v", act, err)
+	}
+	if act[0].Kind != events.LeaderEscalate || !strings.Contains(string(act[0].Body), `"kind":"stuck"`) {
+		t.Fatalf("应是卡住级上报：%+v", act[0])
+	}
+	bl, err := events.Backlogs(ctx, env.DB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]int{}
+	for _, b := range bl {
+		got[b.Target] = b.Count
+	}
+	if got[org.Secretary] != 1 {
+		t.Fatalf("秘书积压应不为空：%+v", bl)
+	}
+}
+
 // 转交的事务失败：事件仍归原负责人，记录写转交失败，不写「已转交」。
 func TestWakeForwardFails(t *testing.T) {
 	env, h, _ := fixture(t)

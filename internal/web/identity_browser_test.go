@@ -100,7 +100,9 @@ func TestIdentityBrowser(t *testing.T) {
 	must(err)
 	sched, err := agenda.AddSchedule(ctx, db, agenda.NewSchedule{Org: dept.ID, Title: "定时建立人", Kind: "task", Every: "7d"}, a10.ID, store.Now(), time.Local)
 	must(err)
-	must(events.Emit(ctx, db, events.Event{Kind: events.LeaderEscalate, Task: task.ID, Dept: dept.ID, Target: org.Secretary, Body: map[string]any{"from": a1.ID, "label": "无法解决", "note": "上报卡身份"}}))
+	must(events.Emit(ctx, db, events.Event{Kind: events.LeaderEscalate, Task: task.ID, Dept: dept.ID, Target: org.Secretary, Body: map[string]any{"from": a1.ID, "kind": "stuck", "label": "无法解决", "note": "上报卡身份"}}))
+	// 一条降为知会的协作回执：今天页折起的次级入口要有东西可展开。
+	must(events.Emit(ctx, db, events.Event{Kind: events.LeaderEscalate, Target: org.Secretary, Body: map[string]any{"from": a1.ID, "kind": "cross", "label": "需要别的部门配合", "note": "t866确认工作已闭合，回交t862"}}))
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	router := api.NewRouter(logger)
 	router.AddAuth(func(token string) (api.Actor, bool) {
@@ -109,8 +111,14 @@ func TestIdentityBrowser(t *testing.T) {
 	srv := httptest.NewServer(router)
 	defer srv.Close()
 	port, _ := strconv.Atoi(srv.URL[strings.LastIndex(srv.URL, ":")+1:])
-	Module().Routes(router, &app.Env{DB: db, Paths: config.Paths{Data: data}, Port: port, Log: logger})
-	ledger.Module().Routes(router, &app.Env{DB: db, Paths: config.Paths{Data: data}, Port: port, Log: logger})
+	env := &app.Env{DB: db, Paths: config.Paths{Data: data}, Port: port, Log: logger}
+	m := Module()
+	m.Routes(router, env)
+	ledger.Module().Routes(router, env)
+	// 起 SSE 推送循环：浏览器里的实时刷新走真的一条（数据变了推 changed）。
+	runCtx, stop := context.WithCancel(ctx)
+	defer stop()
+	go m.Run(runCtx, env)
 	ready, _ := json.Marshal(map[string]string{"base": srv.URL, "root": root.ID, "dept": dept.ID, "running": running.ID, "task": task.ID, "draft": draft.ID, "deleted": deleted.ID, "unknown": unknown.ID, "choice": c.ID, "schedule": sched.ID, "material": mat.ID})
 	must(os.WriteFile(filepath.Join(out, "ready.json"), ready, 0600))
 	deadline := time.After(4 * time.Minute)

@@ -236,7 +236,8 @@ func (g *Gate) gate(ctx context.Context, t ledger.Task) error {
 	}
 	c, err := d.check(g, ctx, t)
 	if err != nil {
-		return err
+		// 错误带上下文，gh/git 的临时失败经 EachTask 记重试；不包直接转受阻。
+		return fmt.Errorf("查交付事实（%s）：%w", t.ID, err)
 	}
 	if len(c.reasons) > 0 {
 		_, err := Bounce(ctx, g.DB, t.ID, Actor, "交付检查未通过："+strings.Join(c.reasons, "；"))

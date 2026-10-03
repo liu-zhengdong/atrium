@@ -15,29 +15,60 @@ const KindLoopError = "loop_error"
 
 // EachTask 是后台按任务处理的唯一入口，包括以后新增的工作树回收。
 // 读取列表只取原始字段；解析登记、检查暂停与执行动作都放在 run 内。
-// 出错的未结束任务转受阻并沿用 Apply 的处理人通知；已结束任务只记经历。
-// 同一操作失败后不再自动重试，直到该任务有新的状态事件（重新分派任务/放行等）。
+// 出错分两路：Transient 的临时错误（网络瞬断、竞态）按 RetryDelays 记一轮
+// loop_retry，间隔到期下一轮循环自然重做，连续失败次数用尽才转受阻；其余
+// 照旧直接转受阻并沿用 Apply 的处理人通知；已结束任务只记经历。开跑前经
+// RetryHold 统一检查：等间隔、已转受阻的任务让出本轮。连续失败按最近一次
+// 推进之后、按操作计，run 成功（记 loop_ok）、重派（enqueue）与阶段推进都
+// 重置预算。转受阻后不再自动重试，直到该任务有新的状态事件（重新分派任务/
+// 放行等）。
 // app.NotNow（远程机器这会儿没在领指令）不是失败：不转受阻、不记经历，下一轮再试。
 // 标记存在任务经历中，服务重启仍有效，不增加表、内存缓存或重启机制。
 func EachTask[T any](ctx context.Context, db *store.DB, operation string, items []T, id func(T) string, run func(T) error) error {
 	return app.Each(ctx, db, items, func(item T) error {
-		skip, err := loopFailed(ctx, db, id(item), operation)
+		skip, err := RetryHold(ctx, db, id(item), operation)
 		if err != nil || skip {
 			return err
 		}
-		return run(item)
+		if err := run(item); err != nil {
+			return err
+		}
+		return loopOK(ctx, db, id(item), operation)
 	}, func(item T, cause error) error {
-		return taskLoopError(ctx, db, id(item), operation, cause)
+		return retryLoopError(ctx, db, operation, id(item), cause)
 	})
 }
 
-func loopFailed(ctx context.Context, q store.Querier, id, operation string) (bool, error) {
-	var skip bool
-	err := q.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM task_events WHERE task = ? AND kind = ? AND actor = ?
- AND id > (SELECT COALESCE(max(id), 0) FROM task_events WHERE task = ? AND kind IN
- ('created','enqueue','start','exit_ok','exit_fail','gate_pass','review_pass','accept','bounce','land','block','cancel','set','deliver')))`,
-		id, KindLoopError, operation, id).Scan(&skip)
-	return skip, err
+// loopOK 在 run 成功后调用：本操作此前有过重试就记一条 loop_ok，把连续失败
+// 轮次归零（RetryOf 只数最近一次推进之后的 loop_retry）。
+func loopOK(ctx context.Context, db *store.DB, id, operation string) error {
+	n, err := RetryOf(ctx, db, id, operation)
+	if err != nil || n == 0 {
+		return err
+	}
+	return Record(ctx, db, id, KindLoopOK, operation, "重试后成功，连续失败轮次归零")
+}
+
+// retryLoopError 是单件循环失败的统一入口：临时错误按 RetryDelays 记重试，
+// 次数用尽（第 len(RetryDelays)+1 次失败）或非临时错误才转受阻。转受阻的
+// 原因里带每轮的失败经过，处理人在 task log 里看得见从第几轮开始、等了多久。
+func retryLoopError(ctx context.Context, db *store.DB, operation, id string, cause error) error {
+	if !Transient(cause) {
+		return taskLoopError(ctx, db, id, operation, cause)
+	}
+	t, err := Get(ctx, db, id)
+	if err != nil || t.Status.Finished() || t.Status == Blocked {
+		return err
+	}
+	n, err := RetryOf(ctx, db, id, operation)
+	if err != nil {
+		return err
+	}
+	if n >= len(RetryDelays) {
+		return taskLoopError(ctx, db, id, operation,
+			fmt.Errorf("重试 %d 轮仍失败：%w", n, cause))
+	}
+	return Record(ctx, db, id, KindLoopRetry, operation, retryNote(operation, cause, n+1))
 }
 
 func taskLoopError(ctx context.Context, db *store.DB, id, operation string, cause error) error {

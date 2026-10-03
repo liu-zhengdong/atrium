@@ -77,15 +77,24 @@ func (q *Queue) Loop(ctx context.Context) error {
 	}
 }
 
-// Drain 一件一件合，直到队列里没有没暂停的任务。单件出错转受阻；库出错返回。
+// Drain 一件一件合，直到队列里没有没暂停的任务。单件出错经 EachTask：临时错误
+// 记重试、等间隔到期再合，连续失败才转受阻；库出错返回。队首还在等重试间隔时
+// 收手本轮（30 秒后或队列有变化再来），不空转。
 func (q *Queue) Drain(ctx context.Context) error {
 	for {
 		t, ok, err := q.next(ctx)
 		if err != nil || !ok {
 			return err
 		}
+		if hold, err := ledger.RetryHold(ctx, q.DB, t.ID, "merge"); err != nil || hold {
+			return err
+		}
 		if err := ledger.EachTask(ctx, q.DB, "merge", []ledger.Task{t}, func(t ledger.Task) string { return t.ID }, func(t ledger.Task) error {
-			return q.Merge(ctx, t)
+			if err := q.Merge(ctx, t); err != nil {
+				// 错误带上下文，临时判定与重试轮数都从它看。
+				return fmt.Errorf("合入 %s：%w", t.ID, err)
+			}
+			return nil
 		}); err != nil {
 			return err
 		}

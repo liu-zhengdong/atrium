@@ -130,8 +130,17 @@ func (d *dispatcher) paused(ctx context.Context, t ledger.Task, host string) (bo
 	return d.env.Pause.Paused(ctx, pause.Scope{Orgs: orgs, Host: host})
 }
 
-// try 派一件：停机就跳过；挑执行者（正忙就等）、挑机器（满了就等）；拉起。
+// try 派一件：错误带上下文交给 pump 的 EachTask；gh/git 的临时失败（网络瞬断、
+// 竞态）在下一轮 pump 重派，连续失败才转受阻。
 func (d *dispatcher) try(ctx context.Context, it item) error {
+	if err := d.tryOnce(ctx, it); err != nil {
+		return fmt.Errorf("派 %s：%w", it.Task.ID, err)
+	}
+	return nil
+}
+
+// tryOnce 挑执行者（正忙就等）、挑机器（满了就等）、拉起。
+func (d *dispatcher) tryOnce(ctx context.Context, it item) error {
 	t := it.Task
 	if p, err := d.paused(ctx, t, ""); err != nil || p {
 		return err

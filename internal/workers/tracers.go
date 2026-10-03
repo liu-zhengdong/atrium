@@ -447,7 +447,7 @@ func readOpencode(p *Parser, e event, line string) bool {
 }
 
 // pi -p --mode json：头一行 session 给会话 id 与工作目录；message_end 是权威消息——
-// assistant 的文字算「说话」，它报的 provider/model 与用量都从这里取；系统提示词与用户消息也走 message_end，
+// assistant 的文字算「说话」，它报的 provider/model、用量与报错（stopReason=error 的 errorMessage）都从这里取；系统提示词与用户消息也走 message_end，
 // 认出但不记（整段提示词不进经过，日志文件里仍有）。工具执行另有 tool_execution_start/end；agent_settled 是本轮收尾。
 func readPi(p *Parser, e event, _ string) bool {
 	switch e.str("type") {
@@ -473,6 +473,10 @@ func readPi(p *Parser, e event, _ string) bool {
 			p.addUsage(Usage{Tokens: Tokens{Input: number(u, "input"), Output: number(u, "output"),
 				CacheRead: number(u, "cacheRead"), CacheWrite: number(u, "cacheWrite")},
 				Cost: reportedCost(u.obj("cost"), "total"), Currency: "USD"})
+		}
+		p.t.Error = ""
+		if m.str("stopReason") == "error" {
+			p.t.Error = m.str("errorMessage")
 		}
 	case "tool_execution_start":
 		cmd := p.step(e.str("toolName"), e.obj("args"))

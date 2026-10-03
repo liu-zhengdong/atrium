@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -391,6 +392,8 @@ func TestClassify(t *testing.T) {
 		{"下划线连写", 1, `{"type":"error","error":{"code":"quota_exceeded"}}`, SignalQuota, time.Time{}},
 		{"限定词 limit 在前", 1, "Error: Rate limit hit\n", SignalQuota, time.Time{}},
 		{"上下文 limit 不算额度", 1, "Error: context limit reached\n", SignalTransient, time.Time{}},
+		{"余额不足", 1, "Error: insufficient balance\n", SignalQuota, time.Time{}},
+		{"负载均衡器不算余额", 1, "Error: load balancer exhausted retries\n", SignalTransient, time.Time{}},
 		{"单词里的 hit 不算", 1, "Error: whitelist quota config missing\n", SignalTransient, time.Time{}},
 		{"agy 结果事件里的额度", 1, `{"event":"result","result":{"status":"ERROR","error":"RESOURCE_EXHAUSTED (code 429): Individual quota reached. Resets in 12m"}}`, SignalQuota, now.Add(12 * time.Minute)},
 		// t342 现场 agy 不认不带强度的模型名的原文（#563）
@@ -480,6 +483,87 @@ func TestClassifyNoStart(t *testing.T) {
 		m, ok := MarkOf(Classify(1, c.worker, LogTail{Text: c.tail}, now), w, "h1", now)
 		if ok != c.ok || (ok && (m.Target() != c.target || m.Until != now.Add(Hold).UnixMilli())) {
 			t.Errorf("%s：%v %+v", c.worker, ok, m)
+		}
+	}
+}
+
+// grok 把报文放在收尾 result 事件的 errors 数组里：t919（h3，CLI 1.0.5 被服务端拒收）与 t995、t927（余额用尽）现场日志的写法。
+func TestClassifyGrokErrors(t *testing.T) {
+	now := time.Date(2026, 10, 3, 18, 35, 0, 0, time.UTC)
+	result := func(msg string) string {
+		return `{"type":"system","subtype":"init","apiKeySource":"oauth","model":"grok-4.6","cwd":"/w"}` + "\n" +
+			`{"type":"result","subtype":"error_during_execution","is_error":true,"num_turns":0,"usage":{"input_tokens":0,"output_tokens":0},"errors":["Internal error: {\n  \"message\": \"` + msg + `\",\n  \"http_status\": 4xx\n}"]}` + "\n" +
+			"Error: Internal error: {\n  \"message\": \"" + msg + "\",\n  \"http_status\": 4xx\n}\n"
+	}
+	cases := []struct {
+		name, tail, kind, reason, evidence, target string
+		until                                      int64
+	}{
+		{"余额用尽", result("API error (status 402 Payment Required): Grok Build usage balance exhausted"),
+			SignalQuota, "额度用尽", "usage balance exhausted", "grok@h3", now.Add(Hold).UnixMilli()},
+		{"CLI 版本过旧", result("API error (status 426 Upgrade Required): Your Grok CLI version (1.0.5) is outdated. Please update to version 1.0.13 or later via `grok update` or the installation documentation."),
+			SignalSetup, "工具版本过旧", "Your Grok CLI version (1.0.5) is outdated", "grok@h3", 0},
+		{"别的报错仍按零步骤出错退出", result("API error (status 500): Internal Server Error"),
+			SignalNoStart, "零步骤出错退出（退出码 1，原因不明）", "status 500", "grok@h3", now.Add(Hold).UnixMilli()},
+	}
+	for _, c := range cases {
+		s := Classify(1, "grok", LogTail{Text: c.tail}, now)
+		if s.Kind != c.kind || s.Reason != c.reason || !strings.Contains(s.Evidence, c.evidence) || strings.Contains(s.Evidence, "\n") {
+			t.Errorf("%s：得到 %+v", c.name, s)
+			continue
+		}
+		m, ok := MarkOf(s, Spec{Tool: "grok"}, "h3", now)
+		if !ok || m.Target() != c.target || m.Until != c.until {
+			t.Errorf("%s：标记 %v %+v", c.name, ok, m)
+		}
+	}
+}
+
+// pi 撞了 429 仍以 agent_settled 收尾、退出码 0（t1006 现场）：报错只在 assistant 的 message_end 里，
+// 收尾的 agent_end 一行带整场对话，把它挤出 Tail 的尾巴。要读整份日志（ReadTrace）才认得出。
+func TestReportedSignalPiError(t *testing.T) {
+	now := time.Date(2026, 10, 3, 19, 25, 0, 0, time.UTC)
+	zero := `"usage":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"totalTokens":0,"cost":{"total":0}}`
+	piLog := func(msg string) string {
+		end := `{"type":"message_end","message":{"role":"assistant","content":[],"provider":"opencode-go","model":"glm-5.3-flash",` + zero + `,"stopReason":"error","errorMessage":` + strconv.Quote(msg) + `}}`
+		return `{"type":"session","version":3,"id":"s1","cwd":"/w"}` + "\n" + `{"type":"agent_start"}` + "\n" + end + "\n" +
+			`{"type":"agent_end","messages":[{"role":"system","content":"` + strings.Repeat("x", TailBytes+1024) + `"}]}` + "\n" +
+			`{"type":"agent_settled"}` + "\n"
+	}
+	cases := []struct{ name, log, kind, reason string }{
+		{"429 额度", piLog(`429: {"type":"GoUsageLimitError","message":"Go usage limit exceeded"}`), SignalQuota, "额度用尽"},
+		{"没登录", piLog("Not logged in. Please run /login"), SignalSetup, "没登录"},
+		{"认不出照旧空转", piLog("500 Internal Server Error"), SignalNoStart, "静默空转：完整零 usage，且无有效动作或产出"},
+		{"之后有正常回复的不算", strings.Replace(piLog("429: Go usage limit exceeded"), `{"type":"agent_end"`,
+			`{"type":"message_end","message":{"role":"assistant","content":[],`+zero+`,"stopReason":"stop"}}`+"\n"+`{"type":"agent_end"`, 1),
+			SignalNoStart, "静默空转：完整零 usage，且无有效动作或产出"},
+	}
+	for _, c := range cases {
+		path := filepath.Join(t.TempDir(), "run-1.log")
+		if err := os.WriteFile(path, []byte(c.log), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		tail, err := Tail(path, TailBytes)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if s := Classify(0, "pi", tail, now); s.Kind != SignalNone {
+			t.Errorf("%s：退出码 0 时 Classify 应判不出，得到 %+v", c.name, s)
+		}
+		tr, err := ReadTrace("pi", path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !Silent(tr, false) {
+			t.Errorf("%s：应判静默空转，Trace %+v", c.name, tr)
+			continue
+		}
+		s, ok := ReportedSignal(tr.Error, now)
+		if !ok {
+			s = SilentSignal(tr.Error)
+		}
+		if s.Kind != c.kind || s.Reason != c.reason {
+			t.Errorf("%s：得到 %+v", c.name, s)
 		}
 	}
 }
@@ -848,7 +932,7 @@ func TestMarkEvents(t *testing.T) {
 		return strings.Join(out, " | ")
 	}
 	kimi := Mark{Tool: "kimi", Host: "h3", Kind: SignalSetup, Reason: "没登录", Since: now}
-	one := `secretary act worker:kimi@h3 1 {"next":"登录或装好运行环境后 atrium workers edit --clear kimi@h3","reason":"没登录","target":"kimi@h3"}`
+	one := `secretary act worker:kimi@h3 1 {"next":"登录、装好或升级运行环境后 atrium workers edit --clear kimi@h3","reason":"没登录","target":"kimi@h3"}`
 	steps := []struct {
 		name string
 		do   func() error

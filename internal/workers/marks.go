@@ -32,7 +32,7 @@ type Mark struct {
 	Model    string `json:"model,omitempty"` // 空表示这台上这个工具的全部模型（起不来）
 	Host     string `json:"host"`
 	Kind     string `json:"kind"`   // 同 Signal.Kind：quota setup model nostart；另有 probe、subscription
-	Reason   string `json:"reason"` // 额度用尽、没登录、缺运行环境、模型名无效、零步骤出错退出
+	Reason   string `json:"reason"` // 额度用尽、没登录、缺运行环境、工具版本过旧、模型名无效、零步骤出错退出
 	Evidence string `json:"evidence,omitempty"`
 	Until    int64  `json:"until"` // 到这个时刻自动恢复；0 等人处理后 workers edit --clear
 	Since    int64  `json:"since"`
@@ -64,12 +64,12 @@ func (m Mark) Fix() string {
 	case MarkSubscription:
 		return "等订阅恢复，用户明说后 atrium workers edit --clear " + m.Target()
 	}
-	return "登录或装好运行环境后 atrium workers edit --clear " + m.Target()
+	return "登录、装好或升级运行环境后 atrium workers edit --clear " + m.Target()
 }
 
 // MarkOf 把退出信号翻成不可用标记（纯函数）：额度用尽标「工具+模型」到报文里的恢复时刻（读不出按 Hold）；
 // 零步骤出错退出标「工具+模型」Hold 这么久（同工具别的模型可能是好的；原因不明，可能是临时故障，到期再试）；
-// 起不来（没登录、缺运行环境）标这台上的整个工具；模型名无效标「工具+模型」，后两种等人处理。其余信号不标。
+// 起不来（没登录、缺运行环境、工具版本过旧）标这台上的整个工具；模型名无效标「工具+模型」，后两种等人处理。其余信号不标。
 func MarkOf(sig Signal, s Spec, host string, now time.Time) (Mark, bool) {
 	m := Mark{Tool: s.Tool, Model: s.Model, Host: host, Kind: sig.Kind, Evidence: sig.Evidence, Since: now.UnixMilli()}
 	switch sig.Kind {

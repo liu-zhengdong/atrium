@@ -94,7 +94,7 @@ func (e event) obj(k string) event  { m, _ := e[k].(map[string]any); return m }
 
 // 额度措辞的两半：limit 只认带限定词的（context、token 之类的 limit 不是额度）；动词前不能紧挨字母（white 里的 hit 不算）。
 const (
-	quotaNoun = `(?:quota|(?:usage|session|rate|request|monthly|daily|weekly|5[-_\s]?hour|spend(?:ing)?|your)[\s_]+limits?)`
+	quotaNoun = `(?:quota|balances?\b|(?:usage|session|rate|request|monthly|daily|weekly|5[-_\s]?hour|spend(?:ing)?|your)[\s_]+limits?)`
 	quotaVerb = `(?:^|[^a-z])(?:reached|exceeded|exhausted|hit|depleted|insufficient)`
 )
 
@@ -111,6 +111,8 @@ var (
 		{regexp.MustCompile(`(?i)\bnot (?:signed|logged) in\b|please (?:run /login|log ?in|sign ?in)\b|\blogin[_ ]required\b|\brequires? (?:a )?login\b`), "没登录"},
 		// 工具或它依赖的解释器找不到：版本管理器没选版本、shell／Windows 找不到命令、shebang 的 env 找不到、拉起子进程 ENOENT
 		{regexp.MustCompile(`(?i)No active Node\.js version|\bcommand not found\b|^\S*sh: (?:\d+: )?\S+: not found$|不是内部或外部命令|is not recognized as an internal or external command|^env: \S+: No such file or directory|\bspawn \S+ ENOENT\b|executable file not found in`), "缺运行环境"},
+		// 服务端拒收旧版本：grok 的 426 Upgrade Required「Your Grok CLI version (1.0.5) is outdated」
+		{regexp.MustCompile(`(?i)\bUpgrade Required\b|\bversion\b[^\n]{0,40}\bis outdated\b|please update to version`), "工具版本过旧"},
 	}
 	modelNameRE  = regexp.MustCompile(`(?i)issue with the selected model|\bmodel\b[^\n]{0,40}\b(?:not found|does not exist|is not supported)|\b(?:unknown|invalid|unsupported) model\b|ModelNotFound`)
 	retryHintRE  = regexp.MustCompile(`(?i)retry-after|try again in|resets? \d`)
@@ -165,9 +167,14 @@ func errorReport(tail string) string {
 	return plain
 }
 
-// eventError 拼出一条出错事件里的报文。
+// eventError 拼出一条出错事件里的报文；grok 的报文在 errors 字符串数组里。
 func eventError(e event) string {
 	var parts []string
+	for _, v := range asList(e["errors"]) {
+		if s, ok := v.(string); ok {
+			parts = append(parts, s)
+		}
+	}
 	for _, k := range []string{"error", "message", "result", "subtype"} {
 		switch v := e[k].(type) {
 		case string:
@@ -195,7 +202,7 @@ func oneLine(s string) string {
 	return s
 }
 
-// Classify 判执行者退出时的信号（纯函数）：先额度用尽，再思考耗尽，再起不来（没登录、缺运行环境）、模型名无效——这几种换人或等人才过得去，按报文认；
+// Classify 判执行者退出时的信号（纯函数）：先额度用尽，再思考耗尽，再起不来（没登录、缺运行环境、工具版本过旧）、模型名无效——这几种换人或等人才过得去，按报文认；
 // 其余出错退出不再按措辞分，按行为判：这一轮一步没做的算零步骤出错退出（见 idle），做过事的算临时错误、原地重试。
 // worker 是这一轮的执行者标识，数步骤要按它的工具解析日志。
 // 出错退出指退出码非 0 且日志最后不是正常收尾；继续跟进拿不到退出码（ExitUnknown）的，日志最后是报错收尾才算。退出码 0 只判思考耗尽（跑完了就进入交付检查）。
@@ -216,13 +223,8 @@ func Classify(exitCode int, worker string, log LogTail, now time.Time) Signal {
 	}
 	plain := lastPlainLines(tail, 12)
 	for _, text := range []string{report, plain} {
-		for _, st := range setups {
-			if line := matchLine(st.re, text); line != "" {
-				return Signal{Kind: SignalSetup, Reason: st.reason, Evidence: oneLine(line)}
-			}
-		}
-		if modelNameRE.MatchString(text) {
-			return Signal{Kind: SignalModel, Reason: "模型名无效", Evidence: oneLine(text)}
+		if s, ok := setupSignal(text); ok {
+			return s
 		}
 	}
 	text := report
@@ -237,6 +239,34 @@ func Classify(exitCode int, worker string, log LogTail, now time.Time) Signal {
 		return Signal{Kind: SignalNoStart, Reason: "零步骤出错退出（" + code + "，原因不明）", Evidence: oneLine(text)}
 	}
 	return Signal{Kind: SignalTransient, Reason: "做过事之后出错退出（" + code + "），按临时错误重试", Evidence: oneLine(text)}
+}
+
+// setupSignal：报文是起不来（没登录、缺运行环境、工具版本过旧）或模型名无效时给出信号。
+func setupSignal(text string) (Signal, bool) {
+	for _, st := range setups {
+		if line := matchLine(st.re, text); line != "" {
+			return Signal{Kind: SignalSetup, Reason: st.reason, Evidence: oneLine(line)}, true
+		}
+	}
+	if modelNameRE.MatchString(text) {
+		return Signal{Kind: SignalModel, Reason: "模型名无效", Evidence: oneLine(text)}, true
+	}
+	return Signal{}, false
+}
+
+// ReportedSignal 判执行者在自己消息里报、之后没被正常回复盖过的错（Trace.Error）（纯函数）：
+// 如 pi 撞了 429 仍以 agent_settled 收尾、退出码 0，Classify 只看退出码非 0 的报文，判不到。报文按 Classify 的同一套规则认，
+// 认出额度用尽、起不来或模型名无效才给信号；它是明确的失败证据，不看这一轮有没有产出（产出扫描可能不完整）。
+func ReportedSignal(report string, now time.Time) (Signal, bool) {
+	if s, ok := quotaSignal(report, now); ok {
+		return s, true
+	}
+	return setupSignal(report)
+}
+
+// SilentSignal 是静默空转（见 Silent）且报文认不出（或没报文）时的信号。
+func SilentSignal(report string) Signal {
+	return Signal{Kind: SignalNoStart, Reason: "静默空转：完整零 usage，且无有效动作或产出", Evidence: oneLine(report)}
 }
 
 // quotaSignal：报文是额度用尽时给出信号，读得出恢复时刻的带上。

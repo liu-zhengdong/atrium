@@ -30,12 +30,15 @@ type Trace struct {
 	Session  string    `json:"-"`
 	Usage    Usage     `json:"usage"`
 	Segments []Segment `json:"segments"`
-	Ended    bool      `json:"ended"`             // 走到了收尾
-	Result   string    `json:"result,omitempty"`  // 收尾总结全文
-	Ms       int64     `json:"ms,omitempty"`      // 用时（工具报了才有）
-	Model    string    `json:"model,omitempty"`   // 这次实际用的模型（工具在开头报了才有：claude、cursor、agy）
-	Lines    []string  `json:"lines,omitempty"`   // 其他输出原文（最后 rawLines 行）：非事件行、报错事件、没认出的事件；解析不了的工具全在这里
-	Unknown  int       `json:"unknown,omitempty"` // 没认出的事件行数：非零说明工具的日志格式变了，解析要跟上
+	Ended    bool      `json:"ended"`            // 走到了收尾
+	Result   string    `json:"result,omitempty"` // 收尾总结全文
+	Ms       int64     `json:"ms,omitempty"`     // 用时（工具报了才有）
+	Model    string    `json:"model,omitempty"`  // 这次实际用的模型（工具在开头报了才有：claude、cursor、agy）
+	// Error 是执行者在自己的消息里报的最后一条错、之后没有正常回复盖过它（pi 的 stopReason=error）。
+	// 读整份日志才拿得到：pi 收尾的 agent_end 一行带整场对话，报错那行常被挤出 Tail 的尾巴。
+	Error   string   `json:"error,omitempty"`
+	Lines   []string `json:"lines,omitempty"`   // 其他输出原文（最后 rawLines 行）：非事件行、报错事件、没认出的事件；解析不了的工具全在这里
+	Unknown int      `json:"unknown,omitempty"` // 没认出的事件行数：非零说明工具的日志格式变了，解析要跟上
 	// UnknownHead 是最早没认出的 headLines 行原文（截断）：自动记草稿时写进详述（ParseFinding）。
 	UnknownHead []string `json:"-"`
 }

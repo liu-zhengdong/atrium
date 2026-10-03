@@ -30,7 +30,7 @@ Atrium 是 AI 组织的运行底座（方向见讨论 [#260](https://github.com/
 - 开发期不写兜底：不做自愈、旧写法兼容、自动回滚；出错就返回错误停下。
 - 进程、shell、路径的平台差异只经 `internal/platform`，不直接写 `/bin/sh`、`kill(-pid)`。
 - SQLite 一律参数化查询、事务、有界分页。事实（PR、CI、改动规模）由运行时查，不采信执行者自述。
-- 执行者与服务子进程用白名单环境启动，不继承凭据类、身份类变量；分派任务时声明的凭据（`task run --secret`）在那一刻按名称注入。执行者固定带 `ATRIUM_WORKER=1`，另带本次拉起签发的执行者令牌与服务地址（`ATRIUM_WORKER_TOKEN`、`ATRIUM_SERVER`，本机与远程都有，PATH 里有 atrium）：只能读和往本任务所在部门加资料，退出即失效；负责人进程只加本次唤醒签发的 `ATRIUM_LEADER_TOKEN`。权限只在服务端按令牌判，命令行不拦。
+- 执行者与服务子进程用白名单环境启动，不继承凭据类、身份类变量；分派任务时声明的凭据（`task run --secret`）在那一刻按名称注入。执行者固定带 `ATRIUM_WORKER=1`，另带本次拉起签发的执行者令牌与服务地址（`ATRIUM_WORKER_TOKEN`、`ATRIUM_SERVER`，本机与远程都有，PATH 里有 atrium）：只能读、往本任务所在部门加资料、给本任务写备注，退出即失效；负责人进程只加本次唤醒签发的 `ATRIUM_LEADER_TOKEN`。权限只在服务端按令牌判，命令行不拦。
 - 凭据不进日志、提交、PR、issue 或模型提示词。认证在路由匹配后统一做，默认拒绝；路径参数拒绝 `..`、绝对路径与隐藏段。
 - 命令行的主要调用者是 Agent：回执最后一行给下一步命令，字段校验以参数名开头，读命令支持 `--json`，异步状态提供等待（`task wait`、`task log --follow`、`events wait`）。`atrium --help` 由命令表生成，README 不抄命令用法。
 - 短号全局一致、持久、不复用（`t1`、`o1`、`k1`、`a1`……）。

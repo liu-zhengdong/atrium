@@ -72,7 +72,8 @@ func TestWorkerRule(t *testing.T) {
 		"POST /api/materials/{id}/archive": WorkerDeny,
 		"POST /api/tasks":                  WorkerDeny,
 		"PATCH /api/tasks/{id}":            WorkerDeny,
-		"POST /api/tasks/{id}/notes":       WorkerDeny,
+		"POST /api/tasks/{id}/notes":       WorkerTaskNote,
+		"PATCH /api/tasks/{id}/notes":      WorkerDeny,
 		"GET /api/events/wait":             WorkerDeny,
 		"GET /api/service":                 WorkerDeny,
 		"POST /api/service/stop":           WorkerDeny,
@@ -95,7 +96,7 @@ func TestWorkerRule(t *testing.T) {
 	}
 }
 
-// 经路由走一遍：在跑的执行者凭令牌能读、能往本部门加资料或给本部门的细节资料加一版（署名 tN 执行者），别的都拒；退出后令牌作废。
+// 经路由走一遍：在跑的执行者凭令牌能读、能往本部门加资料或给本部门的细节资料加一版、能给本任务写备注（署名 tN 执行者），别的都拒；退出后令牌作废。
 func TestWorkerTokenRoutes(t *testing.T) {
 	env, d := setup(t)
 	ctx := context.Background()
@@ -130,6 +131,9 @@ func TestWorkerTokenRoutes(t *testing.T) {
 		return nil, q.DecodeMax(&in, org.MaxMaterialBody)
 	})
 	r.Handle("POST /api/materials/{id}/revs", func(q *api.Req) (any, error) { return "ok", nil })
+	var noteBy string
+	r.Handle("POST /api/tasks/{id}/notes", func(q *api.Req) (any, error) { noteBy = q.Actor.ID; return "ok", nil })
+	other, _ := ledger.Add(ctx, env.DB, ledger.NewTask{Title: "别的活", Org: o1.ID}, "u1")
 	material := func(dept string, overview bool) string {
 		m, err := org.AddMaterial(ctx, env.DB, env.Paths.Data, org.MaterialInput{Org: dept, Overview: overview, Note: "x",
 			Files: []org.MaterialFile{{Name: "a.md", Content: []byte("x")}}}, "u1")
@@ -169,12 +173,19 @@ func TestWorkerTokenRoutes(t *testing.T) {
 	if got := rev(mine); got != "ok" {
 		t.Errorf("给本部门的细节资料加一版应放行：%s", got)
 	}
+	note := func(id string) string {
+		return code(c.Do(ctx, "POST", "/api/tasks/"+id+"/notes", map[string]string{"text": "巡检发现"}, nil))
+	}
+	if got := note(tk.ID); got != "ok" || noteBy != tk.ID+" 执行者" {
+		t.Errorf("给本任务写备注应放行、署名 %s 执行者：%s %q", tk.ID, got, noteBy)
+	}
 	for what, got := range map[string]string{
 		"别的部门":       add(o2.ID, false),
 		"总览":         add(o1.ID, true),
 		"给别的部门的资料加版": rev(theirs),
 		"给总览加版":      rev(overview),
 		"建任务":        code(c.Do(ctx, "POST", "/api/tasks", map[string]string{"title": "x"}, nil)),
+		"给别的任务写备注":   note(other.ID),
 	} {
 		if got != "forbidden" {
 			t.Errorf("%s 应拒：%s", what, got)
@@ -190,5 +201,8 @@ func TestWorkerTokenRoutes(t *testing.T) {
 	}
 	if got := code(c.Do(ctx, "GET", "/api/tasks", nil, nil)); got != "unauthorized" {
 		t.Errorf("任务不在跑了令牌应作废：%s", got)
+	}
+	if got := note(tk.ID); got != "unauthorized" {
+		t.Errorf("拉起结束后连本任务的备注也写不了：%s", got)
 	}
 }

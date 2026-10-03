@@ -18,7 +18,7 @@ import (
 
 // 负责人令牌的权限表（leaders.RuleFor）按路由模式判。这里装上全部模块的真实路由，逐条核对写接口的规则：
 // 新加的写接口不在表里就失败，逼着决定负责人能不能调它；路由改了形状（RuleFor 认不出）也会失败。
-// 顺带核对执行者令牌（dispatch.WorkerRule）：写接口里只放行加资料。
+// 顺带核对执行者令牌（dispatch.WorkerRule）：写接口里只放行加资料和写本任务备注。
 func TestLeaderRulesCoverRealRoutes(t *testing.T) {
 	dir := t.TempDir()
 	db, err := store.Open(filepath.Join(dir, "atrium.db"))
@@ -81,8 +81,10 @@ func TestLeaderRulesCoverRealRoutes(t *testing.T) {
 			continue
 		}
 		seen[p] = true
-		// 执行者令牌的写接口只有加资料（dispatch.WorkerRule）：新加的写接口一律拒绝它。
-		if got := dispatch.WorkerRule(p); (got == dispatch.WorkerMaterial) != (p == "POST /api/materials" || p == "POST /api/materials/{id}/revs") || (got == dispatch.WorkerRead) {
+		// 执行者令牌的写接口只有加资料和写本任务备注（dispatch.WorkerRule）：新加的写接口一律拒绝它。
+		got := dispatch.WorkerRule(p)
+		if (got == dispatch.WorkerMaterial) != (p == "POST /api/materials" || p == "POST /api/materials/{id}/revs") ||
+			(got == dispatch.WorkerTaskNote) != (p == "POST /api/tasks/{id}/notes") || got == dispatch.WorkerRead {
 			t.Errorf("%s：执行者令牌的规则 %d 不对", p, got)
 		}
 		w, ok := want[p]

@@ -194,6 +194,13 @@ func Routes(r *api.Router, env *app.Env) {
 		}
 		return t, nil
 	})
+	r.Handle("GET /api/task-parties", func(q *api.Req) (any, error) {
+		ids, err := partyIDs(q.URL.Query().Get("ids"))
+		if err != nil {
+			return nil, err
+		}
+		return readParties(q.Context(), db, ids)
+	})
 	r.Handle("GET /api/classes", func(q *api.Req) (any, error) { return Classes(q.Context(), db) })
 	r.Handle("GET /api/tree", func(q *api.Req) (any, error) {
 		roots, err := List(q.Context(), db, Filter{Top: true, Limit: 50})

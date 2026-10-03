@@ -2,9 +2,35 @@ package workers
 
 import (
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 )
+
+// t898 的两行 gh 查询输出没有 role，应显示原文而不是误报日志格式变化。
+func TestKimiRawJSON(t *testing.T) {
+	b, err := os.ReadFile("testdata/kimi-t898-stdout.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := NewParser("kimi")
+	p.Feed(string(b))
+	want := strings.Split(strings.TrimSpace(string(b)), "\n")
+	for i := range want {
+		want[i] = clipRunes(want[i], lineRunes)
+	}
+	got := p.Trace()
+	if len(want) != 2 || got.Unknown != 0 || len(got.UnknownHead) != 0 || len(got.Segments) != 0 || got.Result != "" || !reflect.DeepEqual(got.Lines, want) {
+		t.Fatalf("trace=%+v", got)
+	}
+	for _, line := range []string{`{"role":"new_role","content":"unknown"}`, `{"role":null}`, `{"role":""}`, `{"role":"meta","type":"new_format"}`} {
+		p := NewParser("kimi")
+		p.Line(line)
+		if got := p.Trace(); got.Unknown != 1 || !reflect.DeepEqual(got.Lines, []string{line}) {
+			t.Fatalf("陌生事件必须保留告警：%+v", got)
+		}
+	}
+}
 
 func TestKimiMeasuredReply(t *testing.T) {
 	b, err := os.ReadFile("testdata/kimi-t649-stdout.jsonl")

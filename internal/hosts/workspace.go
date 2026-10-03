@@ -11,7 +11,7 @@ import (
 )
 
 // worktree 在代理数据目录里克隆仓库（已有就 fetch）并为这个任务建工作树。
-// 目录为空或没有自己的 .git 时先检出；git 顶层必须就是该目录，否则不把它交给执行者。
+// 目录还不存在或为空时先检出；有文件却没有自己的 .git、或 git 顶层不是该目录时不把它交给执行者。
 func (a *Agent) worktree(ctx context.Context, as Assignment) (string, error) {
 	clone := filepath.Join(a.Dir, "repos", CloneName(as.Repo))
 	wt := clone + "-" + as.Task

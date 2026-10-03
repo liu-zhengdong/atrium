@@ -112,7 +112,7 @@ func run(ctx context.Context, dir, name string, args ...string) (string, error) 
 }
 
 // Workdir 准备任务的工作目录：有仓库时在任务目录下建 git worktree（分支 task-tN，已有就沿用：交回原执行者接着改）。
-// 目录为空或没有自己的 .git 时先检出，git 顶层必须就是该目录，否则返回错误，调用方不拉起、不标记。
+// 目录还不存在或为空时先检出；有文件却没有自己的 .git、或 git 顶层不是该目录时返回错误，调用方不拉起、不标记。
 // 有工作地点就是它本身（原地干，不复制、不建工作树）。都没有时用任务目录下的 work/，并把它初始化成自己的检出，避免 git 走到上级。
 func Workdir(ctx context.Context, data, task, repo, place string) (dir, branch string, err error) {
 	td := TaskDir(data, task)

@@ -7,7 +7,6 @@
 package dispatch
 
 import (
-	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -16,7 +15,6 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"github.com/liu-zhengdong/atrium/internal/api"
 	"github.com/liu-zhengdong/atrium/internal/app"
@@ -449,24 +447,6 @@ func (d *dispatcher) kill(ctx context.Context, p *proc) {
 	}
 }
 
-// tries 数这一轮（最近一次从队列取出之后）同一执行者重试、换人各几次，以及试过的执行者。
-func tries(runs []workers.Run) (same, switches int, tried map[string]bool) {
-	tried = map[string]bool{}
-	for i := len(runs) - 1; i >= 0; i-- {
-		r := runs[i]
-		tried[r.Worker] = true
-		switch r.Why {
-		case workers.WhySame:
-			same++
-		case workers.WhySwitch:
-			switches++
-		case workers.WhyFirst, workers.WhyBounce: // 交回后是新的一轮
-			return
-		}
-	}
-	return
-}
-
 // exited 是执行者退出后的收尾：判信号与结局，进入交付检查、判失败，或重试、换人、继续、重派。
 // 任务已不在跑（watch 或人先收了尾）、或已换了一轮拉起，就不动。
 // noteUnknown：这次拉起的日志有认不出的事件时记一条草稿（workers.ParseFinding 判）；草稿满了照常报错。
@@ -488,22 +468,6 @@ func noteUnknown(ctx context.Context, db *store.DB, task string, run workers.Run
 		_, err = ledger.Add(ctx, db, in, actor)
 	}
 	return err
-}
-
-// markUnavailable 按退出信号把这一轮的「工具+模型@机器」标成不可用，返回写进任务备注的一句；不是可用性信号返回空。
-func markUnavailable(ctx context.Context, db *store.DB, run workers.Run, sig workers.Signal) (string, error) {
-	w, err := workers.ParseWorker(run.Worker)
-	if err != nil {
-		return "", err
-	}
-	m, ok := workers.MarkOf(sig, w, cmp.Or(run.Host, LocalHost), time.Now())
-	if !ok {
-		return "", nil
-	}
-	if err := workers.SetMark(ctx, db, m); err != nil {
-		return "", err
-	}
-	return "；已标记 " + m.Target() + " 不可用（" + m.Text() + "）", nil
 }
 
 // switchHost 给换上的执行者挑机器：上一轮那台能接就留在那台（工作目录在那里），否则另挑；都接不了报冲突。

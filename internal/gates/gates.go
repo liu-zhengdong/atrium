@@ -1,8 +1,10 @@
 // Package gates 是交付检查与验收：执行者退出后运行时自己查事实（PR、提交、推送、改动规模、PR 正文），
-// 按档案 checks 判过或不过，不采信执行者自述；高风险或低信任的交付先另派不同工具、不同模型的审阅者；
+// 按档案 checks 判过或不过。执行者自称完成不算数；自称没做成、未完成或受阻照信，交回。
+// 高风险或低信任的交付先另派不同工具、不同模型的审阅者；
 // 部门的验收人是 leader、user 时停在等验收，由 task accept / task reject 判。
 //
-// 交付方式（pr、local、choice、message：怎么交、查什么、怎么应用）在 delivery.go（local 的交付检查与应用在 local.go）；判定在 judge.go（纯函数）；
+// 交付方式（pr、local、choice、message：怎么交、查什么、怎么应用）在 delivery.go（local 的交付检查与应用在 local.go）；
+// 档案 checks 的判定在 judge.go（纯函数）；PR 草稿与交付结论的准入在 admit.go（纯函数，进合入队列前再跑）；
 // 查事实在 facts.go；与 dispatch 的约定在 records.go。
 // 结论经 ledger.Apply(GatePass / ReviewPass / Accept / Bounce / Block) 记录结果，理由用 ledger.Record 记进经历。
 // merge、release 也用本包的 Runner、ViewPR、Bounce、Paused。

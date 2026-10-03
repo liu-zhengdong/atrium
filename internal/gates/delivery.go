@@ -59,9 +59,7 @@ var (
 			"PR 正文写「端到端验证」一节：在隔离实例里跑了什么、输出摘要；会停服务、改机器状态的步骤标注「只在隔离环境」。",
 		},
 		check: (*Gate).checkPR,
-		land: func(*Gate, context.Context, ledger.Task) (landed, error) {
-			return landed{stage: ledger.StageMerge, note: "进合入队列"}, nil
-		}}
+		land:  (*Gate).landPR}
 	// local：本机仓库、不经 GitHub；交付检查在本机查提交与改动；应用交付结果是合进本机主分支（landLocal）。
 	deliverLocal = Delivery{Name: "local",
 		Rules: []string{
@@ -198,17 +196,23 @@ func (g *Gate) checkEnding(ctx context.Context, t ledger.Task) (checked, error) 
 		return checked{block: fmt.Sprintf("这一轮没记到执行者的回复（atrium task log %s 看原始输出）", t.ID)}, nil
 	}
 	next := fmt.Sprintf("；读执行者的回复（atrium task log %s）后补说明重派，或收尾 atrium task set %s --status done", t.ID, t.ID)
-	done, why, ok := ParseEnding(reply)
+	word, why, ok := Ending(reply)
 	switch {
 	case !ok:
 		return checked{block: where + "，执行者最后一行没写「交付结论：完成/没做成」" + next}, nil
-	case !done:
+	case word != "完成":
 		if why = strings.Join(strings.Fields(why), " "); why == "" {
 			why = "没写原因"
 		}
-		return checked{block: where + "，执行者交付结论：没做成（" + why + "）" + next}, nil
+		return checked{block: where + "，执行者交付结论：" + word + "（" + why + "）" + next}, nil
 	}
 	return checked{note: where + "，交付结论：完成，结论在最后的回复里"}, nil
+}
+
+// CurrentReply 是执行者这一轮（最近一次拉起之后）最后的回复；这一轮没回复为空，不拿上一轮的充数。
+// 合入入口重查用它，不读交付检查记录。
+func CurrentReply(ctx context.Context, q store.Querier, id string) (string, error) {
+	return roundResult(ctx, q, id)
 }
 
 // roundResult 取执行者这一轮（最近一次拉起之后）最后的回复；这一轮没回复为空，不拿上一轮的充数。
@@ -281,6 +285,14 @@ func (g *Gate) checkPR(ctx context.Context, t ledger.Task) (checked, error) {
 		v.Pass = false
 		v.Reasons = append(v.Reasons, "pr_exists：分支 "+facts.Branch+" 没有开着的 PR，无从合入")
 	}
+	block, err := QueueBlock(ctx, g.DB, facts.PR, t.ID)
+	if err != nil {
+		return checked{}, err
+	}
+	if block != "" {
+		v.Pass = false
+		v.Reasons = append(v.Reasons, block)
+	}
 	if err := record(ctx, g.DB, t.ID, KindGate, gateRecord{v, facts}); err != nil {
 		return checked{}, err
 	}
@@ -300,6 +312,34 @@ func (g *Gate) checkPR(ctx context.Context, t ledger.Task) (checked, error) {
 		c.review = why
 	}
 	return c, nil
+}
+
+// landPR 进合入队列前再查一次：现问 GitHub 这个 PR 是不是草稿，并读这一轮回复。不读交付检查记录。
+// 执行者在审阅或等验收期间把 PR 转 ready，也要过这一道，不能沿用之前的通过。
+func (g *Gate) landPR(ctx context.Context, t ledger.Task) (landed, error) {
+	cur, err := ledger.Get(ctx, g.DB, t.ID)
+	if err != nil {
+		return landed{}, err
+	}
+	if cur.PR == "" {
+		return landed{}, fmt.Errorf("%s 要进合入队列，但还没有登记 PR", t.ID)
+	}
+	repo, err := Slug(ctx, g.R, cur.Repo)
+	if err != nil {
+		return landed{}, err
+	}
+	info, err := ViewPR(ctx, g.R, repo, cur.PR)
+	if err != nil {
+		return landed{}, err
+	}
+	block, err := QueueBlock(ctx, g.DB, &info.PR, t.ID)
+	if err != nil {
+		return landed{}, err
+	}
+	if block != "" {
+		return landed{bounce: block}, nil
+	}
+	return landed{stage: ledger.StageMerge, note: "进合入队列"}, nil
 }
 
 // acceptBy 是这件任务过了交付检查、审阅之后要等谁验收：部门的验收人（沿树继承），auto 为空。

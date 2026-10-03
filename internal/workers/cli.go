@@ -11,7 +11,8 @@ import (
 
 // CLISpec 是通用命令行执行者（harness/<名字> 写 protocol: cli）的写法，不写代码就能接一个新工具。
 // args 元素里可用占位 {prompt} {prompt_file} {cwd} {model} {effort} {base_url}；整个元素写
-// {model_args} {effort_args} {endpoint_args} 时换成对应参数组，这次没给模型、强度、端点就整组省掉。
+// {model_args} {effort_args} {endpoint_args} {session_args} 时换成对应参数组，没给对应值就整组省掉。
+// session_match 用唯一捕获组取会话 id；续接时 {session} 是该 id，补充说明仍走提示词入口。
 // 没有 {prompt} 也没有 {prompt_file} 时提示词从标准输入给。done_match / error_match 是逐行匹配的正则。
 type CLISpec struct {
 	Command      string            `yaml:"command"`
@@ -19,6 +20,8 @@ type CLISpec struct {
 	ModelArgs    []string          `yaml:"model_args"`
 	EffortArgs   []string          `yaml:"effort_args"`
 	EndpointArgs []string          `yaml:"endpoint_args"`
+	SessionArgs  []string          `yaml:"session_args"`
+	SessionMatch string            `yaml:"session_match"`
 	Efforts      []string          `yaml:"efforts"`
 	DoneMatch    string            `yaml:"done_match"`
 	ErrorMatch   string            `yaml:"error_match"`
@@ -30,8 +33,8 @@ type CLISpec struct {
 }
 
 var (
-	placeholders = []string{"prompt", "prompt_file", "cwd", "model", "effort", "base_url"}
-	groupOf      = map[string]string{"model_args": "model", "effort_args": "effort", "endpoint_args": "base_url"}
+	placeholders = []string{"prompt", "prompt_file", "cwd", "model", "effort", "base_url", "session"}
+	groupOf      = map[string]string{"model_args": "model", "effort_args": "effort", "endpoint_args": "base_url", "session_args": "session"}
 	tokenRE      = regexp.MustCompile(`\{([a-z_]+)\}`)
 	envNameRE    = regexp.MustCompile(`^[A-Z_][A-Z0-9_]*$`)
 )
@@ -66,7 +69,7 @@ func (s CLISpec) Problems(name string) []string {
 						p = append(p, fmt.Sprintf("{%s} 只能在 args 里单独占一项", tk))
 					}
 				} else if !slices.Contains(placeholders, tk) {
-					p = append(p, fmt.Sprintf("%s 里的 {%s} 不是占位，可用 {prompt} {prompt_file} {cwd} {model} {effort} {base_url} {model_args} {effort_args} {endpoint_args}", where, tk))
+					p = append(p, fmt.Sprintf("%s 里的 {%s} 不是占位，可用 {prompt} {prompt_file} {cwd} {model} {effort} {base_url} {session} {model_args} {effort_args} {endpoint_args} {session_args}", where, tk))
 				}
 			}
 		}
@@ -75,10 +78,14 @@ func (s CLISpec) Problems(name string) []string {
 	check("model_args", s.ModelArgs, false)
 	check("effort_args", s.EffortArgs, false)
 	check("endpoint_args", s.EndpointArgs, false)
-	for g, items := range map[string][]string{"model_args": s.ModelArgs, "effort_args": s.EffortArgs, "endpoint_args": s.EndpointArgs} {
+	check("session_args", s.SessionArgs, false)
+	for g, items := range map[string][]string{"model_args": s.ModelArgs, "effort_args": s.EffortArgs, "endpoint_args": s.EndpointArgs, "session_args": s.SessionArgs} {
 		if len(items) > 0 && !used[g] {
 			p = append(p, fmt.Sprintf("写了 %s，但 args 里没有 {%s} 标出放在哪", g, g))
 		}
+	}
+	if (s.SessionMatch != "") != used["session"] {
+		p = append(p, "session_match 与 {session} 必须一起写（首次启动可省的续接参数放进 session_args）")
 	}
 	if len(s.Efforts) > 0 && !used["effort"] {
 		p = append(p, "写了 efforts，但 args 里没用 {effort} 或 {effort_args}")
@@ -89,10 +96,12 @@ func (s CLISpec) Problems(name string) []string {
 	if used["prompt"] && used["prompt_file"] {
 		p = append(p, "{prompt} 与 {prompt_file} 只用一个")
 	}
-	for _, re := range []struct{ k, v string }{{"done_match", s.DoneMatch}, {"error_match", s.ErrorMatch}} {
+	for _, re := range []struct{ k, v string }{{"done_match", s.DoneMatch}, {"error_match", s.ErrorMatch}, {"session_match", s.SessionMatch}} {
 		if re.v != "" {
-			if _, err := regexp.Compile(re.v); err != nil {
+			if compiled, err := regexp.Compile(re.v); err != nil {
 				p = append(p, fmt.Sprintf("%s 不是合法正则：%v", re.k, err))
+			} else if re.k == "session_match" && compiled.NumSubexp() != 1 {
+				p = append(p, "session_match 必须恰有一个捕获组（会话 id）")
 			}
 		}
 	}
@@ -120,6 +129,7 @@ func (s CLISpec) Problems(name string) []string {
 // cliAdapter 把写法变成适配器；调用前先看 Problems。
 func cliAdapter(name string, s CLISpec) *Driver {
 	all := strings.Join(append(append(append(append([]string{}, s.Args...), s.ModelArgs...), s.EffortArgs...), s.EndpointArgs...), " ")
+	all += " " + strings.Join(s.SessionArgs, " ")
 	for _, v := range s.Env {
 		all += " " + v
 	}
@@ -132,11 +142,18 @@ func cliAdapter(name string, s CLISpec) *Driver {
 	}
 	a := &Driver{Tool: name, Exe: s.Command, Efforts: s.Efforts, Exclusive: s.Exclusive, Tell: TellRestart, JSON: s.JSON,
 		Endpoints: apis, KeyEnv: s.KeyEnv, ArgPrompt: strings.Contains(all, "{prompt}"), cli: &s}
+	if s.SessionMatch != "" {
+		a.session = regexp.MustCompile(s.SessionMatch)
+		a.Tell = TellResume
+	}
 	if len(s.Efforts) == 0 {
 		a.Efforts = nil
 	}
 	a.build = func(in Request) (Launch, error) {
 		vals := map[string]string{"prompt": in.Prompt, "prompt_file": in.PromptFile, "cwd": in.Dir}
+		if in.Session != "" {
+			vals["session"] = in.Session
+		}
 		if in.Model != "" {
 			vals["model"] = in.Model
 		}
@@ -179,12 +196,12 @@ func fill(tpl string, vals map[string]string) (string, bool) {
 
 // ExpandArgs 按模板展开参数（纯函数）：整组标记在值缺时省掉，其余占位缺值报错。
 func ExpandArgs(name string, s CLISpec, vals map[string]string) ([]string, error) {
-	groups := map[string][]string{"model_args": s.ModelArgs, "effort_args": s.EffortArgs, "endpoint_args": s.EndpointArgs}
+	groups := map[string][]string{"model_args": s.ModelArgs, "effort_args": s.EffortArgs, "endpoint_args": s.EndpointArgs, "session_args": s.SessionArgs}
 	var out []string
 	add := func(item string) error {
 		v, ok := fill(item, vals)
 		if !ok {
-			return api.Usage("harness/%s 的 args 用了 %s，但这次没有对应的值；可选的参数放进 model_args、effort_args、endpoint_args 组", name, item)
+			return api.Usage("harness/%s 的 args 用了 %s，但这次没有对应的值；可选的参数放进 model_args、effort_args、endpoint_args、session_args 组", name, item)
 		}
 		out = append(out, v)
 		return nil

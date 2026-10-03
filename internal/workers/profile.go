@@ -142,7 +142,7 @@ func decodeRules(keys map[string]any) (Rules, error) {
 	return r, nil
 }
 
-var cliKeys = []string{"protocol", "command", "args", "model_args", "effort_args", "endpoint_args", "efforts", "done_match",
+var cliKeys = []string{"protocol", "command", "args", "model_args", "effort_args", "endpoint_args", "session_args", "session_match", "efforts", "done_match",
 	"error_match", "env", "endpoint_apis", "key_env", "exclusive", "json"}
 
 // CheckProfile 校验一层档案（纯函数）：键都认识、取值在档位内、通用命令行写法只在 harness 层且写得对。

@@ -1,0 +1,10 @@
+[
+ {"worker":"codex+m:high","n":1,"outcome":"ok","duration_ms":10000,"usage":{"cost":2,"currency":"USD"}},
+ {"worker":"codex+m","n":2,"outcome":"bounce","reason":"检查未通过","duration_ms":30000,"usage":{"cost":3,"currency":"USD"}},
+ {"worker":"codex+m","n":3,"outcome":"quota","duration_ms":1000,"usage":{"cost":1,"currency":"USD"}},
+ {"worker":"codex+m","n":4,"outcome":"setup","usage":{"cost":0,"currency":"USD"}},
+ {"worker":"codex+m","n":5,"outcome":"fail","usage":{"cost":4,"currency":"USD"}},
+ {"worker":"codex+m","n":6,"outcome":"","usage":{"cost":999,"currency":"USD"}},
+ {"worker":"claude+m","n":1,"outcome":"ok","usage":{"cost":1,"currency":"CNY"}},
+ {"worker":"pi+m","n":1,"outcome":"ok","usage":{"cost":0,"currency":"USD"}}
+]

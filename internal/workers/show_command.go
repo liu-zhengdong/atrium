@@ -38,6 +38,11 @@ func showCmd(c *cli.Ctx, name string) error {
 		layers = strings.Join(r.Layers, " ← ")
 	}
 	fmt.Fprintf(&b, "档案层：%s\n%s（按 %s 统计，强度不单列）\n", layers, *d.Stat, Combo(r.ID))
+	if d.Quality != nil {
+		fmt.Fprintf(&b, "%s\n", d.Quality)
+		writeBounceReasons(&b, *d.Quality)
+		fmt.Fprintf(&b, "%s\n", qualityHelp)
+	}
 	for _, a := range d.Attempts {
 		fmt.Fprintf(&b, "  %s  %s 第 %d 次  %s@%s", time.UnixMilli(a.At).Local().Format("01-02 15:04"), a.Task, a.N, a.Worker, a.Host)
 		if a.Model != "" {

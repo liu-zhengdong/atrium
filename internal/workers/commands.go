@@ -41,6 +41,7 @@ type Detail struct {
 	Resolved *Resolved `json:"resolved,omitempty"`
 	Profile  *Profile  `json:"profile,omitempty"`
 	Stat     *Stat     `json:"stat,omitempty"`
+	Quality  *Quality  `json:"quality,omitempty"`  // 全量质量，与近期统计同口径
 	Attempts []Attempt `json:"attempts,omitempty"` // 近 StatWindow 次有结果的拉起，新的在前
 	Marks    []Mark    `json:"marks,omitempty"`
 	Layers   []Profile `json:"layers"`
@@ -168,6 +169,17 @@ func Show(ctx context.Context, q store.Querier, name string) (Detail, error) {
 	}
 	ls := stats[Combo(r.ID)]
 	st := Count(ls)
+	qualities, err := ReadQuality(ctx, q)
+	if err != nil {
+		return Detail{}, err
+	}
+	quality := Quality{Combo: Combo(r.ID), BounceReasons: map[string]int{}}
+	for _, v := range qualities {
+		if v.Combo == quality.Combo {
+			quality = v
+			break
+		}
+	}
 	layers := []Profile{}
 	for _, name := range r.Layers {
 		p, err := GetProfile(ctx, q, name)
@@ -179,7 +191,7 @@ func Show(ctx context.Context, q store.Querier, name string) (Detail, error) {
 		}
 		layers = append(layers, *p)
 	}
-	return Detail{Timing: st.Timing(), Trust: r.Rules.EffectiveTrust(), MaxRisk: r.Rules.EffectiveMaxRisk(), Resolved: &r, Stat: &st, Attempts: ls, Marks: marksOf(marks, r.Spec), Layers: layers}, nil
+	return Detail{Timing: st.Timing(), Trust: r.Rules.EffectiveTrust(), MaxRisk: r.Rules.EffectiveMaxRisk(), Resolved: &r, Stat: &st, Quality: &quality, Attempts: ls, Marks: marksOf(marks, r.Spec), Layers: layers}, nil
 }
 
 func asAPI(err error, target **api.Error) bool {
@@ -193,6 +205,9 @@ func asAPI(err error, target **api.Error) bool {
 // Routes 注册执行者接口。
 func Routes(r *api.Router, env *app.Env) {
 	hook(env)
+	r.Handle("GET /api/workers/quality", func(q *api.Req) (any, error) {
+		return ReadQuality(q.Context(), env.DB)
+	})
 	r.Handle("GET /api/workers", func(q *api.Req) (any, error) {
 		if name := q.URL.Query().Get("name"); name != "" {
 			return showWithQuota(q.Context(), env, name)
@@ -245,6 +260,7 @@ func Commands(t *cli.Table) {
 	ledger.HistoryText[ExitKind] = ExitText
 	ledger.HistoryText[RecountKind] = RecountText
 	t.Group("workers", "执行者：可派的组合、档案与近期拉起统计")
+	t.Add(cli.Command{Path: "workers quality", Summary: "按组合列全部历史的质量汇总（交付率、重试、花费、用时与交回原因）", Detail: qualityHelp, Run: qualityCmd})
 	t.Add(cli.Command{Path: "workers chrome-mcp", Local: true, Hidden: true,
 		Summary: "执行者 Chrome MCP 入口", Args: "[-- MCP 参数]",
 		Run: func(c *cli.Ctx) error { return runChromeMCP(c.Args, os.Stdin, c.Env.Stdout, c.Env.Stderr) }})

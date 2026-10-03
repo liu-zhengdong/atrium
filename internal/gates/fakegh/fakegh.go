@@ -23,6 +23,12 @@ type PR struct {
 	Draft       bool
 	Body        string
 	MergeCommit string
+	Checks      []Check // PR 头提交上的远端 checks；空 = 没配 CI
+}
+
+// Check 是一个远端 check 的结论（bucket 取 gh 的值：pass、fail、pending、skipping、cancel）。
+type Check struct {
+	Name, Bucket, Link string
 }
 
 // GH 实现 gates.Runner：git 走真的，gh 走假的。
@@ -195,6 +201,16 @@ func (g *GH) Run(ctx context.Context, dir, name string, args ...string) (string,
 			return "", fmt.Errorf("假 gh：没有 PR %s", args[2])
 		}
 		return out(g.json(p))
+	case "pr checks":
+		p := g.find(args[2])
+		if p == nil {
+			return "", fmt.Errorf("假 gh：没有 PR %s", args[2])
+		}
+		list := []map[string]string{}
+		for _, c := range p.Checks {
+			list = append(list, map[string]string{"name": c.Name, "bucket": c.Bucket, "link": c.Link})
+		}
+		return out(list)
 	case "pr merge":
 		p := g.find(args[2])
 		if p == nil || p.State != "OPEN" || p.Draft {

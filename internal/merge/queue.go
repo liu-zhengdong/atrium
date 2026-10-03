@@ -40,7 +40,7 @@ func Order(items []Item) []Item {
 	return out
 }
 
-// Queue 串行合入：rebase 到最新默认分支 → 快检查 → gh pr merge --squash --match-head-commit。
+// Queue 串行合入：rebase 到最新默认分支 → 快检查 → 等远端 CI 全绿 → gh pr merge --squash --match-head-commit。
 // 队列本身就是账本里 stage=merge_queue 的任务，服务重启不丢。
 type Queue struct {
 	DB    *store.DB
@@ -52,6 +52,10 @@ type Queue struct {
 	NeedRelease func(repo string) bool
 	// HeadWait 是推送 rebase 后等 GitHub 更新 PR 头提交的上限。
 	HeadWait time.Duration
+	// CIWait 是等远端 CI 全绿的上限，超了交回；0 用缺省 15 分钟。
+	CIWait time.Duration
+	// CIReport 是查不到 checks 时等它开始上报的时间；0 用缺省 30 秒。
+	CIReport time.Duration
 }
 
 // Loop 等账本变化（或每 30 秒）把队列合空。
@@ -213,6 +217,28 @@ func (q *Queue) Merge(ctx context.Context, t ledger.Task) error {
 		if err := q.waitHead(ctx, repo, t.PR, head); err != nil {
 			return err
 		}
+	}
+	ci, err := runCI(ctx, q, repo, pr.Number)
+	if err != nil {
+		return err
+	}
+	if ci.None {
+		if err := q.note(ctx, t.ID, map[string]any{"ci": "skipped", "why": "PR 头提交没有任何已上报的 checks"}); err != nil {
+			return err
+		}
+	}
+	if !ci.Pass {
+		body := map[string]any{"ci": "timeout", "waited": ci.Limit.String()}
+		why := fmt.Sprintf("等远端 CI 超时（上限 %s）还没全部通过；CI 全绿后重新交付", ci.Limit)
+		if !ci.Timeout {
+			body = map[string]any{"ci": "failed", "check": ci.Name, "link": ci.Link}
+			why = fmt.Sprintf("远端 CI 没过：check「%s」失败（%s）；修好后重新交付", ci.Name, ci.Link)
+		}
+		if err := q.note(ctx, t.ID, body); err != nil {
+			return err
+		}
+		_, err := gates.Bounce(ctx, q.DB, t.ID, Actor, why)
+		return err
 	}
 	if _, err := q.R.Run(ctx, "", "gh", "pr", "merge", fmt.Sprint(pr.Number), "-R", repo, "--squash", "--match-head-commit", head); err != nil {
 		return err

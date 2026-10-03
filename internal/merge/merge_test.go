@@ -121,7 +121,7 @@ func setup(t *testing.T, files map[string]string) *env {
 	gh := fakegh.New(t, files)
 	return &env{t: t, ctx: context.Background(), db: db, gh: gh,
 		q: &merge.Queue{DB: db, Pause: &pause.Store{DB: db}, R: gh, Log: slog.New(slog.NewTextHandler(io.Discard, nil)),
-			Dir: filepath.Join(t.TempDir(), "merge")}}
+			Dir: filepath.Join(t.TempDir(), "merge"), CIReport: 5 * time.Millisecond}}
 }
 
 // deliver 模拟执行者推了分支、开了 PR，再用 task merge 的路径放进合入队列。
@@ -226,6 +226,72 @@ func TestMergeCheckFailBounces(t *testing.T) {
 	}
 	if after := e.gh.Must(e.gh.Bare, "rev-parse", "refs/heads/t1-a"); after != before {
 		t.Fatal("检查没过不该推送 rebase 后的分支")
+	}
+}
+
+// 远端 CI 全绿才合；红交回并附 check 名与结论链接；没配 CI 直合（行为不变）；等满上限交回写明超时。
+func TestMergeGreenCIMerges(t *testing.T) {
+	e := setup(t, nil)
+	task := e.deliver("t1-a", map[string]string{"a.go": "package a\n"})
+	e.gh.PRs[0].Checks = []fakegh.Check{{Name: "check", Bucket: "pass", Link: "https://ci/1"}}
+	e.drain()
+	if got := e.get(task.ID); got.Status != ledger.Done {
+		t.Fatalf("CI 全绿应合入：%+v %s", got, e.lastNote(task.ID))
+	}
+}
+
+func TestMergeRedCIBounces(t *testing.T) {
+	e := setup(t, nil)
+	task := e.deliver("t1-a", map[string]string{"a.go": "package a\n"})
+	e.gh.PRs[0].Checks = []fakegh.Check{
+		{Name: "check", Bucket: "fail", Link: "https://ci/1"},
+		{Name: "e2e", Bucket: "pass", Link: "https://ci/2"},
+	}
+	e.drain()
+	got := e.get(task.ID)
+	if got.Status != ledger.Queued {
+		t.Fatalf("CI 红应交回：%+v", got)
+	}
+	if note := e.lastNote(task.ID); !strings.Contains(note, "check") || !strings.Contains(note, "https://ci/1") {
+		t.Fatalf("交回应附失败的 check 名与结论链接：%s", note)
+	}
+	if e.gh.PRs[0].State != "OPEN" {
+		t.Fatal("CI 红不该合")
+	}
+}
+
+func TestMergeNoCIMergesDirectly(t *testing.T) {
+	e := setup(t, nil)
+	task := e.deliver("t1-a", map[string]string{"a.go": "package a\n"})
+	e.drain()
+	got := e.get(task.ID)
+	if got.Status != ledger.Done {
+		t.Fatalf("没配 CI 应直合：%+v %s", got, e.lastNote(task.ID))
+	}
+	h, _ := ledger.History(e.ctx, e.db, task.ID, 50)
+	for _, ev := range h {
+		if ev.Kind == gates.KindMerge && strings.Contains(ev.Body, `"ci":"skipped"`) {
+			return
+		}
+	}
+	t.Fatal("没配 CI 应记一笔跳过")
+}
+
+func TestMergeCITimeoutBounces(t *testing.T) {
+	e := setup(t, nil)
+	e.q.CIWait = 100 * time.Millisecond
+	task := e.deliver("t1-a", map[string]string{"a.go": "package a\n"})
+	e.gh.PRs[0].Checks = []fakegh.Check{{Name: "check", Bucket: "pending", Link: "https://ci/1"}}
+	e.drain()
+	got := e.get(task.ID)
+	if got.Status != ledger.Queued {
+		t.Fatalf("等 CI 超时应交回：%+v", got)
+	}
+	if note := e.lastNote(task.ID); !strings.Contains(note, "超时") {
+		t.Fatalf("交回应写明等 CI 超时：%s", note)
+	}
+	if e.gh.PRs[0].State != "OPEN" {
+		t.Fatal("等 CI 超时不该合")
 	}
 }
 

@@ -85,6 +85,7 @@ type EventKind string
 
 const (
 	Enqueue    EventKind = "enqueue"     // 进分派任务队列（task run）
+	Requeue    EventKind = "requeue"     // 执行者退出要换人、能换的此刻都被不可用标记挡着：放回队列等（运行时）
 	Start      EventKind = "start"       // 执行者进程已拉起
 	ExitOK     EventKind = "exit_ok"     // 执行者正常退出，进入交付检查
 	ExitFail   EventKind = "exit_fail"   // 执行者失败且重试用尽
@@ -134,6 +135,11 @@ func Transition(from State, e Event) (State, error) {
 			return State{Queued, StageNone}, nil
 		}
 		return reject("任务当前 %s，不能分派任务（只有 draft、todo、failed、blocked 能派）", s)
+	case Requeue:
+		if s == Running && st == StageNone {
+			return State{Queued, StageNone}, nil
+		}
+		return reject("任务当前 %s/%s，没有在跑的执行者，不能放回队列", s, st)
 	case Start:
 		if s == Queued {
 			return State{Running, StageNone}, nil

@@ -56,8 +56,8 @@ func TestQuotaHostUnknownIdentitySelection(t *testing.T) {
 	}
 	need.Model = "opencode-go/a"
 	c, err = hosts.Pick(ctx, env, need, LocalHost)
-	if err != nil || c.Kind != "refuse" {
-		t.Fatalf("已失败组合在原机器不能再试：%+v %v", c, err)
+	if err != nil || c.Kind != "queue" {
+		t.Fatalf("已失败组合在原机器不能再试，排队等恢复：%+v %v", c, err)
 	}
 	c, err = hosts.Pick(ctx, env, need, "")
 	if err != nil || c.Kind != "run" || c.Host != h.ID {

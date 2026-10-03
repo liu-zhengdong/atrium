@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"os"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -165,8 +164,8 @@ func hook(env *app.Env) {
 	}
 }
 
-// Requeue 给 watch：失败后重新入队；额度先标不可用，额度/思考沿用换人上限。
-// 额度失败按账号与机器范围避开，其他失败避开已试过的组合；被停的任务不再派。
+// Requeue 给 watch：失败后换人重新入队（额度用尽、思考耗尽、启动后没进展都换人，不原样重派同一位）；额度先标不可用；
+// 沿用这一轮的换人上限，满了转受阻。被标记的组合由标记管退避，其他试过的避开；被停的任务不再派。
 func Requeue(ctx context.Context, env *app.Env, id string, why watch.Why) error {
 	t, err := ledger.Get(ctx, env.DB, id)
 	if err != nil {
@@ -179,9 +178,7 @@ func Requeue(ctx context.Context, env *app.Env, id string, why watch.Why) error 
 	if err != nil {
 		return err
 	}
-	o := Options{Risk: "low"}
 	if run != nil {
-		o.Risk, o.Secrets, o.Tokens = run.Risk, run.Secrets, run.Tokens
 		outcome := workers.OutFail
 		if why.Signal == watch.SigQuota {
 			outcome = workers.OutQuota
@@ -210,27 +207,24 @@ func Requeue(ctx context.Context, env *app.Env, id string, why watch.Why) error 
 			}
 		}
 	}
-	switch why.Signal {
-	case watch.SigQuota, watch.SigThinking:
-		runs, err := workers.Runs(ctx, env.DB, id, 50)
-		if err != nil {
-			return err
-		}
-		_, switches, tried := tries(runs)
-		if switches >= maxSwitches {
-			if _, err := Enqueue(ctx, env, id, o, actor); err != nil {
-				return err
-			}
-			return get(env).block(ctx, id, why.Reason+"；已换过 "+itoa(switches)+" 次执行者")
-		}
-		for worker := range tried {
-			o.Avoid = append(o.Avoid, worker)
-		}
-		slices.Sort(o.Avoid)
-		o.Avoid = union(o.Avoid, []string{why.Worker})
-	default:
-		o.Worker = why.Worker
+	runs, err := workers.Runs(ctx, env.DB, id, 50)
+	if err != nil {
+		return err
 	}
-	_, err = Enqueue(ctx, env, id, o, actor)
-	return err
+	_, switches, tried := tries(runs)
+	if why.Worker != "" {
+		tried[why.Worker] = true
+	}
+	available, err := workers.LoadAvailability(ctx, env)
+	if err != nil {
+		return err
+	}
+	o := retryOpts(run, tried, available.Marked)
+	if _, err := Enqueue(ctx, env, id, o, actor); err != nil {
+		return err
+	}
+	if switches >= maxSwitches {
+		return get(env).block(ctx, id, why.Reason+"；已换过 "+itoa(switches)+" 次执行者")
+	}
+	return nil
 }

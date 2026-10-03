@@ -49,7 +49,7 @@ func TestNamedOnlyWorker(t *testing.T) {
 		t.Fatal("拒绝的执行者仍应列出")
 	}
 	w, wait, err := d.choose(ctx, tk, Options{Worker: "fake", Risk: "low"}, nil)
-	if err != nil || wait || w.ID != "fake" {
+	if err != nil || wait != "" || w.ID != "fake" {
 		t.Fatalf("点名 choose：%+v %v %v", w, wait, err)
 	}
 	if _, err := Enqueue(ctx, env, tk.ID, Options{Worker: "fake", Risk: "low"}, "u1"); err != nil {

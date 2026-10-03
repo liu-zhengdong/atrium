@@ -353,6 +353,9 @@ func dryText(r RunResult) string {
 		if c.Busy {
 			extra += "  正忙"
 		}
+		if c.Waiting != "" {
+			extra += "  等：" + c.Waiting
+		}
 		if Shaky(c.Fails) {
 			extra += fmt.Sprintf("  近 %d 次拉起启动失败 %d 次", ShakyWindow, c.Fails)
 		}

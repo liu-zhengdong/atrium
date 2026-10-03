@@ -113,13 +113,15 @@ var (
 		{regexp.MustCompile(`(?i)No active Node\.js version|\bcommand not found\b|^\S*sh: (?:\d+: )?\S+: not found$|不是内部或外部命令|is not recognized as an internal or external command|^env: \S+: No such file or directory|\bspawn \S+ ENOENT\b|executable file not found in`), "缺运行环境"},
 	}
 	modelNameRE  = regexp.MustCompile(`(?i)issue with the selected model|\bmodel\b[^\n]{0,40}\b(?:not found|does not exist|is not supported)|\b(?:unknown|invalid|unsupported) model\b|ModelNotFound`)
-	retryHintRE  = regexp.MustCompile(`(?i)retry-after|try again in|resets? \d`)
+	retryHintRE  = regexp.MustCompile(`(?i)retry-after|try again (?:in|at)|resets? \d`)
 	rateStatusRE = regexp.MustCompile(`(?i)^(rejected|blocked|limited|rate_limited|exceeded|denied)$`)
 	http429RE    = regexp.MustCompile(`(?:^|[^\d.])429(?:[^\d]|$)`)
 	minutesRE    = regexp.MustCompile(`(?i)try again in ~?\s*(\d+)\s*min`)
 	retryRE      = regexp.MustCompile(`(?i)retry-after:\s*(\d+)`)
 	resetsInRE   = regexp.MustCompile(`(?i)resets? in\s+((?:\d+\s*[hms]\s*)+)`)
 	resetsRE     = regexp.MustCompile(`(?i)resets\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\s*(?:\(([^()]{2,64})\))?`)
+	// againAtRE：codex 周额度的「try again at Oct 10th, 2026 9:14 AM」，日期可省（只写钟点）。
+	againAtRE = regexp.MustCompile(`(?i)try again at\s+(?:([a-z]{3})[a-z]*\.?\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+(\d{4}),?\s+)?(\d{1,2}):(\d{2})\s*(am|pm)?`)
 )
 
 // errorReport 是这一轮退出的报错（纯函数）：执行者用自己的出错事件报了错，就以最后一条出错事件为准——
@@ -304,8 +306,29 @@ func lastPlainLines(tail string, n int) string {
 	return strings.Join(keep, "\n")
 }
 
-// resetAt 从额度报文里取恢复时刻：codex 的「Try again in ~N min」、claude 的「resets 3:50pm (Zone)」、Retry-After 秒数。
+// resetAt 从额度报文里取恢复时刻：codex 的「Try again in ~N min」「try again at Oct 10th, 2026 9:14 AM」、
+// claude 的「resets 3:50pm (Zone)」、Retry-After 秒数。报文没写时区的按服务所在时区算。
 func resetAt(text string, now time.Time) (time.Time, bool) {
+	if m := againAtRE.FindStringSubmatch(text); m != nil {
+		h, min := hour12(m[4], m[6]), atoi(m[5])
+		if h > 23 || min > 59 {
+			return time.Time{}, false
+		}
+		if m[1] == "" {
+			t := time.Date(now.Year(), now.Month(), now.Day(), h, min, 0, 0, now.Location())
+			if !t.After(now) {
+				t = t.Add(24 * time.Hour)
+			}
+			return t, true
+		}
+		mon, err := time.Parse("Jan", strings.ToUpper(m[1][:1])+strings.ToLower(m[1][1:]))
+		day := atoi(m[2])
+		if err != nil || day < 1 || day > 31 {
+			return time.Time{}, false
+		}
+		t := time.Date(atoi(m[3]), mon.Month(), day, h, min, 0, 0, now.Location())
+		return t, t.After(now) && t.Day() == day
+	}
 	if m := minutesRE.FindStringSubmatch(text); m != nil {
 		n, _ := strconv.Atoi(m[1])
 		return now.Add(time.Duration(n) * time.Minute), n > 0
@@ -315,18 +338,7 @@ func resetAt(text string, now time.Time) (time.Time, bool) {
 		return now.Add(d), err == nil && d > 0
 	}
 	if m := resetsRE.FindStringSubmatch(text); m != nil && (m[2] != "" || m[3] != "") {
-		h, _ := strconv.Atoi(m[1])
-		min, _ := strconv.Atoi(m[2])
-		switch strings.ToLower(m[3]) {
-		case "pm":
-			if h != 12 {
-				h += 12
-			}
-		case "am":
-			if h == 12 {
-				h = 0
-			}
-		}
+		h, min := hour12(m[1], m[3]), atoi(m[2])
 		loc := now.Location()
 		if m[4] != "" {
 			if l, err := time.LoadLocation(m[4]); err == nil {
@@ -345,6 +357,27 @@ func resetAt(text string, now time.Time) (time.Time, bool) {
 		return now.Add(time.Duration(n) * time.Second), true
 	}
 	return time.Time{}, false
+}
+
+// hour12 把「9」「am/pm」换成 24 小时制的钟点；没写 am/pm 按 24 小时制。
+func hour12(hour, ampm string) int {
+	h := atoi(hour)
+	switch strings.ToLower(ampm) {
+	case "pm":
+		if h != 12 {
+			h += 12
+		}
+	case "am":
+		if h == 12 {
+			h = 0
+		}
+	}
+	return h
+}
+
+func atoi(s string) int {
+	n, _ := strconv.Atoi(s)
+	return n
 }
 
 // thinkingExhausted：opencode 最后一步因长度结束（step_finish reason=length），思考用了、正文为 0 或极少。

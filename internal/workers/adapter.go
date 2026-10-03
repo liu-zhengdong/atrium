@@ -170,10 +170,10 @@ func (a *Driver) check(in Request) error {
 var builtin = map[string]*Driver{}
 
 // Tools 是内置工具的固定顺序（没有额度数据时按它挑）。
-var Tools = []string{"claude", "codex", "opencode", "cursor", "agy", "kimi", "grok", "pi"}
+var Tools = []string{"claude", "codex", "command-code", "opencode", "cursor", "agy", "kimi", "grok", "pi"}
 
 func init() {
-	for _, a := range []*Driver{claudeAdapter(), codexAdapter(), opencodeAdapter(), cursorAdapter(), agyAdapter(), kimiAdapter(), grokAdapter(), piAdapter()} {
+	for _, a := range []*Driver{claudeAdapter(), codexAdapter(), commandCodeAdapter(), opencodeAdapter(), cursorAdapter(), agyAdapter(), kimiAdapter(), grokAdapter(), piAdapter()} {
 		builtin[a.Tool] = a
 	}
 }
@@ -398,6 +398,20 @@ func grokAdapter() *Driver {
 			args = append(args, "--reasoning-effort", in.Effort)
 		}
 		args = append(args, "--always-approve", "--cwd", in.Dir)
+		return Launch{Exe: a.Exe, Args: args, Dir: in.Dir}, nil
+	}
+	return a
+}
+
+// command-code --print --output-format json：整场只出收尾一行 type=result，正文在 finalText（老字段 result 兼容），
+// 没有过程流；认证用用户已有的订阅登录，不额外传凭据。沙箱与审批：首件真活发现卡审批再补。
+func commandCodeAdapter() *Driver {
+	a := &Driver{Tool: "command-code", Exe: "command-code", Tell: TellRestart, JSON: true, read: readCommandCode}
+	a.build = func(in Request) (Launch, error) {
+		args := []string{"--print", "--output-format", "json", "请先完整读取任务说明文件 " + in.PromptFile + "，然后按文件内容执行。"}
+		if in.Model != "" {
+			args = append(args, "--model", in.Model)
+		}
 		return Launch{Exe: a.Exe, Args: args, Dir: in.Dir}, nil
 	}
 	return a

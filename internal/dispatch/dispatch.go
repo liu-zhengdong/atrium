@@ -138,6 +138,9 @@ func (d *dispatcher) try(ctx context.Context, it item) error {
 	}
 	w, wait, err := d.choose(ctx, t, it.Opts, nil)
 	if err != nil || wait {
+		if err != nil && isAPI(err) {
+			return d.block(ctx, t.ID, err.Error())
+		}
 		return err
 	}
 	need, err := hostNeed(ctx, d.env.DB, w.Spec, t)
@@ -152,12 +155,15 @@ func (d *dispatcher) try(ctx context.Context, it item) error {
 	case "queue":
 		return nil
 	case "refuse":
-		return api.Conflict("没有机器能接：%s", choice.Reason)
+		return d.block(ctx, t.ID, "没有机器能接："+choice.Reason)
 	}
 	if p, err := d.paused(ctx, t, choice.Host); err != nil || p {
 		return err
 	}
 	o := launchOpts{W: w, Host: choice.Host, Risk: it.Opts.Risk, Secrets: it.Opts.Secrets, Why: workers.WhyFirst}
+	if len(it.Opts.Avoid) > 0 {
+		o.Why = workers.WhySwitch
+	}
 	if !it.Row { // 没有队列行的 queued 是交回的
 		stage, note, ok, err := lastBounce(ctx, d.env.DB, t.ID)
 		if err != nil {

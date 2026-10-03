@@ -72,12 +72,17 @@ type Resolved struct {
 	Adapter  *Driver  `json:"-"`
 }
 
-// Account 是额度账号：同一工具的模型共享一份额度。
+// Account 是额度读取器的账号/provider 名，套餐范围由 QuotaAccount 唯一判定。
 func (r Resolved) Account() string {
-	if r.Spec.Tool == "agy" {
-		return "antigravity"
+	return QuotaAccount(r.quotaSpec())
+}
+
+func (r Resolved) quotaSpec() Spec {
+	s := r.Spec
+	if r.CLIModel != "" {
+		s.Model = r.CLIModel
 	}
-	return r.Spec.Tool
+	return s
 }
 
 // Endpoint 是档案写的自定义端点；没写为 nil。

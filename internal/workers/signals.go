@@ -13,12 +13,12 @@ import (
 // 日志信号的种类。dispatch 在执行者退出时判，watch 也可以拿日志尾巴来判。
 const (
 	SignalNone      = ""
-	SignalQuota     = "quota"     // 额度用尽：标记「工具+模型@机器」到恢复时刻，重新排队
+	SignalQuota     = "quota"     // 额度用尽：标记到恢复时刻，按已知套餐范围有界换人
 	SignalTransient = "transient" // 做过事之后出错退出、原因不是下面几种（供应方临时错误多是这样）：同一执行者重试一次，再换人
 	SignalThinking  = "thinking"  // 思考耗尽单次输出：换执行者一次
-	SignalSetup     = "setup"     // 工具在这台机器上起不来（没登录、缺运行环境）：标记「工具@机器」，重新排队
-	SignalModel     = "model"     // 工具不认这个模型名：标记「工具+模型@机器」，重新排队
-	SignalNoStart   = "nostart"   // 出错退出、原因不是上面几种、一步没做：标记「工具+模型@机器」到期自动解除，重新排队
+	SignalSetup     = "setup"     // 工具在这台起不来：标「工具@机器」，有界换人
+	SignalModel     = "model"     // 模型无效：标「工具+模型@机器」，有界换人
+	SignalNoStart   = "nostart"   // 零步骤出错或完整零 usage 静默空转：保留期内避开，有界换人
 )
 
 // Signal 是从退出码与日志尾巴判出来的信号。

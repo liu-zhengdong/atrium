@@ -367,14 +367,30 @@ func Pick(ctx context.Context, env *app.Env, need Need, pinned string) (Choice, 
 		active = append(active, p.Scope)
 	}
 	now := store.Now()
-	marks, err := workers.Marks(ctx, env.DB, now)
+	available, err := workers.LoadAvailability(ctx, env)
 	if err != nil {
 		return Choice{}, err
+	}
+	w := workers.Resolved{Spec: workers.Spec{Tool: need.Tool, Model: need.Model}}
+	if need.Tool != "" {
+		_, builtin := workers.Builtin(need.Tool)
+		profile, err := workers.GetProfile(ctx, env.DB, "harness/"+need.Tool)
+		if err != nil {
+			return Choice{}, err
+		}
+		// 代理的通用命令也可直接挑机器，未登记档案时账号保持未知。
+		if builtin || profile != nil {
+			w, err = workers.Resolve(ctx, env.DB, w.Spec.String())
+			if err != nil {
+				return Choice{}, err
+			}
+		}
 	}
 	var cands []Candidate
 	for _, h := range list {
 		c := candidate(h, busy[h.ID], pause.Paused(active, pause.Scope{Host: h.ID}), theHub.isPolling(h.ID), now)
-		c.Marks = marks
+		c.Marks = available.Marks
+		_, c.Unavailable = available.CheckResolved(w, h.ID)
 		cands = append(cands, c)
 	}
 	return Choose(cands, need, pinned), nil

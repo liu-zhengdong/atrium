@@ -101,16 +101,17 @@ func ConnText(c Conn, paused bool, lastSeen, joinExpires, now int64) string {
 
 // Candidate 是挑机器时的一台。
 type Candidate struct {
-	ID      string
-	Kind    string
-	Conn    Conn
-	Paused  bool
-	CLIs    map[string]CLI // 这台实测可用的工具（本机与远程相同）
-	Marks   []workers.Mark // 此刻有效的不可用标记（各台的都在，workers.Blocked 按机器筛）
-	Repos   []string       // 自动分派任务能接的仓库（owner/name，* 为全部）；指定 --host 不看
-	Running int
-	Max     int    // 同时最多跑几个；0 不限
-	Busy    string // 代理报的太忙原因
+	ID          string
+	Kind        string
+	Conn        Conn
+	Paused      bool
+	CLIs        map[string]CLI // 这台实测可用的工具（本机与远程相同）
+	Marks       []workers.Mark // 此刻有效的不可用标记（各台的都在，workers.Blocked 按机器筛）
+	Unavailable string         // 本轮共用额度/套餐判断的拒绝原因，不持久化
+	Repos       []string       // 自动分派任务能接的仓库（owner/name，* 为全部）；指定 --host 不看
+	Running     int
+	Max         int    // 同时最多跑几个；0 不限
+	Busy        string // 代理报的太忙原因
 }
 
 // Need 是一件活对机器的要求。
@@ -174,6 +175,9 @@ func fit(c Candidate, n Need, pinned bool) (ok bool, later bool, reason string) 
 	}
 	if m, ok := workers.Blocked(c.Marks, n.Tool, n.Model, c.ID); ok {
 		return false, false, fmt.Sprintf("%s 上的 %s 不可用：%s", c.ID, workers.Spec{Tool: n.Tool, Model: n.Model}, m.Text())
+	}
+	if c.Unavailable != "" {
+		return false, false, c.ID + "：" + c.Unavailable
 	}
 	if c.Kind == "remote" && !pinned && !RepoAllowed(c.Repos, n.Repo) {
 		if n.Repo == "" {

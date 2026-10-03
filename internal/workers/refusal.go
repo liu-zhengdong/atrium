@@ -10,6 +10,9 @@ func (r Rules) Refusal(risk string, automatic bool) string {
 	if automatic && !r.EffectiveAuto() {
 		return "档案 auto=false：只接点名分派任务"
 	}
+	if automatic && r.Billing == "metered" && !FreePrices(r) {
+		return "按量付费未授权自动分派任务"
+	}
 	if max := r.EffectiveMaxRisk(); RiskLevel(max) < RiskLevel(risk) {
 		why := "档案 max_risk=" + max
 		if r.MaxRisk == "" {

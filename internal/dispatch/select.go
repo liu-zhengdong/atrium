@@ -2,6 +2,7 @@ package dispatch
 
 import (
 	"context"
+	"maps"
 	"slices"
 
 	"github.com/liu-zhengdong/atrium/internal/app"
@@ -39,6 +40,11 @@ func (d *dispatcher) view(ctx context.Context, t ledger.Task, risk string, exclu
 	var facts []Fact
 	seen := map[string]bool{}
 	iso := isolated(d.env)
+	available, err := workers.LoadAvailability(ctx, d.env)
+	if err != nil {
+		return PickView{}, app.Global(err)
+	}
+	exclude = maps.Clone(exclude)
 	for i, id := range append(slices.Clone(preferred), catalog...) {
 		r, err := workers.Resolve(ctx, db, id)
 		if err != nil {
@@ -58,6 +64,10 @@ func (d *dispatcher) view(ctx context.Context, t ledger.Task, risk string, exclu
 		f := Fact{ID: r.ID, Tool: r.Spec.Tool, Model: r.Spec.Model, Account: r.Account(), Trust: r.Rules.EffectiveTrust(),
 			MaxRisk: r.Rules.EffectiveMaxRisk(), Refusal: r.Rules.Refusal(risk, true),
 			Exclusive: r.Adapter.Exclusive, Stat: workers.Count(stats[workers.Combo(r.ID)]), Fails: workers.Fails(stats[workers.Combo(r.ID)], ShakyWindow)}
+		f.Cost = r.Rules
+		if available.QuotaMarked(r.Spec) {
+			delete(exclude, r.ID)
+		}
 		if _, builtin := workers.Builtin(r.Spec.Tool); iso && builtin {
 			f.Unavailable = "隔离实例（ATRIUM_DATA 不是缺省目录）不自动挑内置工具"
 		} else {
@@ -74,6 +84,13 @@ func (d *dispatcher) view(ctx context.Context, t ledger.Task, risk string, exclu
 			choice, err := pickHost(ctx, d.env, need, host)
 			if err != nil {
 				return PickView{}, err
+			}
+			if choice.Host != "" {
+				sp, why := available.CheckResolved(r, choice.Host)
+				f.Quota = &sp
+				if why != "" {
+					f.Unavailable = why
+				}
 			}
 			if choice.Kind == "queue" {
 				f.Waiting = choice.Reason

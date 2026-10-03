@@ -119,6 +119,20 @@ const pause = ms => new Promise(r => setTimeout(r, ms));
  await page.waitForFunction(()=>{const d=document.querySelector('details.receipts');return !!d && !d.dataset.probe;},{timeout:15000});
  assert.equal(await receipts.evaluate(d=>d.open),true,'实时重绘后回执仍展开');
  report.push('实时重绘保留回执展开:通过');
+ // 回执正文里的长且不可断的链接不能撑破页面：窄屏与桌面各断言一次。
+ for (const width of [390, 1280]) {
+  await page.setViewportSize({width,height:900});
+  const receipts390=page.locator('details.receipts');
+  if(!(await receipts390.evaluate(d=>d.open))) await page.locator('details.receipts > summary').click();
+  const over=await page.evaluate(()=>{
+   const els=[document.documentElement,document.querySelector('#scroll')];
+   return els.filter(e=>e&&e.scrollWidth>e.clientWidth+1).map(e=>({class:e.className,scroll:e.scrollWidth,client:e.clientWidth}));
+  });
+  assert.deepEqual(over,[],`${width}px 回执长链接横向溢出`);
+  const t=await page.locator('details.receipts .receipt .t').first().evaluate(e=>({scroll:e.scrollWidth,client:e.clientWidth}));
+  assert.ok(t.scroll<=t.client+1,`${width}px 回执正文未断行 `+JSON.stringify(t));
+  report.push(`回执长链接${width}px断行:通过`);
+ }
  assert.deepEqual(errors,[]);
  await fs.writeFile(path.join(dir,'report.json'),JSON.stringify({checks:report.length,errors,report},null,2));
  console.log(`实际网页 ${report.length} 屏通过；2倍、1280/390px、明暗、长名、HTML名字、改名刷新、JSON结构与原ID、原文及链接回归通过`);

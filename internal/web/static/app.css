@@ -437,5 +437,6 @@ details.full .result{margin-top:8px;font-size:13px;color:var(--ink2)}
 .receipts-list{display:flex;flex-direction:column;margin-top:6px}
 .receipt{padding:9px 0;border-top:1px solid var(--line)}
 .receipt:first-child{padding-top:0;border-top:0}
+.receipt .t{overflow-wrap:anywhere}
 .receipt .m{color:var(--ink3);font-size:12px;margin-top:2px;overflow-wrap:anywhere}
 .receipt .m a{text-decoration:underline;text-underline-offset:3px}

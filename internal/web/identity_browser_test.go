@@ -102,7 +102,7 @@ func TestIdentityBrowser(t *testing.T) {
 	must(err)
 	must(events.Emit(ctx, db, events.Event{Kind: events.LeaderEscalate, Task: task.ID, Dept: dept.ID, Target: org.Secretary, Body: map[string]any{"from": a1.ID, "kind": "stuck", "label": "无法解决", "note": "上报卡身份"}}))
 	// 一条降为知会的协作回执：今天页折起的次级入口要有东西可展开。
-	must(events.Emit(ctx, db, events.Event{Kind: events.LeaderEscalate, Target: org.Secretary, Body: map[string]any{"from": a1.ID, "kind": "cross", "label": "需要别的部门配合", "note": "t866确认工作已闭合，回交t862"}}))
+	must(events.Emit(ctx, db, events.Event{Kind: events.LeaderEscalate, Target: org.Secretary, Body: map[string]any{"from": a1.ID, "kind": "cross", "label": "需要别的部门配合", "note": "t866确认工作已闭合，回交t862 https://github.com/liu-zhengdong/atrium/pull/801#discussion_r1234567890abcdef"}}))
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	router := api.NewRouter(logger)
 	router.AddAuth(func(token string) (api.Actor, bool) {

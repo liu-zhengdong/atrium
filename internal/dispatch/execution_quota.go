@@ -62,11 +62,6 @@ func (d *dispatcher) markSharedFailure(ctx context.Context, p *proc, sig workers
 
 // sharedMarks 先完整计划，超过已有 500 marks 预算不写部分扩展结果。
 func (d *dispatcher) sharedMarks(ctx context.Context, binding *workers.ExecutionBinding, m workers.Mark, targets map[string]bool) ([]workers.Mark, error) {
-	ids, err := workers.Catalog(ctx, d.env.DB)
-	if err != nil {
-		return nil, err
-	}
-	var pending []workers.Mark
 	machines, err := hosts.List(ctx, d.env.DB)
 	if err != nil {
 		return nil, err
@@ -78,36 +73,11 @@ func (d *dispatcher) sharedMarks(ctx context.Context, binding *workers.Execution
 	if count != len(machines) {
 		return nil, api.Conflict("共享池成员机器列表不完整：%d/%d，未扩展标记", len(machines), count)
 	}
-	for _, id := range ids {
-		r, err := workers.Resolve(ctx, d.env.DB, id)
-		if err != nil {
-			if isAPI(err) {
-				continue
-			}
-			return nil, err
-		}
-		for _, host := range machines {
-			memberResolved, err := workers.ResolveExecution(ctx, d.env, r, host.ID)
-			if err != nil {
-				return nil, err
-			}
-			if !memberResolved.QuotaBinding.Valid(memberResolved, host.ID) || !workers.SamePool(binding, memberResolved.QuotaBinding) {
-				continue
-			}
-			member := m
-			member.Host, member.Tool, member.Model = host.ID, memberResolved.Spec.Tool, memberResolved.Spec.Model
-			if targets[member.Target()] {
-				continue
-			} // 已有标记不重写或延长
-			if len(targets) >= 500 {
-				return nil, api.Conflict("共享池标记超限：需要超过 500 条，未扩展标记")
-			}
-			targets[member.Target()] = true
-			pending = append(pending, member)
-		}
+	machineIDs := make([]string, 0, len(machines))
+	for _, host := range machines {
+		machineIDs = append(machineIDs, host.ID)
 	}
-
-	return pending, nil
+	return workers.PlanPoolMarks(ctx, d.env, binding, m, machineIDs, targets)
 }
 
 // CheckExecution 供 Launcher 注入侧与实际启动入口复用，不要求 org 依赖 workers。

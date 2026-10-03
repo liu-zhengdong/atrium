@@ -176,8 +176,10 @@ func (h *hub) round(ctx context.Context, env *app.Env) error {
 	}, func(p Pending, cause error) error {
 		// 这一批无法在该负责人处处理，转秘书；原记录不删除，后续不再唤醒这位。
 		env.Log.Warn("负责人待处理批次出错，转秘书", "leader", p.Leader, "err", cause)
-		_, err := events.Retarget(ctx, env.DB, p.IDs, p.Leader, org.Secretary)
-		return err
+		return env.DB.Tx(ctx, func(tx *sql.Tx) error {
+			_, err := events.Retarget(ctx, tx, p.IDs, p.Leader, org.Secretary)
+			return err
+		})
 	})
 }
 

@@ -230,7 +230,7 @@ func TestSecretaryAct(t *testing.T) {
 		{"自升级失败", OnlineFailed, nil, true},
 		{"定时任务失败", ScheduleFail, nil, true},
 		{"远程机器记录失败", HostRecord, nil, true},
-		{"交给负责人去拆", TaskAssigned, nil, false},
+		{"负责人接不住转来的任务", TaskAssigned, nil, true},
 		{"未知种类", "other", nil, false},
 	}
 	for _, c := range cases {
@@ -330,6 +330,27 @@ func TestReclassify(t *testing.T) {
 	}
 	if n, err := Reclassify(ctx, db); err != nil || n != 0 {
 		t.Fatalf("再跑一次不再降：%d %v", n, err)
+	}
+
+	// 负责人接不住、转给秘书的：交给它拆的任务仍要处理，完成回执只知会。
+	insert(TaskAssigned, "a2", `{"title":"拆这件"}`, false)
+	insert(TaskStatus, "a2", `{"to":"done","by":"worker"}`, false)
+	var ids []int64
+	rows, _ := db.Query(`SELECT id FROM events WHERE target = 'a2'`)
+	for rows.Next() {
+		var id int64
+		rows.Scan(&id)
+		ids = append(ids, id)
+	}
+	rows.Close()
+	if n, err := Retarget(ctx, db, ids, "a2", Secretary); err != nil || n != 2 {
+		t.Fatalf("应转 2 条：%d %v", n, err)
+	}
+	var assigned, done string
+	db.QueryRow(`SELECT level FROM events WHERE id = ?`, ids[0]).Scan(&assigned)
+	db.QueryRow(`SELECT level FROM events WHERE id = ?`, ids[1]).Scan(&done)
+	if assigned != Act || done != Info {
+		t.Fatalf("转给秘书后：任务应要处理、完成回执应知会：%s %s", assigned, done)
 	}
 }
 

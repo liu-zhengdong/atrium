@@ -376,58 +376,59 @@ func Prune(ctx context.Context, q store.Querier, before int64) (int64, error) {
 	return res.RowsAffected()
 }
 
-// Reclassify 把秘书名下还没确认、不属四类（SecretaryAct）的要处理事件降为知会：
-// Emit 已在落库时降级，这里收拾此前落库的旧记录，正文不动。返回降了几条。
-func Reclassify(ctx context.Context, db *store.DB) (int64, error) {
+// Reclassify 把秘书名下还没确认、不属四类（SecretaryAct）的要处理事件降为知会，正文不动；返回降了几条。
+// 不经 Emit 落到秘书的（Retarget 转来的、此前按旧规则落库的）由它收拾。
+func Reclassify(ctx context.Context, q store.Querier) (int64, error) {
 	var n int64
-	err := db.Tx(ctx, func(tx *sql.Tx) error {
-		for last := int64(0); ; {
-			rows, err := tx.QueryContext(ctx, `SELECT id, kind, body FROM events WHERE target = ? AND acked_at IS NULL
-				AND level = 'act' AND id > ? ORDER BY id LIMIT ?`, Secretary, last, maxBatch)
-			if err != nil {
-				return err
+	for last := int64(0); ; {
+		rows, err := q.QueryContext(ctx, `SELECT id, kind, body FROM events WHERE target = ? AND acked_at IS NULL
+			AND level = 'act' AND id > ? ORDER BY id LIMIT ?`, Secretary, last, maxBatch)
+		if err != nil {
+			return n, err
+		}
+		var down []int64
+		seen := 0
+		for rows.Next() {
+			var kind, raw string
+			if err := rows.Scan(&last, &kind, &raw); err != nil {
+				rows.Close()
+				return n, err
 			}
-			var down []int64
-			seen := 0
-			for rows.Next() {
-				var kind, raw string
-				if err := rows.Scan(&last, &kind, &raw); err != nil {
+			seen++
+			var body any
+			if raw != "" {
+				if err := json.Unmarshal([]byte(raw), &body); err != nil {
 					rows.Close()
-					return err
-				}
-				seen++
-				var body any
-				if raw != "" {
-					if err := json.Unmarshal([]byte(raw), &body); err != nil {
-						rows.Close()
-						return fmt.Errorf("事件 %d 正文：%w", last, err)
-					}
-				}
-				if !SecretaryAct(kind, body) {
-					down = append(down, last)
+					return n, fmt.Errorf("事件 %d 正文：%w", last, err)
 				}
 			}
-			rows.Close()
-			if err := rows.Err(); err != nil {
-				return err
-			}
-			for _, id := range down {
-				if _, err := tx.ExecContext(ctx, `UPDATE events SET level = ? WHERE id = ?`, Info, id); err != nil {
-					return err
-				}
-			}
-			n += int64(len(down))
-			if seen < maxBatch {
-				return nil
+			if !SecretaryAct(kind, body) {
+				down = append(down, last)
 			}
 		}
-	})
-	return n, err
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return n, err
+		}
+		for _, id := range down {
+			if _, err := q.ExecContext(ctx, `UPDATE events SET level = ? WHERE id = ?`, Info, id); err != nil {
+				return n, err
+			}
+		}
+		n += int64(len(down))
+		if seen < maxBatch {
+			return n, nil
+		}
+	}
 }
 
 // run 是清理循环：启动时先把旧的秘书普通回执降为知会（Reclassify），再清一次，之后每小时清一次；全局暂停时不清。
 func run(ctx context.Context, env *app.Env) error {
-	n, err := Reclassify(ctx, env.DB)
+	var n int64
+	err := env.DB.Tx(ctx, func(tx *sql.Tx) (err error) {
+		n, err = Reclassify(ctx, tx)
+		return err
+	})
 	if err != nil {
 		return fmt.Errorf("事件重分类：%w", err)
 	}

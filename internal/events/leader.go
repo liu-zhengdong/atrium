@@ -14,6 +14,7 @@ import (
 const LeaderEscalate = "leader.escalate"
 
 // Retarget 把 from 手上还没确认的这些事件改发给 to（清掉租约），返回改了几条。
+// 转给秘书时按秘书的四类重定级别（Reclassify）：负责人接不住的任务仍要处理，完成回执、协作上报只知会。
 func Retarget(ctx context.Context, q store.Querier, ids []int64, from, to string) (int64, error) {
 	if len(ids) == 0 {
 		return 0, nil
@@ -26,6 +27,11 @@ func Retarget(ctx context.Context, q store.Querier, ids []int64, from, to string
 		WHERE target = ? AND acked_at IS NULL AND id IN (?`+strings.Repeat(", ?", len(ids)-1)+`)`, args...)
 	if err != nil {
 		return 0, err
+	}
+	if to == Secretary {
+		if _, err := Reclassify(ctx, q); err != nil {
+			return 0, err
+		}
 	}
 	return res.RowsAffected()
 }

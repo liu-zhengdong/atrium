@@ -63,6 +63,7 @@ const (
 	WorkerDeny     WorkerAccess = iota
 	WorkerRead                  // 只读接口：执行者能跑的看、列、取
 	WorkerMaterial              // 加资料（新建或给 mN 加一版）：只能加到本任务所在的部门
+	WorkerTaskNote              // 写任务备注：只能写自己在做的任务
 )
 
 // WorkerRule 纯判定：执行者令牌碰到这条路由（Go 路由模式）时的规则。默认拒绝。
@@ -81,6 +82,8 @@ func WorkerRule(pattern string) WorkerAccess {
 		return WorkerRead
 	case method == "POST" && (path == "/api/materials" || path == "/api/materials/{id}/revs"):
 		return WorkerMaterial
+	case method == "POST" && path == "/api/tasks/{id}/notes":
+		return WorkerTaskNote
 	}
 	return WorkerDeny
 }
@@ -148,7 +151,7 @@ func authWorker(env *app.Env) api.Authenticator {
 	}
 }
 
-// workerGuard 是执行者令牌的统一权限判定：按 WorkerRule 取规则，加资料再查部门。
+// workerGuard 是执行者令牌的统一权限判定：按 WorkerRule 取规则，加资料再查部门，写备注再查是不是本任务。
 func workerGuard(env *app.Env) api.Guard {
 	return func(q *api.Req) error {
 		switch WorkerRule(q.Pattern) {
@@ -176,7 +179,13 @@ func workerGuard(env *app.Env) api.Guard {
 				return err
 			}
 			return WorkerMaterialCheck(task, t.Org, in.Org, in.Overview)
+		case WorkerTaskNote:
+			if task := workerTask(q.Actor); q.PathValue("id") != task {
+				return api.Forbidden("执行者只能给自己在做的任务（%s）写备注", task).
+					WithNext("atrium task note " + task + " <文字>")
+			}
+			return nil
 		}
-		return api.Forbidden("执行者不能调 %s：执行者只能看、取资料和往本任务所在部门加资料；要改别的，写进交付说明", q.Pattern)
+		return api.Forbidden("执行者不能调 %s：执行者只能看、取资料、往本任务所在部门加资料、给自己在做的任务写备注；要改别的，写进交付说明", q.Pattern)
 	}
 }

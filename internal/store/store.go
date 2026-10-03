@@ -44,6 +44,10 @@ func Open(path string) (*DB, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := upgradeChoices(context.Background(), sqlDB); err != nil {
+		sqlDB.Close()
+		return nil, fmt.Errorf("升级选项单失败：%w", err)
+	}
 	if _, err := sqlDB.Exec(schema); err != nil {
 		sqlDB.Close()
 		return nil, fmt.Errorf("建表失败：%w", err)

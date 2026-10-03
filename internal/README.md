@@ -8,7 +8,7 @@ Go 代码怎么分包、包之间怎么调用、并行开发时各自改哪里�
 2. **接入不改 `cmd/atrium/main.go`**：每个包导出 `Module() app.Module`，模块列表已为全部包排好位置。你只在自己包里填 `Commands`、`Routes`、`Run`。
 3. **命令注册在自己包里**：`Commands(t *cli.Table)` 里 `t.Group(...)` 声明自己的组（每组只声明一次），`t.Add(...)` 加命令。`task` 组由 ledger 声明，别的包直接往里加 `task run` 之类，不再声明。
 4. **共享文件只有三个**，改时只动自己那一段，合并冲突按段解决：
-   - `internal/store/schema.sql`：每张表一段，归属见下表。开发期不做迁移，改表就改这里，本地删库重建。
+   - `internal/store/schema.sql`：每张表一段，归属见下表。表定义只在这里维护。store.Open 仅对已确认的旧 choices CHECK 做保留数据的定向事务升级；未知结构报错停止，不引入通用迁移。
    - `go.mod` / `go.sum`：依赖使用标准库、`modernc.org/sqlite`、`gopkg.in/yaml.v3`（档案）、`github.com/pelletier/go-toml/v2`（执行者工具配置）。冲突时 `go mod tidy`。
    - `scripts/smoke.sh`：主路径冒烟，加步骤只往末尾 `stop` 之前追加自己的一段。
 5. **快检查**：`.agents/check`（gofmt、vet 与 Windows/Linux 交叉编译、build、全部测试、`--help` 冒烟）。端到端：`scripts/smoke.sh`。单包测试超过 30 秒在 PR 里说明。

@@ -3,15 +3,16 @@ package dispatch
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/liu-zhengdong/atrium/internal/ledger"
 )
 
-// 任务目录的上级恰好在同名分支上，空的 repo/ 不能被当成工作树。
-func TestWorkdirEmptyDirDoesNotInheritParent(t *testing.T) {
+// 任务目录的上级恰好在同名分支上，空的 repo/ 不能被当成工作树：拒绝且不建。
+func TestWorkdirEmptyDirRefuses(t *testing.T) {
 	d, gh, ctx := reclaimRig(t)
-	tk, err := ledger.Add(ctx, d.env.DB, ledger.NewTask{Title: "空目录先检出", Repo: gh.Work}, "u1")
+	tk, err := ledger.Add(ctx, d.env.DB, ledger.NewTask{Title: "空目录拒绝", Repo: gh.Work}, "u1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -25,26 +26,14 @@ func TestWorkdirEmptyDirDoesNotInheritParent(t *testing.T) {
 	}
 	before := gh.Must(parent, "rev-parse", "HEAD")
 	dir, gotBranch, err := Workdir(ctx, d.env.Paths.Data, tk.ID, gh.Work, "")
-	if err != nil {
-		t.Fatal(err)
+	if err == nil || !strings.Contains(err.Error(), "不是检出") || !strings.Contains(err.Error(), "没有自己的 .git") {
+		t.Fatalf("应拒绝并说明缺 .git：%s %s %v", dir, gotBranch, err)
 	}
-	if dir != repo || gotBranch != branch {
-		t.Fatalf("工作目录 %s %s", dir, gotBranch)
+	if _, statErr := os.Stat(filepath.Join(repo, ".git")); !os.IsNotExist(statErr) {
+		t.Fatal("拒绝时仍做成了检出")
 	}
-	top := gh.Must(dir, "rev-parse", "--show-toplevel")
-	got, err := filepath.EvalSymlinks(top)
-	if err != nil {
-		t.Fatal(err)
-	}
-	want, err := filepath.EvalSymlinks(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got != want {
-		t.Fatalf("顶层 %s，目录 %s", got, want)
-	}
-	if body := gh.Must(dir, "show", "HEAD:README.md"); body != "hi" {
-		t.Fatalf("没有检出任务仓库：%q", body)
+	if list := gh.Must(gh.Work, "worktree", "list", "--porcelain"); strings.Contains(list, "task-t") {
+		t.Fatalf("拒绝时仍建了工作树：%s", list)
 	}
 	if head := gh.Must(parent, "rev-parse", "HEAD"); head != before {
 		t.Fatalf("改了上级仓库：%s", head)

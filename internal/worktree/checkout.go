@@ -9,51 +9,53 @@ import (
 )
 
 // Ensure 在把目录交给执行者（随后才会记成工作树）之前确认它就是这次检出。
-// 目录还不存在或为空时先调 checkout 建成检出（checkout 为空表示这里不建）。
-// 有文件却没有自己的 .git、或 git rev-parse --show-toplevel 不等于 dir 时，返回带路径与原因的错误，
-// 调用方不得标记、不得拉起。只建成与校验，不改已有目录、也不修 Git 登记：异常状态停下交给负责人，
-// 不在关键路径自愈。
+// 首次创建（目录还不存在）交给 checkout 建成；已存在的目录只校验，不重建、不修复。
+// 校验不过（不是普通目录、没有自己的 .git、git 顶层不等于 dir）就返回带路径与原因的错误，
+// 调用方不得标记、不得拉起：异常状态停下交给负责人，不在关键路径自愈。
 func Ensure(ctx context.Context, dir string, run Runner, checkout func() error) error {
-	fresh, err := freshDir(dir)
+	if err := createIfMissing(dir, checkout); err != nil {
+		return err
+	}
+	return validate(ctx, dir, run)
+}
+
+// createIfMissing 只做首次创建：目录还不存在时建成检出（checkout 为空表示这里不建）。
+// 已存在的目录一律不碰——空目录也算没有检出，交给 validate 报错停下，不在这里补建。
+func createIfMissing(dir string, checkout func() error) error {
+	if _, err := os.Lstat(dir); !os.IsNotExist(err) {
+		return nil
+	}
+	if checkout == nil {
+		return nil
+	}
+	return checkout()
+}
+
+// validate 已有目录只校验、不修复：必须先是这次检出，不能靠上级仓库。
+func validate(ctx context.Context, dir string, run Runner) error {
+	fi, err := os.Lstat(dir)
+	if os.IsNotExist(err) {
+		return fmt.Errorf("目录 %s 不是检出：目录不存在", dir)
+	}
 	if err != nil {
 		return err
 	}
-	if fresh {
-		if checkout != nil {
-			if err := checkout(); err != nil {
-				return err
-			}
-		}
-	} else if err := ownGit(dir); err != nil {
+	if fi.Mode()&os.ModeSymlink != 0 || !fi.IsDir() {
+		return fmt.Errorf("目录 %s 不是检出：不是普通目录", dir)
+	}
+	if err := ownGit(dir); err != nil {
 		return err
 	}
 	return matchTop(ctx, dir, run)
 }
 
-// freshDir 为真：目录还不存在，或存在但是空目录（可以在这里建成检出）。
-// 有文件却没有 .git 的目录不算：要么是别的东西，要么是上次没做完，都不在这里补。
-func freshDir(dir string) (bool, error) {
-	fi, err := os.Lstat(dir)
-	if os.IsNotExist(err) {
-		return true, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	if fi.Mode()&os.ModeSymlink != 0 || !fi.IsDir() {
-		return false, fmt.Errorf("目录 %s 不是检出：不是普通目录", dir)
-	}
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return false, err
-	}
-	return len(entries) == 0, nil
-}
-
 // ownGit 要求目录自己是这次检出：有它自己的 .git，而不是靠上级仓库。
 func ownGit(dir string) error {
 	if _, err := os.Lstat(filepath.Join(dir, ".git")); err != nil {
-		return fmt.Errorf("目录 %s 不是检出：有文件却没有自己的 .git；拉起前停下，由负责人核对这些文件的来历，不要在上级目录干活", dir)
+		if os.IsNotExist(err) {
+			return fmt.Errorf("目录 %s 不是检出：没有自己的 .git；拉起前停下，由负责人核对该目录的来历，不要在上级目录干活", dir)
+		}
+		return err
 	}
 	return nil
 }

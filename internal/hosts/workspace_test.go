@@ -46,8 +46,8 @@ func TestAgentWorkspaceBranchOwnership(t *testing.T) {
 	}
 }
 
-// 工作树路径已存在但是空目录，上级又恰好在任务分支上：不能把上级当成这次检出。
-func TestWorktreeEmptyDirDoesNotUseParent(t *testing.T) {
+// 工作树路径已存在但是空目录，上级又恰好在任务分支上：拒绝，不把上级当成这次检出、不建工作树。
+func TestWorktreeEmptyDirRefuses(t *testing.T) {
 	root := isolatedGit(t)
 	seed := filepath.Join(root, "seed")
 	gitRun(t, "", "init", "--quiet", "-b", "main", seed)
@@ -67,15 +67,11 @@ func TestWorktreeEmptyDirDoesNotUseParent(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	dir, err := a.worktree(ctx, Assignment{Task: "t1", Repo: seed, Branch: "task-t1", Base: "main"})
-	if err != nil {
-		t.Fatal(err)
+	if err == nil || !strings.Contains(err.Error(), "不是检出") || !strings.Contains(err.Error(), "没有自己的 .git") {
+		t.Fatalf("应拒绝并说明缺 .git：%s %v", dir, err)
 	}
-	if dir != wt {
-		t.Fatalf("工作树 %s", dir)
-	}
-	assertTop(t, dir)
-	if body, err := os.ReadFile(filepath.Join(dir, "README.md")); err != nil || string(body) != "hi\n" {
-		t.Fatalf("没有检出任务仓库：%q %v", body, err)
+	if entries, readErr := os.ReadDir(wt); readErr != nil || len(entries) != 0 {
+		t.Fatalf("拒绝时改了目录：%v %v", entries, readErr)
 	}
 	if head := gitOut(t, a.Dir, "rev-parse", "HEAD"); head != before {
 		t.Fatalf("改了上级仓库：%s", head)

@@ -12,12 +12,9 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/worktree"
 )
 
-// 空目录：先检出，顶层等于自己。旧顺序会把空目录当成检出（git 向上找到上级）。
-func TestEnsureEmptyDirChecksOut(t *testing.T) {
+// 目录还不存在：先建成检出，顶层等于自己。
+func TestEnsureMissingDirChecksOut(t *testing.T) {
 	gh, ctx, parent, dir := parentRepo(t, "task-t1")
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		t.Fatal(err)
-	}
 	before := gh.Must(parent, "rev-parse", "HEAD")
 	if err := worktree.Ensure(ctx, dir, gh.Git.Run, func() error {
 		return worktree.Create(ctx, gh.Work, dir, "task-t1", "main", gh.Git.Run)
@@ -30,6 +27,28 @@ func TestEnsureEmptyDirChecksOut(t *testing.T) {
 	}
 	if body := gh.Must(dir, "show", "HEAD:README.md"); body != "hi" {
 		t.Fatalf("没有检出任务仓库：%q", body)
+	}
+	assertParentUntouched(t, gh, parent, before)
+}
+
+// 已有空目录：不补检出、不标记，返回带路径与原因的错误；目录和上级仓库都不动。
+func TestEnsureEmptyDirRefuses(t *testing.T) {
+	gh, ctx, parent, dir := parentRepo(t, "task-t1")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	before := gh.Must(parent, "rev-parse", "HEAD")
+	err := worktree.Ensure(ctx, dir, gh.Git.Run, func() error {
+		return worktree.Create(ctx, gh.Work, dir, "task-t1", "main", gh.Git.Run)
+	})
+	if err == nil || !strings.Contains(err.Error(), "不是检出") || !strings.Contains(err.Error(), "没有自己的 .git") {
+		t.Fatalf("应拒绝并说明缺 .git：%v", err)
+	}
+	if entries, readErr := os.ReadDir(dir); readErr != nil || len(entries) != 0 {
+		t.Fatalf("拒绝时改了目录：%v %v", entries, readErr)
+	}
+	if list := gh.Must(gh.Work, "worktree", "list", "--porcelain"); strings.Contains(list, "task-t1") {
+		t.Fatalf("拒绝时仍建了工作树：%s", list)
 	}
 	assertParentUntouched(t, gh, parent, before)
 }
@@ -62,19 +81,15 @@ func TestEnsureFilesWithoutGitRefuses(t *testing.T) {
 	assertParentUntouched(t, gh, parent, before)
 }
 
-// 目录自己不是检出（顶层是上级）时不标记，也不改上级仓库。
-func TestEnsureRejectsParentToplevel(t *testing.T) {
+// 目录有自己的 .git 但 git 顶层不是它（core.worktree 指到别处）：不标记，报明顶层。
+func TestEnsureRejectsWrongToplevel(t *testing.T) {
 	gh, ctx, parent, dir := parentRepo(t, "main")
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		t.Fatal(err)
-	}
+	gh.Must(parent, "init", "--quiet", "-b", "main", dir)
+	gh.Must(dir, "config", "core.worktree", parent)
 	before := gh.Must(parent, "rev-parse", "HEAD")
 	err := worktree.Ensure(ctx, dir, gh.Git.Run, nil)
 	if err == nil || !strings.Contains(err.Error(), "不是检出") || !strings.Contains(err.Error(), "git 顶层是") {
-		t.Fatalf("应拒绝并说明不是检出：%v", err)
-	}
-	if _, statErr := os.Stat(filepath.Join(dir, ".git")); !os.IsNotExist(statErr) {
-		t.Fatal("拒绝时仍做成了检出")
+		t.Fatalf("应拒绝并说明顶层不符：%v", err)
 	}
 	assertParentUntouched(t, gh, parent, before)
 }

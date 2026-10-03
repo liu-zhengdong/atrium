@@ -248,10 +248,10 @@ func (h *hub) wake(ctx context.Context, env *app.Env, p Pending) {
 	h.fails[p.Leader] = next
 	h.mu.Unlock()
 	var to []string
+	var ferr error
 	switch {
 	case forward:
 		var n int64
-		var ferr error
 		if to, n, ferr = forwardUp(bg, env.DB, p.Leader, left); ferr != nil {
 			log.Error("转交上一层失败", "err", ferr)
 		} else {
@@ -263,7 +263,7 @@ func (h *hub) wake(ctx context.Context, env *app.Env, p Pending) {
 	if run.profile == "" {
 		return
 	}
-	if rerr := h.record(bg, env, p, run, err, len(left), to); rerr != nil {
+	if rerr := h.record(bg, env, p, run, err, len(left), to, ferr); rerr != nil {
 		log.Error("记唤醒记录失败", "err", rerr)
 	}
 }
@@ -280,8 +280,8 @@ type wakeRun struct {
 }
 
 // record 落唤醒记录：日志段交 WakeUsage 取模型与用量，取不到只记日志、用量留空，不挡记录落库。
-func (h *hub) record(ctx context.Context, env *app.Env, p Pending, run wakeRun, err error, left int, to []string) error {
-	outcome, reason := WakeResult(run.started, err, left, len(p.IDs), to)
+func (h *hub) record(ctx context.Context, env *app.Env, p Pending, run wakeRun, err error, left int, to []string, ferr error) error {
+	outcome, reason := WakeResult(run.started, err, left, len(p.IDs), to, ferr)
 	w := Wake{Leader: p.Leader, Profile: run.profile, N: run.n, Outcome: outcome, Reason: reason, At: store.Now()}
 	if run.started {
 		d := run.end - run.begin
@@ -519,6 +519,7 @@ func unacked(ctx context.Context, q store.Querier, leader string, ids []int64) (
 }
 
 // forwardUp 把 leader 没确认的事件逐条转交：从事件所属部门往上、跳过这位的最近负责人，没有就秘书。
+// 返回转交到的负责人与件数；出错时事务整体回滚，不返回目标。
 func forwardUp(ctx context.Context, db *store.DB, leader string, ids []int64) ([]string, int64, error) {
 	ps, err := org.Parents(ctx, db)
 	if err != nil {
@@ -552,5 +553,8 @@ func forwardUp(ctx context.Context, db *store.DB, leader string, ids []int64) ([
 		}
 		return nil
 	})
-	return targets, total, err
+	if err != nil {
+		return nil, 0, err
+	}
+	return targets, total, nil
 }

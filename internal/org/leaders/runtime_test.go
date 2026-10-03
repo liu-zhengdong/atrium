@@ -598,6 +598,37 @@ func TestWake(t *testing.T) {
 	}
 }
 
+// 转交的事务失败：事件仍归原负责人，记录写转交失败，不写「已转交」。
+func TestWakeForwardFails(t *testing.T) {
+	env, h, _ := fixture(t)
+	ctx := context.Background()
+	f := &fakeLauncher{h: h, db: env.DB}
+	SetLauncher(f.launch)
+	t.Cleanup(func() { SetLauncher(nil) })
+	if _, err := env.DB.ExecContext(ctx, `CREATE TRIGGER no_retarget BEFORE UPDATE OF target ON events
+		BEGIN SELECT RAISE(ABORT, '注入的转交失败'); END`); err != nil {
+		t.Fatal(err)
+	}
+	events.Emit(ctx, env.DB, events.Event{Kind: events.TaskStatus, Task: "t1", Dept: "o2", Target: "a2", Level: events.Act})
+	for range MaxFails {
+		if err := h.round(ctx, env); err != nil {
+			t.Fatal(err)
+		}
+		h.wg.Wait()
+	}
+	var target string
+	if err := env.DB.QueryRowContext(ctx, `SELECT target FROM events WHERE id = 1`).Scan(&target); err != nil || target != "a2" {
+		t.Fatalf("转交失败事件应仍归 a2：%q %v", target, err)
+	}
+	ws, err := ReadWakes(ctx, env.DB, 0)
+	if err != nil || len(ws) != MaxFails {
+		t.Fatalf("唤醒记录：%+v %v", ws, err)
+	}
+	if r := ws[MaxFails-1].Reason; ws[MaxFails-1].Outcome != WakeFail || !strings.Contains(r, "转交上一层失败：") || !strings.Contains(r, "注入的转交失败") || strings.Contains(r, "已转交") {
+		t.Fatalf("转交失败的记录：%+v", ws[MaxFails-1])
+	}
+}
+
 func TestWakeResult(t *testing.T) {
 	boom := errors.New("超过 20m0s 没结束，已结束")
 	for _, c := range []struct {
@@ -605,15 +636,17 @@ func TestWakeResult(t *testing.T) {
 		err         error
 		left, total int
 		to          []string
+		ferr        error
 		out, reason string
 	}{
-		{false, errors.New("a2 没有登记执行者组合"), 1, 1, nil, WakeSetup, "a2 没有登记执行者组合"},
-		{true, nil, 0, 3, nil, WakeOK, ""},
-		{true, errors.New("exit status 1"), 0, 3, nil, WakeOK, ""},
-		{true, nil, 2, 3, nil, WakeFail, "没确认 2/3 件"},
-		{true, boom, 3, 3, []string{"a1", "secretary"}, WakeFail, "没确认 3/3 件；超过 20m0s 没结束，已结束；已转交 a1、secretary"},
+		{false, errors.New("a2 没有登记执行者组合"), 1, 1, nil, nil, WakeSetup, "a2 没有登记执行者组合"},
+		{true, nil, 0, 3, nil, nil, WakeOK, ""},
+		{true, errors.New("exit status 1"), 0, 3, nil, nil, WakeOK, ""},
+		{true, nil, 2, 3, nil, nil, WakeFail, "没确认 2/3 件"},
+		{true, boom, 3, 3, []string{"a1", "secretary"}, nil, WakeFail, "没确认 3/3 件；超过 20m0s 没结束，已结束；已转交 a1、secretary"},
+		{true, nil, 1, 1, nil, errors.New("database is locked"), WakeFail, "没确认 1/1 件；转交上一层失败：database is locked"},
 	} {
-		out, reason := WakeResult(c.started, c.err, c.left, c.total, c.to)
+		out, reason := WakeResult(c.started, c.err, c.left, c.total, c.to, c.ferr)
 		if out != c.out || reason != c.reason {
 			t.Errorf("%+v：得到 %s %q", c, out, reason)
 		}

@@ -39,8 +39,8 @@ var WakeUsage = func(ctx context.Context, q store.Querier, profile, log string) 
 }
 
 // WakeResult 纯判定一次唤醒的结果：没拉起来算起不来；这批全确认算成功（进程出错退出也算）；
-// 否则算失败，原因写剩几件、进程的错误（含超时）与转交给了谁。
-func WakeResult(started bool, err error, left, total int, forwardTo []string) (outcome, reason string) {
+// 否则算失败，原因写剩几件、进程的错误（含超时）与转交给了谁；转交失败写转交的错误，forwardTo 只在转交成功时给。
+func WakeResult(started bool, err error, left, total int, forwardTo []string, forwardErr error) (outcome, reason string) {
 	if !started {
 		if err == nil {
 			return WakeSetup, ""
@@ -54,7 +54,10 @@ func WakeResult(started bool, err error, left, total int, forwardTo []string) (o
 	if err != nil {
 		parts = append(parts, err.Error())
 	}
-	if len(forwardTo) > 0 {
+	switch {
+	case forwardErr != nil:
+		parts = append(parts, "转交上一层失败："+forwardErr.Error())
+	case len(forwardTo) > 0:
 		parts = append(parts, "已转交 "+strings.Join(forwardTo, "、"))
 	}
 	return WakeFail, strings.Join(parts, "；")

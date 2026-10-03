@@ -4,6 +4,7 @@ package platform
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"syscall"
 )
@@ -16,11 +17,14 @@ func sysProcAttr(detached bool, _ string) *syscall.SysProcAttr {
 	return nil
 }
 
-func adopt(int) error { return nil } // 进程组在拉起时已由 setsid 建好
+func adopt(int, bool) error { return nil } // 进程组在拉起时已由 setsid 建好
 
 func killJob(int) (bool, error) { return false, nil }
 
 func killGroup(pid int) error {
+	if pid <= 0 {
+		return fmt.Errorf("进程组 pid 必须大于 0：%d", pid)
+	}
 	err := syscall.Kill(-pid, syscall.SIGKILL)
 	if errors.Is(err, syscall.ESRCH) {
 		return nil

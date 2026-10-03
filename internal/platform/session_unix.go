@@ -12,10 +12,12 @@ import (
 )
 
 // EndSession 结束命令行或环境引用会话临时目录 dir 的进程（主体已退出后调用；重启后按 pid 跟进的路径同样调用）。
-// 只在结束时取一次进程快照。pid 只有 Windows 用。
-func EndSession(_ int, dir string) error {
+// 先回收 pid 的原进程组，再取一次快照回收另开会话的残留。
+func EndSession(pid int, dir string) error {
+	// 先结束原进程组：即使子孙清空环境、没有临时目录参数，也能回收。
+	groupErr := killGroup(pid)
 	if dir == "" {
-		return nil
+		return groupErr
 	}
 	args := []string{"axeww", "-o", "pid=,command="}
 	if runtime.GOOS == "darwin" {
@@ -23,9 +25,9 @@ func EndSession(_ int, dir string) error {
 	}
 	out, err := exec.Command("ps", args...).Output()
 	if err != nil {
-		return fmt.Errorf("读取会话进程：%w", err)
+		return errors.Join(groupErr, fmt.Errorf("读取会话进程：%w", err))
 	}
-	var result error
+	result := groupErr
 	for _, pid := range sessionPIDs(string(out), dir) {
 		if pid == os.Getpid() {
 			continue

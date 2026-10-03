@@ -409,6 +409,7 @@ func (a *Agent) launch(ctx context.Context, as Assignment) (int, string, error) 
 		return 0, "", err
 	}
 	defer f.Close()
+	spec.ManagedTree = true
 	spec.Stdout, spec.Stderr, spec.Detached = f, f, true
 	if spec.Dir == "" {
 		spec.Dir = cwd
@@ -430,12 +431,9 @@ func (a *Agent) launch(ctx context.Context, as Assignment) (int, string, error) 
 	a.runs[as.Task] = st
 	a.mu.Unlock()
 	go func() {
-		err := cmd.Wait()
+		err := platform.WaitSession(cmd, tempDir)
 		if a.ctx.Err() != nil {
 			return // 代理已停下：交给下次启动按 pid 接着看、回收残留
-		}
-		if err := platform.EndSession(cmd.Process.Pid, tempDir); err != nil {
-			a.Log.Warn("回收执行者会话残留失败", "task", as.Task, "err", err)
 		}
 		code := 0
 		var exit *exec.ExitError

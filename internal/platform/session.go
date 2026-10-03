@@ -17,7 +17,12 @@ import (
 func WaitSession(cmd *exec.Cmd, dir string) error {
 	cmd.WaitDelay = time.Second
 	err := cmd.Wait()
-	return errors.Join(err, EndSession(cmd.Process.Pid, dir))
+	cleanup := EndSession(cmd.Process.Pid, dir)
+	// 主体成功退出、仅子孙握着输出管道时，WaitDelay 只是触发回收，不改变主体退出结果。
+	if errors.Is(err, exec.ErrWaitDelay) && cleanup == nil {
+		err = nil
+	}
+	return errors.Join(err, cleanup)
 }
 
 // sessionPIDs 从 `ps -o pid=,command=`（带环境）的输出里挑出命令行或环境引用 dir（本身或其下路径）的进程号。

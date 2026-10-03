@@ -226,7 +226,7 @@ func startLocal(tool string, req workers.Request, extra map[string]string, c con
 		defer f.Close()
 		in = f
 	}
-	spec := platform.Spec{Path: exe, Args: l.Args, Dir: l.Dir, Env: env, Stdout: logf, Stderr: logf, Detached: true}
+	spec := platform.Spec{Path: exe, Args: l.Args, Dir: l.Dir, Env: env, Stdout: logf, Stderr: logf, Detached: true, ManagedTree: true}
 	if in != nil {
 		spec.Stdin = in
 	}

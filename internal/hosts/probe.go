@@ -140,12 +140,12 @@ func (w *limitBuf) Write(p []byte) (int, error) {
 // runVersion 跑一次 <path> --version，至多 probeTimeout；超时结束整棵进程树。
 func runVersion(ctx context.Context, path string, env map[string]string) ProbeResult {
 	out := &limitBuf{n: 16 * 1024}
-	cmd, err := platform.Start(platform.Spec{Path: path, Args: []string{"--version"}, Env: env, Stdout: out, Stderr: out, Detached: true})
+	cmd, err := platform.Start(platform.Spec{Path: path, Args: []string{"--version"}, Env: env, Stdout: out, Stderr: out, Detached: true, ManagedTree: true})
 	if err != nil {
 		return ProbeResult{Err: err.Error()}
 	}
 	done := make(chan error, 1)
-	go func() { done <- cmd.Wait() }()
+	go func() { done <- platform.WaitSession(cmd, "") }()
 	r := ProbeResult{}
 	select {
 	case err = <-done:

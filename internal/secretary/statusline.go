@@ -50,7 +50,9 @@ func StatusLine(v watch.View) string {
 			parts = append(parts, paint(dim, fmt.Sprintf("另 %d 件", len(rows)-statusTasks)))
 			break
 		}
-		text := t.ID + " " + holderShort(t.Holder)
+		h := t.Holder
+		h.Who = v.HolderWho(h)
+		text := t.ID + " " + holderShort(h)
 		if h := watch.Held(t.Holder.Since, v.At); h != "" && t.Holder.Kind == "worker" {
 			text += " " + h
 		}

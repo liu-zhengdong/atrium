@@ -142,7 +142,7 @@ func TestStatusLine(t *testing.T) {
 		{ID: "t3", Holder: watch.Holder{Kind: "runtime", Who: "运行时", Text: "排队等执行者"}},
 	}}
 	got := ansi.ReplaceAllString(StatusLine(v), "")
-	if want := "等你拍板 2 · t2 a1 卡住，等处理 · t1 codex 12 分钟 · 排队 1 · 秘书不在听"; got != want {
+	if want := "等你拍板 2 · t2 未登记负责人（a1） 卡住，等处理 · t1 codex 12 分钟 · 排队 1 · 秘书不在听"; got != want {
 		t.Errorf("StatusLine =\n%s\n应为\n%s", got, want)
 	}
 	v = watch.View{At: now, Secretary: watch.SecretaryView{Red: true, Pending: 3}}

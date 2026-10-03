@@ -46,15 +46,16 @@ type SecretaryView struct {
 
 // View 是 top 与 statusline 共用的全景。
 type View struct {
-	At        int64         `json:"at"`
-	Tasks     []TaskRow     `json:"tasks"`
-	Choices   int           `json:"choices"` // 等你拍板的选项单
-	Depts     []DeptRow     `json:"depts"`
-	Queued    int           `json:"queued"`
-	Drafts    int           `json:"drafts"` // 草稿只给数：不计时、不等人
-	Goals     ledger.Goals  `json:"goals"`  // 三个目标的数：纠正、认可、复发
-	Secretary SecretaryView `json:"secretary"`
-	Paused    []string      `json:"paused"`
+	Names     map[string]string `json:"-"` // 人读呈现名册；不进入机器输出
+	At        int64             `json:"at"`
+	Tasks     []TaskRow         `json:"tasks"`
+	Choices   int               `json:"choices"` // 等你拍板的选项单
+	Depts     []DeptRow         `json:"depts"`
+	Queued    int               `json:"queued"`
+	Drafts    int               `json:"drafts"` // 草稿只给数：不计时、不等人
+	Goals     ledger.Goals      `json:"goals"`  // 三个目标的数：纠正、认可、复发
+	Secretary SecretaryView     `json:"secretary"`
+	Paused    []string          `json:"paused"`
 }
 
 // Working 是执行者在干活的任务。
@@ -174,7 +175,13 @@ func Commands(t *cli.Table) {
 			}
 			for {
 				var v View
-				if err := c.Call("GET", "/api/top", nil, &v); err != nil {
+				var err error
+				if c.JSON {
+					err = c.Call("GET", "/api/top", nil, &v)
+				} else {
+					v, err = ReadHumanView(c)
+				}
+				if err != nil {
 					return err
 				}
 				if c.JSON || c.Bool("once") {
@@ -234,7 +241,7 @@ func Render(v View) string {
 			if t.Overdue > 0 {
 				mark = "  已到期"
 			}
-			fmt.Fprintf(&b, "  %s  %s  %s：%s%s%s\n", t.ID, clip(t.Title, 30), t.Holder.Who, t.Holder.Text,
+			fmt.Fprintf(&b, "  %s  %s  %s：%s%s%s\n", t.ID, clip(t.Title, 30), v.HolderWho(t.Holder), t.Holder.Text,
 				heldSuffix(t.Holder, v.At), mark)
 		}
 	}

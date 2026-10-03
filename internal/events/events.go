@@ -5,7 +5,8 @@
 // 任务事件经 EmitTask 只投要动手的那一位（Route）：等验收投验收人，负责人自己引起的结果投任务分派人，其他结果投处理人或部门负责人，过程不投。
 // 同一投递对象同一去重键、还没取走也没确认的事件合并成一条（count 加一，级别随最新一条），免得刷屏。
 // 一次操作引出的事件不发给做这次操作的身份本人（Event.By 与投递对象相同就不投）。
-// 事件是投递队列，不是任务经历：服务每小时删掉超过保留期的已确认事件与知会级事件（Prune），要处理且没确认的不删。
+// 事件是投递队列，不是任务经历：服务每小时清理过期的已确认事件与知会级事件（Prune）；
+// 要处理且没确认的、未结束任务的到期提醒凭据不删。
 // 判定（级别、去重键、投递对象）是纯函数，在 model.go；本文件是落库与等待。
 package events
 
@@ -145,10 +146,15 @@ func EmitTask(ctx context.Context, q store.Querier, owner, assigner string, e Ev
 }
 
 // Seen 判断某投递对象是否收到过（含已确认的）这个去重键的事件：watch 用它保证同一次到期只发一回。
-// 已确认的留到保留期满才删，所以同一次到期（键带等待起点与级别）一周内不重发。
+// target 为空时只查键，用于键已包含 holder、转交后仍不能重发的到期提醒。
 func Seen(ctx context.Context, q store.Querier, target, key string) (bool, error) {
 	var one int
-	err := q.QueryRowContext(ctx, `SELECT 1 FROM events WHERE key = ? AND target = ? LIMIT 1`, key, target).Scan(&one)
+	query, args := `SELECT 1 FROM events WHERE key = ?`, []any{key}
+	if target != "" {
+		query += ` AND target = ?`
+		args = append(args, target)
+	}
+	err := q.QueryRowContext(ctx, query+` LIMIT 1`, args...).Scan(&one)
 	if store.IsNotFound(err) {
 		return false, nil
 	}
@@ -352,9 +358,12 @@ func Backlogs(ctx context.Context, q store.Querier) ([]Backlog, error) {
 // Retention 是已确认事件与知会级事件的保留期（按最后更新算）。
 const Retention = 7 * 24 * time.Hour
 
-// Prune 删掉最后更新早于 before 的已确认事件与知会级事件；要处理且没确认的留着等人处理。返回删了几条。
+// Prune 清理最后更新早于 before 的已确认事件与知会级事件；
+// 要处理且没确认的、未结束任务的到期提醒凭据保留。返回删了几条。
 func Prune(ctx context.Context, q store.Querier, before int64) (int64, error) {
-	res, err := q.ExecContext(ctx, `DELETE FROM events WHERE updated_at < ? AND (acked_at IS NOT NULL OR level = 'info')`, before)
+	// 未结束任务的 overdue 同时是已提醒凭据；任务结束后按原保留期清理。
+	res, err := q.ExecContext(ctx, `DELETE FROM events WHERE updated_at < ? AND (acked_at IS NOT NULL OR level = 'info')
+		AND NOT (kind = ? AND EXISTS (SELECT 1 FROM tasks WHERE tasks.id = events.task AND tasks.status NOT IN ('done', 'cancelled')))`, before, Overdue)
 	if err != nil {
 		return 0, err
 	}

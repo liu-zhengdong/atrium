@@ -16,9 +16,11 @@ import (
 	"encoding/json"
 	"sync"
 
+	"github.com/liu-zhengdong/atrium/internal/api"
 	"github.com/liu-zhengdong/atrium/internal/app"
 	"github.com/liu-zhengdong/atrium/internal/ledger"
 	"github.com/liu-zhengdong/atrium/internal/org"
+	"github.com/liu-zhengdong/atrium/internal/org/leaders"
 	"github.com/liu-zhengdong/atrium/internal/store"
 )
 
@@ -120,6 +122,16 @@ func FactsOf(ctx context.Context, q store.Querier, t ledger.Task) (Facts, error)
 	if f.Owner, err = org.Recipient(ctx, q, t.Org); err != nil {
 		return f, err
 	}
+	// 负责人的等待归实际处理人；验收仍归部门设置的验收人。
+	if t.Stage != ledger.StageAccept {
+		p, err := ledger.PartiesOf(ctx, q, t.ID)
+		if err != nil {
+			return f, err
+		}
+		if api.IsRef(p.Owner, "a") {
+			f.Owner = p.Owner
+		}
+	}
 	if t.Stage == ledger.StageAccept {
 		if f.Acceptor, _, err = org.Acceptor(ctx, q, t.Org); err != nil {
 			return f, err
@@ -186,9 +198,9 @@ func childEnded(ctx context.Context, q store.Querier, id string) (int64, error) 
 	return at, nil
 }
 
-// upOf 是任务所属部门的负责人的上一层（部门往上跳过这位负责人的下一位，到顶是秘书）；
+// upOf 是实际等待的负责人的上一层，复用负责人上报的组织路由；
 // 处理人已是秘书时没有更上一层，仍是秘书自己：60 分钟那一轮再提醒一次。
-func upOf(ctx context.Context, q store.Querier, dept string) (string, error) {
+func upOf(ctx context.Context, q store.Querier, who, dept string) (string, error) {
 	ps, err := org.Parents(ctx, q)
 	if err != nil {
 		return "", err
@@ -197,7 +209,5 @@ func upOf(ctx context.Context, q store.Querier, dept string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	owner, _ := org.Nearest(ps, lm, dept, "")
-	up, _ := org.Nearest(ps, lm, dept, owner)
-	return up, nil
+	return leaders.Upstream(ps, lm, who, dept), nil
 }

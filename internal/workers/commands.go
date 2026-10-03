@@ -33,8 +33,7 @@ type Row struct {
 
 // Detail 是 workers <名字> 的内容：给执行者标识看叠加结果，给档案名看原文。
 type Detail struct {
-	Quota  *quota.Line `json:"quota,omitempty"` // 存下的额度读数；没有时仅含账号
-	Timing string      `json:"timing"`          // 用时说明，与命令行共用 Stat.Timing
+	Timing string `json:"timing"` // 用时说明，与命令行共用 Stat.Timing
 
 	Trust    string    `json:"trust,omitempty"` // 生效值，与目录相同
 	MaxRisk  string    `json:"max_risk,omitempty"`
@@ -211,7 +210,7 @@ func Routes(r *api.Router, env *app.Env) {
 	})
 	r.Handle("GET /api/workers", func(q *api.Req) (any, error) {
 		if name := q.URL.Query().Get("name"); name != "" {
-			return showWithQuota(q.Context(), env, name)
+			return Show(q.Context(), env.DB, name)
 		}
 		return List(q.Context(), env.DB)
 	})

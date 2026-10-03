@@ -379,11 +379,7 @@ func Overview(ctx context.Context, q store.Querier, data, dept string) (string, 
 	if err != nil {
 		return "", err
 	}
-	_, p, err := m.File("")
-	if err != nil {
-		return "", err
-	}
-	raw, err := os.ReadFile(p)
+	_, raw, err := m.ReadFile("")
 	return string(raw), err
 }
 
@@ -565,11 +561,7 @@ func materialRoutes(r *api.Router, env *app.Env) {
 		if rel == "" && m.Entry == "" {
 			return MaterialContent{Material: m}, nil
 		}
-		f, p, err := m.File(rel)
-		if err != nil {
-			return nil, err
-		}
-		raw, err := os.ReadFile(p)
+		f, raw, err := m.ReadFile(rel)
 		return MaterialContent{Material: m, File: &f, Content: raw}, err
 	})
 	r.Handle("POST /api/materials/{id}/archive", func(q *api.Req) (any, error) {

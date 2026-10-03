@@ -443,13 +443,13 @@ warning: something`)
 
 // 不带解析的工具：逐行留原文，只留最后 rawLines 行，不记「没认出」。
 func TestTraceRawTool(t *testing.T) {
-	p := NewParser("kimi+m")
+	p := NewParser("my-cli+m")
 	for i := 0; i < 100; i++ {
 		p.Line(`{"type":"text","part":{"text":"x"}}`)
 	}
 	p.Line("最后一行")
 	tr := p.Trace()
-	if len(tr.Segments) != 0 || tr.Unknown != 0 || len(tr.Lines) != rawLines || tr.Lines[rawLines-1] != "最后一行" || Traceable("kimi") || Traceable("my-cli") || !Traceable("cursor+auto:high") {
+	if len(tr.Segments) != 0 || tr.Unknown != 0 || len(tr.Lines) != rawLines || tr.Lines[rawLines-1] != "最后一行" || !Traceable("kimi") || Traceable("my-cli") || !Traceable("cursor+auto:high") {
 		t.Errorf("%+v", tr)
 	}
 }

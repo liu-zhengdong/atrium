@@ -9,6 +9,14 @@ const maxReply = 8000
 // opencode 取最后一段文字，codex 取最后一条 agent_message；文本日志取末尾若干行。gates 从这里读审阅结论。
 func (a *Driver) LastReply(tail string) string {
 	lines := strings.Split(strings.TrimRight(tail, "\n"), "\n")
+	if a.Tool == "kimi" {
+		for i := len(lines) - 1; i >= 0; i-- {
+			if e := parseEvent(lines[i]); e != nil && e.str("role") == "assistant" {
+				return clip(kimiReply(e))
+			}
+		}
+		return ""
+	}
 	if a.JSON {
 		for i := len(lines) - 1; i >= 0; i-- {
 			e := parseEvent(lines[i])

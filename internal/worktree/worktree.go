@@ -1,4 +1,5 @@
 // Package worktree 管理运行时创建的 Git 工作树；调用者负责核实任务与目录归属。
+// 目录交给执行者之前要先是这次检出，git 顶层必须就是该目录。
 package worktree
 
 import (

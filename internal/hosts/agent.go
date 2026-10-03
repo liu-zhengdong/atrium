@@ -369,16 +369,12 @@ func (a *Agent) launch(ctx context.Context, as Assignment) (int, string, error) 
 	}
 	a.mu.Unlock()
 	taskDir := filepath.Join(a.Dir, "tasks", as.Task)
-	cwd := filepath.Join(taskDir, "work")
-	if err := os.MkdirAll(cwd, 0o700); err != nil {
+	if err := os.MkdirAll(taskDir, 0o700); err != nil {
 		return 0, "", err
 	}
-	if as.Repo != "" {
-		wt, err := a.worktree(ctx, as)
-		if err != nil {
-			return 0, "", err
-		}
-		cwd = wt
+	cwd, err := a.workDir(ctx, as)
+	if err != nil {
+		return 0, "", err
 	}
 	adapter, _ := AdapterFor(as.Tool)
 	tempDir := a.tempDir(as.Task)

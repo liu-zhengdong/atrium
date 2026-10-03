@@ -122,6 +122,7 @@ func TestRecoveryServiceEntry(t *testing.T) {
 			if closeErr != nil {
 				t.Fatal(closeErr)
 			}
+			linkGit(t, bin)
 			t.Setenv("PATH", bin+string(os.PathListSeparator)+filepath.Dir(exe))
 			db, err := store.Open(filepath.Join(dir, "atrium.db"))
 			if err != nil {

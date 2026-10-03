@@ -111,8 +111,9 @@ func run(ctx context.Context, dir, name string, args ...string) (string, error) 
 	return strings.TrimSpace(out.String()), nil
 }
 
-// Workdir 准备任务的工作目录：有仓库时在任务目录下建 git worktree（分支 task-tN，已有就沿用：交回原执行者接着改）；
-// 有工作地点就是它本身（原地干，不复制、不建工作树）；都没有用任务目录下的 work/。
+// Workdir 准备任务的工作目录：有仓库时在任务目录下建 git worktree（分支 task-tN，已有就沿用：交回原执行者接着改）。
+// 目录为空或没有自己的 .git 时先检出，git 顶层必须就是该目录，否则返回错误，调用方不拉起、不标记。
+// 有工作地点就是它本身（原地干，不复制、不建工作树）。都没有时用任务目录下的 work/，并把它初始化成自己的检出，避免 git 走到上级。
 func Workdir(ctx context.Context, data, task, repo, place string) (dir, branch string, err error) {
 	td := TaskDir(data, task)
 	if place != "" {
@@ -123,37 +124,50 @@ func Workdir(ctx context.Context, data, task, repo, place string) (dir, branch s
 	}
 	if repo == "" {
 		dir = filepath.Join(td, "work")
-		return dir, "", os.MkdirAll(dir, 0o700)
+		if err := worktree.Ensure(ctx, dir, run, func() error { return worktree.Init(ctx, dir, run) }); err != nil {
+			return "", "", err
+		}
+		return dir, "", nil
 	}
 	main, url, err := RepoSource(data, repo)
 	if err != nil {
 		return "", "", err
 	}
 	branch, dir = Branch(task), filepath.Join(td, "repo")
-	if _, err := os.Stat(dir); err == nil {
-		cur, err := run(ctx, dir, "git", "rev-parse", "--abbrev-ref", "HEAD")
-		if err != nil {
-			return "", "", err
-		}
-		if cur != branch {
-			return "", "", api.Conflict("任务 %s 的工作树 %s 在分支 %s 上，不是 %s；拉起前停止，由负责人核对分支归属；不要进入其他任务工作树或删除现有改动", task, dir, cur, branch)
-		}
-		return dir, branch, nil
+	if err := os.MkdirAll(td, 0o700); err != nil {
+		return "", "", err
 	}
+	if err := worktree.Ensure(ctx, dir, run, func() error {
+		return checkoutRepo(ctx, main, url, dir, branch)
+	}); err != nil {
+		return "", "", err
+	}
+	cur, err := run(ctx, dir, "git", "rev-parse", "--abbrev-ref", "HEAD")
+	if err != nil {
+		return "", "", err
+	}
+	if cur != branch {
+		return "", "", api.Conflict("任务 %s 的工作树 %s 在分支 %s 上，不是 %s；拉起前停止，由负责人核对分支归属；不要进入其他任务工作树或删除现有改动", task, dir, cur, branch)
+	}
+	return dir, branch, nil
+}
+
+// checkoutRepo 把任务仓库检出到 dir：本机克隆没有就先 clone，有 origin 就 fetch，再在上面建工作树。
+func checkoutRepo(ctx context.Context, main, url, dir, branch string) error {
 	if url != "" {
 		if _, err := os.Stat(filepath.Join(main, ".git")); os.IsNotExist(err) {
 			if err := os.MkdirAll(filepath.Dir(main), 0o700); err != nil {
-				return "", "", err
+				return err
 			}
 			if _, err := run(ctx, filepath.Dir(main), "git", "clone", "--quiet", url, main); err != nil {
-				return "", "", err
+				return err
 			}
 		}
 	}
 	base := "HEAD"
 	if _, err := run(ctx, main, "git", "remote", "get-url", "origin"); err == nil {
 		if _, err := run(ctx, main, "git", "fetch", "--quiet", "origin"); err != nil {
-			return "", "", err
+			return err
 		}
 		if head, err := run(ctx, main, "git", "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"); err == nil {
 			base = head
@@ -161,11 +175,5 @@ func Workdir(ctx context.Context, data, task, repo, place string) (dir, branch s
 			base = "origin/main"
 		}
 	}
-	if err := os.MkdirAll(td, 0o700); err != nil {
-		return "", "", err
-	}
-	if err := worktree.Create(ctx, main, dir, branch, base, run); err != nil {
-		return "", "", err
-	}
-	return dir, branch, nil
+	return worktree.Create(ctx, main, dir, branch, base, run)
 }

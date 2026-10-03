@@ -22,7 +22,7 @@ func TestQualities(t *testing.T) {
 	if err := json.Unmarshal(raw, &ls); err != nil {
 		t.Fatal(err)
 	}
-	got := Qualities(ls, nil)
+	got := Qualities(ls, nil, Combo)
 	if len(got) != 3 || got[0].Combo != "pi+m" || got[1].Combo != "claude+m" {
 		t.Fatalf("质量排序：%+v", got)
 	}
@@ -30,13 +30,13 @@ func TestQualities(t *testing.T) {
 	if q.Launches != 5 || q.OK != 1 || q.Bounce != 1 || q.Fail != 1 || q.Quota != 1 || q.Setup != 1 || q.DeliveryRate != 0.2 || q.Retries != 4 || q.RetryRate != 0.8 || q.BounceReasons["检查未通过"] != 1 || q.CostPerDeliveryUSD == nil || *q.CostPerDeliveryUSD != 10 || q.MedianMS == nil || *q.MedianMS != 20000 {
 		t.Fatalf("统计：%+v", q)
 	}
-	if !reflect.DeepEqual(q.Stat, Count(Recent(ls, StatWindow)[q.Combo])) {
+	if !reflect.DeepEqual(q.Stat, Count(Recent(ls, StatWindow, Combo)[q.Combo])) {
 		t.Fatal("窗口内与 Count 不一致")
 	}
 	for _, mutation := range []Usage{{}, {Cost: ls[0].Usage.Cost, Currency: "CNY"}, {Cost: ls[0].Usage.Cost, Currency: "USD", Missing: []string{"输入"}}} {
 		copy := append([]Attempt(nil), ls...)
 		copy[0].Usage = mutation
-		for _, q := range Qualities(copy, nil) {
+		for _, q := range Qualities(copy, nil, Combo) {
 			if q.Combo == "codex+m" && q.CostPerDeliveryUSD != nil {
 				t.Fatalf("不完整花费不能排序为免费：%+v", q)
 			}
@@ -48,12 +48,12 @@ func TestQualities(t *testing.T) {
 	b := a
 	b.Worker = "pi+b"
 	b.DurationMS = &d2
-	if g := Qualities([]Attempt{b, a}, nil); g[0].Combo != "pi+a" {
+	if g := Qualities([]Attempt{b, a}, nil, Combo); g[0].Combo != "pi+a" {
 		t.Fatal(g)
 	}
 	// 负责人唤醒与任务拉起同组合也分开成行、排在后面，任务行数字不变。
 	wakes := []Attempt{{Worker: "codex+m:high", N: 1, Outcome: OutOK, DurationMS: &d1}, {Worker: "codex+m", N: 2, Outcome: OutFail, Reason: "没确认 1/1 件"}, {Worker: "pi+m", N: 1, Outcome: OutSetup}}
-	mixed := Qualities(ls, wakes)
+	mixed := Qualities(ls, wakes, Combo)
 	if !reflect.DeepEqual(mixed[:3], got) || len(mixed) != 5 {
 		t.Fatalf("任务行应不变：%+v", mixed)
 	}

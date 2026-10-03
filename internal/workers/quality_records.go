@@ -68,7 +68,11 @@ func ReadQuality(ctx context.Context, db store.Querier) ([]Quality, error) {
 		}
 		wakes = append(wakes, a)
 	}
-	return Qualities(all, wakes), nil
+	keys, err := statKeys(ctx, db, attemptWorkers(append(append([]Attempt(nil), all...), wakes...)))
+	if err != nil {
+		return nil, err
+	}
+	return Qualities(all, wakes, statKeyOf(keys)), nil
 }
 
 // WakeAttempt 把一条负责人唤醒记录当成一次拉起（Task 是负责人）。

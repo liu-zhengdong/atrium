@@ -179,11 +179,130 @@ func TestRecentWindow(t *testing.T) {
 		ls = append(ls, Attempt{Worker: "claude+opus", Outcome: out, At: int64(i)})
 	}
 	ls = append(ls, Attempt{Worker: "claude+opus", At: 99}) // 还在跑
-	got := Recent(ls, StatWindow)["claude+opus"]
+	got := Recent(ls, StatWindow, Combo)["claude+opus"]
 	if len(got) != StatWindow || got[0].At != 29 {
 		t.Fatalf("应取最近 %d 次有结果的，新的在前：%d %+v", StatWindow, len(got), got[0])
 	}
 	if n := Fails(got, 5); n != 3 {
 		t.Errorf("近 5 次启动失败：%d", n)
+	}
+}
+
+// 只写工具名派活的拉起（历史记录的写法）归进目录里那个组合，不再拆成两份；目录里没有的原样进「不在目录里」。
+func TestStatsMergesPlainTool(t *testing.T) {
+	ctx := context.Background()
+	db, err := store.Open(filepath.Join(t.TempDir(), "a.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	at := int64(1000)
+	must := func(err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	apply := func(id string, ev ledger.Event) {
+		t.Helper()
+		_, err := ledger.Apply(ctx, db, id, ev, "runtime", string(ev.Kind))
+		must(err)
+	}
+	launch := func(id string, n int, worker string) {
+		t.Helper()
+		apply(id, ledger.Event{Kind: ledger.Start})
+		at++
+		raw, _ := json.Marshal(Run{N: n, Worker: worker, Host: "h0", At: at})
+		must(ledger.Record(ctx, db, id, RunKind, "runtime", string(raw)))
+		_, err := db.ExecContext(ctx, `UPDATE task_events SET at = ? WHERE id = (SELECT MAX(id) FROM task_events WHERE task = ? AND kind = ?)`, at, id, RunKind)
+		must(err)
+	}
+	exit := func(id string, n int, out string) {
+		t.Helper()
+		raw, _ := json.Marshal(Exit{N: n, Outcome: out})
+		must(ledger.Record(ctx, db, id, ExitKind, "runtime", string(raw)))
+	}
+	add := func(title string) string {
+		t.Helper()
+		tk, err := ledger.Add(ctx, db, ledger.NewTask{Title: title}, "u1")
+		must(err)
+		apply(tk.ID, ledger.Event{Kind: ledger.Enqueue})
+		return tk.ID
+	}
+
+	t1 := add("只写工具名派活")
+	launch(t1, 1, "claude")
+	exit(t1, 1, OutOK)
+	apply(t1, ledger.Event{Kind: ledger.ExitOK})
+	t2 := add("写全组合派活")
+	launch(t2, 1, "claude+opus:high")
+	exit(t2, 1, OutOK)
+	apply(t2, ledger.Event{Kind: ledger.ExitOK})
+	t3 := add("目录里没有的执行者")
+	launch(t3, 1, "ghost")
+	exit(t3, 1, OutFail)
+	apply(t3, ledger.Event{Kind: ledger.ExitFail})
+
+	stats, err := Stats(ctx, db)
+	must(err)
+	if s := stats["claude+opus"]; len(s) != 2 || s[0].Task != t2 || s[1].Task != t1 {
+		t.Fatalf("只写工具名与写全组合应归并成一个键，新的在前：%+v", s)
+	}
+	if _, ok := stats["claude"]; ok {
+		t.Fatal("不应再按「claude」单列")
+	}
+	if _, ok := stats["ghost"]; !ok {
+		t.Fatal("目录里没有的执行者原样保留")
+	}
+
+	rows, err := List(ctx, db)
+	must(err)
+	var extra []string
+	for _, row := range rows {
+		if row.ID == "claude+opus" && row.Stat.Launches != 2 {
+			t.Fatalf("目录行应拿到归并后的统计：%+v", row.Stat)
+		}
+		if row.Problem != "" {
+			extra = append(extra, row.ID)
+		}
+	}
+	if len(extra) != 1 || extra[0] != "ghost" {
+		t.Fatalf("「不在目录里」只剩 ghost：%v", extra)
+	}
+
+	d, err := Show(ctx, db, "claude+opus")
+	must(err)
+	if d.Stat == nil || d.Stat.Launches != 2 || d.Quality == nil || d.Quality.Launches != 2 {
+		t.Fatalf("抽屉的近期与质量都按归并后的口径：%+v %+v", d.Stat, d.Quality)
+	}
+}
+
+// 统计键跟着目录走：harness 写了 model 就按它归；未知工具、写错的标识原样返回。
+func TestStatKeys(t *testing.T) {
+	ctx := context.Background()
+	db, err := store.Open(filepath.Join(t.TempDir(), "a.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	src := "---\ntrust: low\nmodel: sonnet\n---\n"
+	if _, err := SaveProfile(ctx, db, "harness/claude", Edit{Source: &src}, "u1"); err != nil {
+		t.Fatal(err)
+	}
+	keys, err := statKeys(ctx, db, []string{"claude", "claude+opus", "codex:high", "ghost", "写不对"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{
+		"claude":      "claude+sonnet", // harness 写了 model，按目录归
+		"claude+opus": "claude+opus",   // 写明模型的不动
+		"codex:high":  "codex",         // 没有缺省模型的工具保持工具名（强度不单列）
+		"ghost":       "ghost",         // 未知工具解析不了，原样落「不在目录里」
+		"写不对":         "写不对",
+	}
+	for id, k := range want {
+		if keys[id] != k {
+			t.Errorf("%s → %q，应为 %q", id, keys[id], k)
+		}
 	}
 }

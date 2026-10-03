@@ -331,10 +331,17 @@ func TestRoutes(t *testing.T) {
 	ps.Clear(ctx, "h1")
 	workers.SetMark(ctx, db, workers.Mark{Tool: "claude", Host: "h1", Kind: workers.SignalSetup, Reason: "没登录", Since: store.Now()})
 	read("legion", &legion)
-	if len(legion.Workers) != len(workers.Tools)+1 || legion.Window != workers.StatWindow {
+	// 裸名 claude 的拉起按目录组合名归并进 claude+opus，不再拆出「不在目录里」的一行；目录行数不变。
+	if len(legion.Workers) != len(workers.Tools) || legion.Window != workers.StatWindow {
 		t.Fatalf("表现：%+v", legion)
 	}
-	if p := legion.Workers[len(legion.Workers)-1]; p.ID != "claude" || !reflect.DeepEqual(p.Recent, []string{workers.OutOK}) || p.Stat.OK != 1 || p.Stat.Launches != 1 ||
+	var p workers.Row
+	for _, w := range legion.Workers {
+		if w.ID == "claude+opus" {
+			p = w
+		}
+	}
+	if p.ID == "" || !reflect.DeepEqual(p.Recent, []string{workers.OutOK}) || p.Stat.OK != 1 || p.Stat.Launches != 1 ||
 		len(p.Marks) != 1 || p.Marks[0].Host != "h1" {
 		t.Errorf("表现一行：%+v", p)
 	}

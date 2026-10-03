@@ -31,7 +31,7 @@ Go 代码怎么分包、包之间怎么调用、并行开发时各自改哪里�
 | `service` | 完成 | start/serve/status/stop/restart/pause/resume/auth rotate；单实例；令牌 | — |
 | `ledger` | 完成 | 任务（仓库或工作地点二选一；都没写的，`task run` 派出去时沿用部门的仓库——部门恰有一个才沿用，纯判定 `DeptRepo`、写入 `UseDeptRepo`；运行时自己派的审阅、定时任务不经这里）、父子、依赖、状态机、就绪、汇总；草稿记的发现带来源（用户纠正／组织发现）与类，来源一行带记录人（任务分派人）的名字（`org.NameOf`），用户本人验收退回、取消任务时 `Apply` 自动记一条用户纠正（纯判定 `Correction`）；三个目标的数（纠正、认可、复发）由纯函数 `Measure` 算、`ReadGoals` 读，top 与网页今天页共用；`task add/ls/show/set/stop/tree/note/wait`（`task tree` 每件标出能派还是在等谁）（`task stop` 即转受阻，分派任务循环结束执行者；`task set --status` 不收 blocked）；在问用户的话（`task_asks`，待派任务最多一条，`SetAsk` 挂上、`RecordTell` 回话或撤回时清掉、离开待派时 `Apply` 删掉） | `tasks` `task_dirs` `task_findings` `task_asks` `task_deps` `task_events` |
 | `org` | 完成 | 部门、要点、要点链、验收人（沿树继承）、身份、备忘、技能、资料、凭据、上限表与计数 | `departments` `department_repos` `acceptors` `points` `identities` `memos` `skills` `materials` `material_files` `material_metering` `choices` `choice_options` `choice_option_orgs` `schedules` `secrets` `limit_notices` |
-| `org/leaders` | 完成 | 负责人运行时：唤醒（批量收集 30 秒、同一位只起一个、20 分钟上限、连续 2 次没处理完转交上一层）、负责人令牌与统一权限判定、`leader escalate`（`--kind ask` 把问用户的话挂到任务上并投秘书）；拉起经 `leaders.SetLauncher` 由 workers／dispatch 接上 | — |
+| `org/leaders` | 完成 | 负责人运行时：唤醒（批量收集 30 秒、同一位只起一个、20 分钟上限、连续 2 次没处理完转交上一层）、负责人令牌与统一权限判定、`leader escalate`（`--kind ask` 把问用户的话挂到任务上并投秘书）；拉起经 `leaders.SetLauncher` 由 workers／dispatch 接上；每次用上执行者组合的唤醒落一条唤醒记录（结果按纯判定 `WakeResult`：全确认算交付、没确认完算其他失败、没拉起来算起不来，服务停下不记；模型与用量由 workers 接上的 `WakeUsage` 从这次的日志段取），记录保留 30 天（`WakeRetention`，唤醒循环每小时 `PruneWakes`），`ReadWakes` 按同一保留期给 `workers --quality` | `leader_wakes` |
 | `org/agenda` | 完成 | 会生成任务的：选项单（拍板建任务）、定时任务（到点建任务并派发；按周期反复，或指定那天一次、生成后删掉）；与 org 分包是因为要调 ledger（org 被 events 引用，不能再引用 ledger） | 用 org 的 `choices` `choice_options` `choice_option_orgs` `schedules` |
 | `events` | 完成 | 事件落库（要处理／知会两级、同一订阅者同一去重键合并）、`events wait/ack`（长轮询、首条后批量收集、15 分钟租约）、订阅者「在听」、清理（每小时删掉最后更新超过 7 天的已确认与知会级事件，要处理且没确认的不删） | `events` |
 | `dispatch` | 完成 | 分派任务队列、挑执行者与机器、拉起（每次签发执行者令牌与认证、权限判定）、退出后重试／换人／继续／进入交付检查；`task run`（入队前经 `ledger.UseDeptRepo` 补部门的仓库）、`task tell`（补充说明；`dispatch.Tell` 是补充说明的唯一送达入口，改说明经 `ledger.Tell` 钩子也走它）、`task log`；装配 watch、agenda、gates 的入队钩子、`ledger.Tell` 与 `hosts.AdapterFor` | `queue` |
@@ -199,7 +199,7 @@ release、hosts ─→ release/selfupdate（版本判定、下载替换；hosts 
 watch    ─→ ledger.Get/Apply、events.Emit(Overdue, LimitFull)、org、platform.KillTree
 dispatch、merge ─→ watch.Track（拉起执行者或检查后登记 pid、日志、工作树）
 dispatch ─→ watch.Use(Hooks{Requeue})：卡住、额度用尽或思考耗尽时重新入队（可换人、标额度）
-workers  ─→ watch.Use(Hooks{Signal})：从日志尾部读思考耗尽、额度用尽与收尾；leaders.SetLauncher：负责人唤醒按执行者组合拉起
+workers  ─→ watch.Use(Hooks{Signal})：从日志尾部读思考耗尽、额度用尽与收尾；leaders.SetLauncher：负责人唤醒按执行者组合拉起；leaders.WakeUsage、ReadWakes：唤醒的用量与质量统计
 events   ─→ org（投递对象 org.Recipient）
 org/leaders ─→ org、events（Emit、Retarget）、ledger、platform、worktree.RemoveTemp（清会话临时目录）；workers／dispatch 调 leaders.SetLauncher 接上拉起
 secretary、web ─→ 只读：ledger、org、events

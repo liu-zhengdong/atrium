@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -120,7 +121,18 @@ func (h *hub) run(ctx context.Context, env *app.Env) error {
 	defer h.wg.Wait()
 	t := time.NewTicker(h.tick)
 	defer t.Stop()
+	var nextPrune int64
 	for {
+		if now := store.Now(); now >= nextPrune {
+			n, err := PruneWakes(ctx, env.DB, now-WakeRetention.Milliseconds())
+			if err != nil {
+				return fmt.Errorf("清理唤醒记录：%w", err)
+			}
+			if n > 0 {
+				env.Log.Info("清理唤醒记录", "deleted", n)
+			}
+			nextPrune = now + time.Hour.Milliseconds()
+		}
 		if err := h.round(ctx, env); err != nil {
 			return err
 		}
@@ -215,16 +227,18 @@ func pendingByLeader(ctx context.Context, q store.Querier) ([]Pending, error) {
 }
 
 // wake 起一次负责人进程并收尾：这批全确认了算成功；否则记一次失败，连续 MaxFails 次就把没确认的转交上一层。
+// 用上了执行者组合的唤醒都落一条唤醒记录；服务停下的不记。
 func (h *hub) wake(ctx context.Context, env *app.Env, p Pending) {
 	log := env.Log.With("leader", p.Leader)
-	err := h.launch(ctx, env, p)
+	run, err := h.launch(ctx, env, p)
 	if ctx.Err() != nil {
 		return // 服务停下：不算这位的失败，下次起来重新唤醒
 	}
 	if err != nil {
 		log.Warn("负责人唤醒失败", "err", err)
 	}
-	left, lerr := unacked(context.WithoutCancel(ctx), env.DB, p.Leader, p.IDs)
+	bg := context.WithoutCancel(ctx)
+	left, lerr := unacked(bg, env.DB, p.Leader, p.IDs)
 	if lerr != nil {
 		log.Error("查这批事件是否确认失败", "err", lerr)
 		return
@@ -233,77 +247,137 @@ func (h *hub) wake(ctx context.Context, env *app.Env, p Pending) {
 	next, forward := Outcome(len(left), h.fails[p.Leader])
 	h.fails[p.Leader] = next
 	h.mu.Unlock()
-	if !forward {
-		if len(left) > 0 {
-			log.Warn("负责人这次没处理完", "left", len(left), "fails", next)
+	var to []string
+	var ferr error
+	switch {
+	case forward:
+		var n int64
+		if to, n, ferr = forwardUp(bg, env.DB, p.Leader, left); ferr != nil {
+			log.Error("转交上一层失败", "err", ferr)
+		} else {
+			log.Warn("负责人连续没处理完，事件已转交上一层", "to", to, "events", n)
 		}
+	case len(left) > 0:
+		log.Warn("负责人这次没处理完", "left", len(left), "fails", next)
+	}
+	if run.profile == "" {
 		return
 	}
-	to, n, ferr := forwardUp(context.WithoutCancel(ctx), env.DB, p.Leader, left)
-	if ferr != nil {
-		log.Error("转交上一层失败", "err", ferr)
-		return
+	if rerr := h.record(bg, env, p, run, err, len(left), to, ferr); rerr != nil {
+		log.Error("记唤醒记录失败", "err", rerr)
 	}
-	log.Warn("负责人连续没处理完，事件已转交上一层", "to", to, "events", n)
+}
+
+// wakeRun 是一次唤醒拉起的情况：用的组合、第几次连续尝试、日志里这次的起点、进程起没起来与起止时间。
+type wakeRun struct {
+	profile string
+	n       int
+	log     string
+	from    int64
+	started bool
+	begin   int64
+	end     int64
+}
+
+// record 落唤醒记录：日志段交 WakeUsage 取模型与用量，取不到只记日志、用量留空，不挡记录落库。
+func (h *hub) record(ctx context.Context, env *app.Env, p Pending, run wakeRun, err error, left int, to []string, ferr error) error {
+	outcome, reason := WakeResult(run.started, err, left, len(p.IDs), to, ferr)
+	w := Wake{Leader: p.Leader, Profile: run.profile, N: run.n, Outcome: outcome, Reason: reason, At: store.Now()}
+	if run.started {
+		d := run.end - run.begin
+		w.DurationMS = &d
+		seg, serr := readFrom(run.log, run.from)
+		if serr == nil {
+			w.Model, w.Usage, serr = WakeUsage(ctx, env.DB, run.profile, seg)
+		}
+		if serr != nil {
+			env.Log.Warn("负责人唤醒的用量取不到", "leader", p.Leader, "err", serr)
+			w.Model, w.Usage = "", ""
+		}
+	}
+	return recordWake(ctx, env.DB, w)
+}
+
+func readFrom(path string, from int64) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	if _, err := f.Seek(from, io.SeekStart); err != nil {
+		return "", err
+	}
+	raw, err := io.ReadAll(f)
+	return string(raw), err
 }
 
 // launch 签发令牌、组提示词、经 Launcher 与 platform 拉起，等到退出或超时；令牌在返回时作废。
-func (h *hub) launch(ctx context.Context, env *app.Env, p Pending) error {
+func (h *hub) launch(ctx context.Context, env *app.Env, p Pending) (wakeRun, error) {
+	var run wakeRun
 	who, err := org.GetIdentity(ctx, env.DB, p.Leader)
 	if err != nil {
-		return err
+		return run, err
 	}
 	h.mu.Lock()
-	profile := PickWorker(who.Workers, h.fails[p.Leader])
+	fails := h.fails[p.Leader]
 	h.mu.Unlock()
-	if profile == "" {
-		return fmt.Errorf("%s 没有登记执行者组合", who.ID)
+	run.profile, run.n = PickWorker(who.Workers, fails), fails+1
+	if run.profile == "" {
+		return run, fmt.Errorf("%s 没有登记执行者组合", who.ID)
 	}
 	l := getLauncher()
 	if l == nil {
-		return errors.New("拉起接口还没接上（leaders.SetLauncher）")
+		return run, errors.New("拉起接口还没接上（leaders.SetLauncher）")
 	}
 	prompt, err := buildPrompt(ctx, env.DB, who, p.IDs)
 	if err != nil {
-		return err
+		return run, err
 	}
 	dir := filepath.Join(env.Paths.Data, "leaders", who.ID)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return err
+		return run, err
 	}
 	// 会话临时目录：同一负责人同时只有一次唤醒，每次先清空；退出后按它回收残留进程。
 	tmp := filepath.Join(dir, "tmp")
 	if err := worktree.RemoveTemp(tmp); err != nil {
-		return err
+		return run, err
 	}
 	if err := os.MkdirAll(tmp, 0o700); err != nil {
-		return err
+		return run, err
 	}
 	token, err := h.issue(who.ID)
 	if err != nil {
-		return err
+		return run, err
 	}
 	defer h.revoke(token)
-	spec, err := l(ctx, Launch{Leader: who.ID, Profile: profile, Prompt: prompt, Dir: dir,
+	spec, err := l(ctx, Launch{Leader: who.ID, Profile: run.profile, Prompt: prompt, Dir: dir,
 		Env: leaderEnv(platform.EnvMap(os.Environ()), token, env.Paths.Data, tmp)})
 	if err != nil {
-		return err
+		return run, err
 	}
-	logf, err := platform.OpenLog(filepath.Join(dir, "wake.log"))
+	run.log = filepath.Join(dir, "wake.log")
+	logf, err := platform.OpenLog(run.log)
 	if err != nil {
-		return err
+		return run, err
 	}
 	defer logf.Close()
-	fmt.Fprintf(logf, "\n=== %s 唤醒 %s（%s），事件 %v\n", time.Now().Format(time.RFC3339), who.ID, profile, p.IDs)
+	if run.from, err = logf.Seek(0, io.SeekCurrent); err != nil {
+		return run, err
+	}
+	fmt.Fprintf(logf, "\n=== %s 唤醒 %s（%s），事件 %v\n", time.Now().Format(time.RFC3339), who.ID, run.profile, p.IDs)
 	spec.Stdout, spec.Stderr, spec.Detached = logf, logf, true
 	if spec.Dir == "" {
 		spec.Dir = dir
 	}
+	run.begin = store.Now()
 	cmd, err := platform.Start(spec)
 	if err != nil {
-		return err
+		return run, err
 	}
-	return waitLimited(ctx, cmd, tmp, h.timeout)
+	run.started = true
+	err = waitLimited(ctx, cmd, tmp, h.timeout)
+	run.end = store.Now()
+	return run, err
 }
 
 // waitLimited 等进程退出并回收会话残留；超时或服务停下就结束整棵进程树。
@@ -445,6 +519,7 @@ func unacked(ctx context.Context, q store.Querier, leader string, ids []int64) (
 }
 
 // forwardUp 把 leader 没确认的事件逐条转交：从事件所属部门往上、跳过这位的最近负责人，没有就秘书。
+// 返回转交到的负责人与件数；出错时事务整体回滚，不返回目标。
 func forwardUp(ctx context.Context, db *store.DB, leader string, ids []int64) ([]string, int64, error) {
 	ps, err := org.Parents(ctx, db)
 	if err != nil {
@@ -478,5 +553,8 @@ func forwardUp(ctx context.Context, db *store.DB, leader string, ids []int64) ([
 		}
 		return nil
 	})
-	return targets, total, err
+	if err != nil {
+		return nil, 0, err
+	}
+	return targets, total, nil
 }

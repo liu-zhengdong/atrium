@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/liu-zhengdong/atrium/internal/ledger"
+	"github.com/liu-zhengdong/atrium/internal/org/leaders"
 	"github.com/liu-zhengdong/atrium/internal/store"
 )
 
@@ -21,7 +22,7 @@ func TestQualities(t *testing.T) {
 	if err := json.Unmarshal(raw, &ls); err != nil {
 		t.Fatal(err)
 	}
-	got := Qualities(ls)
+	got := Qualities(ls, nil)
 	if len(got) != 3 || got[0].Combo != "pi+m" || got[1].Combo != "claude+m" {
 		t.Fatalf("质量排序：%+v", got)
 	}
@@ -35,7 +36,7 @@ func TestQualities(t *testing.T) {
 	for _, mutation := range []Usage{{}, {Cost: ls[0].Usage.Cost, Currency: "CNY"}, {Cost: ls[0].Usage.Cost, Currency: "USD", Missing: []string{"输入"}}} {
 		copy := append([]Attempt(nil), ls...)
 		copy[0].Usage = mutation
-		for _, q := range Qualities(copy) {
+		for _, q := range Qualities(copy, nil) {
 			if q.Combo == "codex+m" && q.CostPerDeliveryUSD != nil {
 				t.Fatalf("不完整花费不能排序为免费：%+v", q)
 			}
@@ -47,8 +48,83 @@ func TestQualities(t *testing.T) {
 	b := a
 	b.Worker = "pi+b"
 	b.DurationMS = &d2
-	if g := Qualities([]Attempt{b, a}); g[0].Combo != "pi+a" {
+	if g := Qualities([]Attempt{b, a}, nil); g[0].Combo != "pi+a" {
 		t.Fatal(g)
+	}
+	// 负责人唤醒与任务拉起同组合也分开成行、排在后面，任务行数字不变。
+	wakes := []Attempt{{Worker: "codex+m:high", N: 1, Outcome: OutOK, DurationMS: &d1}, {Worker: "codex+m", N: 2, Outcome: OutFail, Reason: "没确认 1/1 件"}, {Worker: "pi+m", N: 1, Outcome: OutSetup}}
+	mixed := Qualities(ls, wakes)
+	if !reflect.DeepEqual(mixed[:3], got) || len(mixed) != 5 {
+		t.Fatalf("任务行应不变：%+v", mixed)
+	}
+	lc, lp := mixed[3], mixed[4]
+	if !lc.Leader || lc.Name() != "codex+m（负责人）" || lc.Launches != 2 || lc.OK != 1 || lc.Fail != 1 || lc.Retries != 1 || lp.Name() != "pi+m（负责人）" || lp.Setup != 1 || got[0].Name() != "pi+m" {
+		t.Fatalf("负责人行：%+v %+v", lc, lp)
+	}
+}
+
+func TestWakeOutcomesMatch(t *testing.T) {
+	if leaders.WakeOK != OutOK || leaders.WakeFail != OutFail || leaders.WakeSetup != OutSetup {
+		t.Fatal("唤醒结果的取值必须与拉起结果一致")
+	}
+}
+
+// 负责人日志段（开头带唤醒标记行）按档案取实际模型与用量，与任务拉起同一套解析。
+func TestLeaderUsage(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "a.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	raw, err := os.ReadFile("testdata/pi-bash.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	seg := "\n=== 2026-10-03T10:00:00+08:00 唤醒 a9（pi+opencode-go/glm-5.3-flash:high），事件 [1]\n" + string(raw)
+	model, u, err := LeaderUsage(context.Background(), db, "pi+opencode-go/glm-5.3-flash:high", seg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if model != "opencode-go/glm-5.3-flash" || u.Tokens.Input == nil || *u.Tokens.Input != 51026 || u.Cost == nil {
+		t.Fatalf("模型 %q 用量 %+v", model, u)
+	}
+	if _, _, err := LeaderUsage(context.Background(), db, "没这个工具+m", seg); err == nil {
+		t.Fatal("解析不了的组合要报错")
+	}
+}
+
+func TestReadQualityLeaderWakes(t *testing.T) {
+	ctx := context.Background()
+	db, err := store.Open(filepath.Join(t.TempDir(), "quality.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	now := store.Now()
+	insAt := func(outcome, usage string, at int64) {
+		t.Helper()
+		if _, err := db.ExecContext(ctx, `INSERT INTO leader_wakes (leader, profile, n, outcome, usage, duration_ms, at) VALUES ('a9', 'pi+opencode-go/glm-5.3-flash:high', 1, ?, ?, 1000, ?)`, outcome, usage, at); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ins := func(outcome, usage string) { t.Helper(); insAt(outcome, usage, now) }
+	ins(OutOK, `{"cost":0.5,"currency":"USD"}`)
+	ins(OutFail, `{"cost":0.5,"currency":"USD"}`)
+	// 保留期外的（还没被清理）不计入，坏了也不读。
+	insAt(OutFail, "{", now-leaders.WakeRetention.Milliseconds()-60_000)
+	got, err := ReadQuality(ctx, db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || !got[0].Leader || got[0].Combo != "pi+opencode-go/glm-5.3-flash" || got[0].Launches != 2 || got[0].OK != 1 || got[0].CostPerDeliveryUSD == nil || *got[0].CostPerDeliveryUSD != 1 {
+		t.Fatalf("负责人行：%+v", got)
+	}
+	ins(OutOK, "{")
+	if _, err := ReadQuality(ctx, db); err == nil {
+		t.Fatal("损坏的唤醒记录必须报错")
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO leader_wakes (leader, profile, n, outcome, at) VALUES ('a9', 'x', 1, 'bounce', 1)`); err == nil {
+		t.Fatal("唤醒没有被交回这一结果")
 	}
 }
 

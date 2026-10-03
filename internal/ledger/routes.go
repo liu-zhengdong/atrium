@@ -13,7 +13,7 @@ import (
 
 // Module 是账本的接入点。
 func Module() app.Module {
-	return app.Module{Name: "ledger", Commands: Commands, Routes: Routes}
+	return app.Module{Name: "ledger", Commands: Commands, Routes: Routes, Run: cleanupStoredLogs}
 }
 
 // TreeNode 是任务树的一个节点；Summary 汇总全部子孙。Ready：没有子任务、自己 todo、依赖都完成，现在能派；

@@ -329,6 +329,9 @@ func mustSkill(ctx context.Context, q store.Querier, name string) error {
 
 // Add 建一件 todo 任务（Draft 时建成草稿，要有部门，受该部门的草稿上限）。没给部门时沿用父任务的部门。
 func Add(ctx context.Context, db *store.DB, in NewTask, actor string) (Task, error) {
+	if err := cleanupLogs(ctx, db); err != nil {
+		return Task{}, err
+	}
 	if in.Priority == "" {
 		in.Priority = Normal
 	}
@@ -744,7 +747,11 @@ func reachableEdges(ctx context.Context, q store.Querier, id string) (map[string
 // Apply 是改任务状态的唯一入口：按 Transition 判定、落库、记经历、发事件、唤醒等待者。
 // note 记进经历（可空）。
 func Apply(ctx context.Context, db *store.DB, id string, ev Event, actor, note string) (Task, error) {
-	return apply(ctx, db, id, ev, actor, note, PartiesOf)
+	t, err := apply(ctx, db, id, ev, actor, note, PartiesOf)
+	if err == nil && t.Status.Finished() {
+		err = cleanupLogs(ctx, db)
+	}
+	return t, err
 }
 
 func apply(ctx context.Context, db *store.DB, id string, ev Event, actor, note string, parties func(context.Context, store.Querier, string) (Parties, error)) (Task, error) {

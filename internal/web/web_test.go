@@ -376,7 +376,7 @@ func TestRoutes(t *testing.T) {
 	workers.SetMark(ctx, db, workers.Mark{Tool: "kimi", Host: "h3", Kind: workers.SignalQuota, Reason: "额度用尽", Since: store.Now(), Until: store.Now() + 3600_000})
 	read("today", &today)
 	if n := len(today.Asks); n != 2 || today.Asks[1].Kind != "worker" || today.Asks[1].Title != "claude（本机）没登录" ||
-		today.Asks[1].Sub != "登录或装好运行环境后 atrium workers edit --clear claude@h1" {
+		today.Asks[1].Sub != "登录、装好或升级运行环境后 atrium workers edit --clear claude@h1" {
 		t.Errorf("不可用标记应进等你（跟在卡住的活后面）：%+v", today.Asks)
 	}
 	if nav, err := loadNav(ctx, db); err != nil || nav.Asks != 2 {

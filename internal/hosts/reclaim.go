@@ -107,12 +107,13 @@ func (a *Agent) reclaimGeneration(task string) (int, error) {
 	return latest, nil
 }
 
+// workspaceRun 跑 git 并原样返回标准输出（不 TrimSpace）：-z 这类输出由调用方按自己的格式解析。
 func (a *Agent) workspaceRun(ctx context.Context, dir, name string, args ...string) (string, error) {
 	var out, stderr bytes.Buffer
 	if err := a.runGit(ctx, dir, args, &out, &stderr); err != nil {
 		return "", fmt.Errorf("git %v：%w：%s", args, err, strings.TrimSpace(stderr.String()))
 	}
-	return strings.TrimSpace(out.String()), nil
+	return out.String(), nil
 }
 
 func (a *Agent) reclaimAndAck(ctx context.Context, c Command) {

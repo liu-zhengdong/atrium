@@ -1,4 +1,5 @@
 // Package worktree 管理运行时创建的 Git 工作树；调用者负责核实任务与目录归属。
+// 目录交给执行者之前要先是这次检出，git 顶层必须就是该目录；异常状态报错停下，不修不补。
 package worktree
 
 import (
@@ -10,6 +11,7 @@ import (
 	"sync"
 )
 
+// Runner 跑一条命令并原样返回标准输出（不 TrimSpace）：按格式解析由调用方负责。
 type Runner func(context.Context, string, string, ...string) (string, error)
 
 // LocalMutation 沿用本机合入的串行锁：合入主分支与回收不能同时使用、删除同一个工作树。

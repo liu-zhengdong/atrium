@@ -247,7 +247,7 @@ func claudeAdapter() *Driver {
 }
 
 // codex exec：--json 逐行输出事件；-C 工作目录、-m 模型、强度走 -c model_reasoning_effort；PROMPT 写 - 从标准输入读。
-// --skip-git-repo-check：没有仓库的任务（work/、工作地点、审阅）目录不是 git 仓库，不带 codex 直接拒绝启动。
+// --skip-git-repo-check：工作地点可能不是 git 仓库，不带这个参数 codex 会拒绝启动。没有仓库的 work/ 由运行时初始化成自己的空检出。
 // --ignore-user-config：不读用户个人的 config.toml（模型、强度、MCP、hooks、memories），登录照用；没写模型时用 CLI 自带的缺省（最新）。
 // 本机装了 computer use 时再用 -c 把那几张表带上（in.ComputerUse，见 computeruse.go）。
 // --dangerously-bypass-approvals-and-sandbox：不开沙箱、不问审批，computer use 的逐应用授权也由它放行。

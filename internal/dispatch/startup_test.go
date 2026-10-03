@@ -5,6 +5,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -35,6 +36,7 @@ func TestStartupProbeAutoDispatch(t *testing.T) {
 			if err := os.MkdirAll(bin, 0700); err != nil {
 				t.Fatal(err)
 			}
+			linkGit(t, bin)
 			t.Setenv("PATH", bin)
 			if installed {
 				file, body := "startupfake", "#!/bin/sh\necho startup-fake-done\n"
@@ -130,5 +132,21 @@ func TestStartupProbeAutoDispatch(t *testing.T) {
 			}
 			t.Logf("自检前 queued；自检后 status=%s stage=%s，blocked 记录=%d", got.Status, got.Stage, blocked)
 		})
+	}
+}
+
+// linkGit 把当前能找到的 git 放进隔离目录。无仓库任务的 work/ 要在拉起前初始化成自己的检出。
+func linkGit(t *testing.T, bin string) {
+	t.Helper()
+	src, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	name := "git"
+	if runtime.GOOS == "windows" {
+		name = "git.exe"
+	}
+	if err := os.Symlink(src, filepath.Join(bin, name)); err != nil {
+		t.Fatal(err)
 	}
 }

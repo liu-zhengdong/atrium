@@ -4,12 +4,12 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 )
 
 // Runner 跑一条外部命令（gh），返回标准输出。服务用 gates.Exec，远程代理用自己的执行者环境。
@@ -34,9 +34,15 @@ func CheckSum(sums, asset, got string) error {
 	return fmt.Errorf("%s 里没有 %s 这一行，没装", SumsFile, asset)
 }
 
-// Install 从 GitHub Release 下载本平台二进制与 SHA256SUMS，校验和对上才替换 exe：旧文件留作 exe.old（手动退回用）。
+// Install 从 GitHub Release 下载本平台二进制与 SHA256SUMS，校验和对上才替换 exe。
+// 旧文件优先留作 exe.old（手动退回用），被占用时改用 exe.old-<时间戳>。
 // 下载放在 exe 同目录，改名不跨文件系统。
 func Install(ctx context.Context, r Runner, repo, tag, exe string) error {
+	// 上轮的在跑映像可能仍被执行者占用，清不掉的留到下轮，不阻断安装。
+	backups, _ := filepath.Glob(exe + ".old*")
+	for _, backup := range backups {
+		_ = os.Remove(backup)
+	}
 	dir, err := os.MkdirTemp(filepath.Dir(exe), ".atrium-update-")
 	if err != nil {
 		return fmt.Errorf("在 %s 建临时目录失败（没有写权限？）：%w", filepath.Dir(exe), err)
@@ -68,16 +74,22 @@ func Install(ctx context.Context, r Runner, repo, tag, exe string) error {
 	if err := os.Chmod(fresh, 0o755); err != nil {
 		return err
 	}
+	return replaceBinary(fresh, exe)
+}
+
+// replaceBinary 先挪开在跑映像，再放入新版；未放入时尽力恢复原位，不处理上线后的回滚。
+func replaceBinary(fresh, exe string) error {
 	old := exe + ".old"
-	if err := os.Remove(old); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	// 在跑的可执行文件不能覆盖写（Windows 上也不能删），但能改名：先把自己挪成 .old 再放新的。
-	// 下次再升时旧进程早已退出，.old 删得掉。
 	if err := os.Rename(exe, old); err != nil {
-		return err
+		old = fmt.Sprintf("%s.old-%d", exe, time.Now().UnixNano())
+		if err := os.Rename(exe, old); err != nil {
+			return err
+		}
 	}
 	if err := os.Rename(fresh, exe); err != nil {
+		if restoreErr := os.Rename(old, exe); restoreErr == nil {
+			old = exe
+		}
 		return fmt.Errorf("新版本放不进 %s（旧版本在 %s）：%w", exe, old, err)
 	}
 	return nil

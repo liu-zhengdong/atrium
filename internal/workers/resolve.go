@@ -65,7 +65,7 @@ func ModelKey(model string) string { return model[strings.LastIndex(model, "/")+
 
 // Resolved 是解析后的执行者：适配器、三层叠加的规则与正文。
 type Resolved struct {
-	// QuotaBinding 仅由本轮实际解析/启动事实提供，不读档案、不落库。
+	// QuotaBinding 由本轮 ResolveExecution 按实际模型给（经 magpie 才有），不落库。
 	QuotaBinding *ExecutionBinding `json:"-"`
 	ID           string            `json:"id"` // 工具+模型[:强度]（补上默认模型后）
 	Spec         Spec              `json:"spec"`

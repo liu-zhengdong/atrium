@@ -42,17 +42,19 @@ func TestAvailabilityActualSourceContract(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(a.Sources) != 1 || len(a.Sources[0].Quotas) != 2 || *a.Sources[0].Quotas[1].UsedPercent != 100 {
-			t.Fatal("共同入口丢完整来源")
-		}
 		for _, host := range []string{"h1", "h2"} {
-			sp, why := a.CheckResolved(Resolved{Spec: Spec{Tool: "pi", Model: "opencode-go/a"}}, host)
-			if sp.Percent != nil || sp.Stop != "" || why != "" {
-				t.Fatal("来源卡片匹配不证明实际执行账号/池，不能连坐其他机器", match, host, sp, why)
+			for _, endpoint := range []string{"", quota.MagpieURL + "/v1"} {
+				model := "opencode-go/a"
+				r := Resolved{ID: "pi+" + model, Spec: Spec{Tool: "pi", Model: model}, CLIModel: model, Rules: Rules{Endpoint: endpoint}}
+				r.QuotaBinding = MagpieBinding(r, host, quota.MagpieURL)
+				sp, why := a.CheckResolved(r, host)
+				if sp.Percent != nil || sp.Stop != "" || why != "" {
+					t.Fatal("OpenQuota 月 100% 不参与派活避让", match, host, model, sp, why)
+				}
 			}
 		}
 	}
-	t.Log("预期共同入口保留月100/周25，matched/mismatched/unknown均不补造执行组合绑定或跨机器共享；实际符合")
+	t.Log("预期 OpenQuota 读数（月100/周25）不喂派活避让，直连与经 magpie 的组合都按未知；实际符合")
 }
 
 func TestAvailabilityUnknownScope(t *testing.T) {

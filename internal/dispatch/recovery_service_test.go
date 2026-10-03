@@ -32,7 +32,7 @@ func recoveryPi() int {
 			model = os.Args[i+1]
 		}
 	}
-	_, mode, _ := strings.Cut(model, "/")
+	mode := model[strings.LastIndex(model, "/")+1:]
 	if mode == "quota" {
 		return recoveryCLI("quota")
 	}
@@ -85,13 +85,14 @@ func recoveryCLI(mode string) int {
 // 实际隔离服务 HTTP task run → 账本 → 分派循环 → 假执行者进程 → 退出恢复。
 // 不装配 hosts/quota 后台循环，不读取真实登录/额度，不启负责人。
 func TestRecoveryServiceEntry(t *testing.T) {
-	for _, mode := range []string{"quota", "unknown-other-host", "silent", "silent-quota", "error-busy", "old-pr", "fresh-pr", "zero-action", "missing", "output", "stopped", "no-candidate", "bounded", "known-pool", "known-pool-other-host", "different-account", "token-pick", "token-recovery"} {
+	for _, mode := range []string{"quota", "unknown-other-host", "silent", "silent-quota", "error-busy", "old-pr", "fresh-pr", "zero-action", "missing", "output", "stopped", "no-candidate", "bounded", "known-pool", "different-account", "magpie-full"} {
 		t.Run(mode, func(t *testing.T) {
 			dir := t.TempDir()
 			t.Setenv("HOME", dir)
 			t.Setenv("USERPROFILE", dir)
 			t.Setenv("ATRIUM_DATA", dir)
 			t.Setenv("ATRIUM_PORT", "")
+			t.Setenv("ATRIUM_MAGPIE_URL", "")
 			exe, err := os.Executable()
 			if err != nil {
 				t.Fatal(err)
@@ -165,8 +166,12 @@ func TestRecoveryServiceEntry(t *testing.T) {
 				}
 				save("harness/"+name, profile+"---\n")
 			}
-			if mode == "no-candidate" || mode == "bounded" || mode == "silent" || mode == "silent-quota" || mode == "error-busy" || mode == "old-pr" || mode == "fresh-pr" || mode == "token-pick" || mode == "token-recovery" {
+			if mode == "no-candidate" || mode == "bounded" || mode == "silent" || mode == "silent-quota" || mode == "error-busy" || mode == "old-pr" || mode == "fresh-pr" {
 				save("harness/pi", "---\nmodel: opencode-go/quota\nauto: false\n---\n")
+			}
+			if mode == "magpie-full" {
+				// 走缺省 ResolveExecution：端点是 magpie 网关、模型是 <provider>/<模型> 才挂绑定（pi 不会真连它）。
+				save("harness/pi", "---\nmodel: cursor/quota\nendpoint: "+quota.MagpieURL+"/v1\nendpoint_api: openai\n---\n")
 			}
 			remoteHost := ""
 			if mode == "unknown-other-host" {
@@ -197,21 +202,9 @@ func TestRecoveryServiceEntry(t *testing.T) {
 				}
 				t.Cleanup(func() { launchRemote, waitRemote = oldLaunch, oldWait })
 			}
-			if mode == "known-pool" || mode == "known-pool-other-host" || mode == "different-account" || mode == "token-pick" || mode == "token-recovery" {
-				if mode == "known-pool-other-host" {
-					h, code, err := hosts.Add(ctx, db, hosts.AddInput{Name: "合成已知同池机器", Repos: []string{"*"}}, 4999)
-					if err != nil {
-						t.Fatal(err)
-					}
-					if _, _, err := hosts.Join(ctx, db, code, hosts.Info{CLIs: map[string]hosts.CLI{"pi": {Installed: true}}}); err != nil {
-						t.Fatal(err)
-					}
-					t.Logf("已知同池合成机器 %s", h.ID)
-				}
-				installSyntheticExecution(t, ctx, db, mode)
-				if mode == "known-pool" || mode == "known-pool-other-host" || mode == "different-account" {
-					save("combos/pi+sibling", "---\nmodel: opencode-go/zero-action\n---\n")
-				}
+			if mode == "known-pool" || mode == "different-account" {
+				installSyntheticExecution(t, mode)
+				save("combos/pi+sibling", "---\nmodel: opencode-go/zero-action\n---\n")
 			}
 			done := make(chan error, 1)
 			go func() { done <- service.Serve([]app.Module{ledger.Module(), Module()}, os.Getenv) }()
@@ -266,21 +259,39 @@ func TestRecoveryServiceEntry(t *testing.T) {
 				}
 			}
 			workerMode := mode
-			if mode == "no-candidate" || mode == "bounded" || mode == "unknown-other-host" || mode == "known-pool" || mode == "known-pool-other-host" || mode == "different-account" || mode == "token-recovery" {
+			if mode == "no-candidate" || mode == "bounded" || mode == "unknown-other-host" || mode == "known-pool" || mode == "different-account" {
 				workerMode = "quota"
 			}
 			body := map[string]any{"worker": "pi+opencode-go/" + workerMode}
-			if mode == "token-pick" || mode == "token-recovery" {
-				body["tokens"] = 601
-				var preview RunResult
-				call("POST", "/api/tasks/"+tk.ID+"/run", map[string]any{"dry_run": true, "tokens": 601}, &preview)
-				if preview.Pick == nil || preview.Pick.Recommended != "aaa-paid" {
-					t.Fatalf("容量不足的免费档不能优先：%+v", preview.Pick)
+			if mode == "magpie-full" {
+				// 同一入口先看窗口有余（假读数 40%）时推荐经 magpie 的 pi，再造窗口将满（92%）看它被避开。
+				preview := func(used float64) *PickView {
+					t.Helper()
+					if err := quota.Record(ctx, db, LocalHost, []quota.Reading{magpieReading("cursor", used, store.Now()+3600_000)}); err != nil {
+						t.Fatal(err)
+					}
+					var res RunResult
+					call("POST", "/api/tasks/"+tk.ID+"/run", map[string]any{"dry_run": true}, &res)
+					if res.Pick == nil {
+						t.Fatal("dry-run 没有挑人结论")
+					}
+					return res.Pick
 				}
-				t.Logf("挑人入口 expected=aaa-paid tokens=601; actual=%s", preview.Pick.Recommended)
-				if mode == "token-pick" {
-					delete(body, "worker")
+				if v := preview(40); v.Recommended != "pi+cursor/quota" {
+					t.Fatalf("窗口有余时应推荐经 magpie 的 pi：%+v", v)
 				}
+				v := preview(92)
+				refused := ""
+				for _, c := range v.Candidates {
+					if c.ID == "pi+cursor/quota" && !c.Eligible {
+						refused = strings.Join(c.Refusals, "、")
+					}
+				}
+				if v.Recommended != "zzz-free" || !strings.Contains(refused, "额度将满") {
+					t.Fatalf("窗口将满应换组合：recommended=%s refused=%q", v.Recommended, refused)
+				}
+				t.Logf("窗口将满：pi+cursor/quota 拒绝原因=%s；推荐=%s", refused, v.Recommended)
+				delete(body, "worker")
 			}
 			call("POST", "/api/tasks/"+tk.ID+"/run", body, nil)
 			if mode == "stopped" || mode == "silent-quota" || mode == "fresh-pr" {
@@ -325,7 +336,7 @@ func TestRecoveryServiceEntry(t *testing.T) {
 				t.Fatal(err)
 			}
 			wantRuns := 1
-			if mode == "quota" || mode == "silent" || mode == "silent-quota" || mode == "error-busy" || mode == "unknown-other-host" || mode == "old-pr" || mode == "known-pool" || mode == "known-pool-other-host" || mode == "different-account" || mode == "token-recovery" {
+			if mode == "quota" || mode == "silent" || mode == "silent-quota" || mode == "error-busy" || mode == "unknown-other-host" || mode == "old-pr" || mode == "known-pool" || mode == "different-account" {
 				wantRuns = 2
 			}
 			if mode == "bounded" {
@@ -334,33 +345,22 @@ func TestRecoveryServiceEntry(t *testing.T) {
 			if len(runs) != wantRuns {
 				t.Fatalf("拉起次数 %d want %d：%+v", len(runs), wantRuns, runs)
 			}
-			if wantRuns == 2 && mode != "unknown-other-host" && mode != "different-account" && mode != "token-recovery" && (runs[1].Worker != "zzz-free" || runs[1].Why != workers.WhySwitch) {
+			if wantRuns == 2 && mode != "unknown-other-host" && mode != "different-account" && (runs[1].Worker != "zzz-free" || runs[1].Why != workers.WhySwitch) {
 				t.Fatalf("应实际选择已声明免费：%+v", runs)
 			}
 			if mode == "different-account" && (runs[1].Worker != "pi+sibling" || len(marks) != 1) {
 				t.Fatalf("不同已证实账号不连坐：runs=%+v marks=%+v", runs, marks)
 			}
-			if mode == "known-pool" || mode == "known-pool-other-host" {
-				wantMarks := 2
-				if mode == "known-pool-other-host" {
-					wantMarks = 4
-				}
-				if len(marks) != wantMarks {
+			if mode == "known-pool" {
+				if len(marks) != 2 {
 					t.Fatalf("同池成员必须避免重试：%+v", marks)
 				}
 				if marks[0].Until != marks[1].Until {
 					t.Fatal("共享失败不能延长保留期", marks)
 				}
 			}
-			if mode == "token-pick" || mode == "token-recovery" {
-				for _, run := range runs {
-					if run.Tokens != 601 {
-						t.Fatalf("声明量在恢复中丢失：%+v", runs)
-					}
-				}
-				if runs[len(runs)-1].Worker != "aaa-paid" {
-					t.Fatalf("启动/恢复入口必须保容量：%+v", runs)
-				}
+			if mode == "magpie-full" && (runs[0].Worker != "zzz-free" || len(marks) != 0) {
+				t.Fatalf("实际派活也应避开窗口将满的组合，且不记不可用：runs=%+v marks=%+v", runs, marks)
 			}
 			if mode == "unknown-other-host" && (runs[1].Worker != runs[0].Worker || runs[1].Host != remoteHost || runs[1].Why != workers.WhySwitch) {
 				t.Fatalf("同组合应能切到另一机器（身份未知）：%+v", runs)

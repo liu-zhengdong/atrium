@@ -72,6 +72,9 @@ func (d *dispatcher) exited(ctx context.Context, p *proc, code int) error {
 	if live.Status != ledger.Running || live.Stage != ledger.StageNone {
 		return recordExit(ctx, db, p.task, p.run, workers.Exit{N: p.run.N, Reason: "任务已停止或进入下一阶段"})
 	}
+	if sig, err = d.quotaReset(ctx, p, sig); err != nil {
+		return err
+	}
 	marked, err := markUnavailable(ctx, db, p.run, sig)
 	if err != nil {
 		return err

@@ -1,87 +1,126 @@
 package workers
 
 import (
+	"context"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/liu-zhengdong/atrium/internal/quota"
 )
 
-func TestExecutionQuotaConstraints(t *testing.T) {
-	now := time.Now()
-	ptr := func(v float64) *float64 { return &v }
-	unit, evidence := "tokens", "synthetic: same pool/window token denominator"
-	id := quota.AccountIdentity{Kind: "accountHash", Value: "A", Source: "synthetic account+organization"}
+// viaMagpie 是经缺省 magpie 网关的组合（t965 的写法：档案端点指向网关，模型是 magpie 路由名）。
+func viaMagpie(model string) Resolved {
+	return Resolved{ID: "pi+" + model, Spec: Spec{Tool: "pi", Model: model}, CLIModel: model, Rules: Rules{Endpoint: quota.MagpieURL + "/v1"}}
+}
+
+func TestMagpieBinding(t *testing.T) {
+	t.Setenv("ATRIUM_MAGPIE_URL", "")
 	for _, tc := range []struct {
-		name     string
-		change   func(*Resolved, *quota.Pace)
-		need     int64
-		stop     bool
-		capacity bool
+		endpoint, cliModel, provider string
 	}{
-		{"fits", nil, 600, false, true},
-		{"too-large", nil, 601, true, true},
-		{"unknown-demand", nil, 0, false, true},
-		{"monthly100-weekly25", func(_ *Resolved, p *quota.Pace) { p.Quotas[1].UsedPercent = ptr(100) }, 1, true, true},
-		{"zero-reading-success", func(_ *Resolved, p *quota.Pace) { p.Quotas[0].UsedPercent = ptr(0) }, 1, false, true},
-		{"dollars", func(_ *Resolved, p *quota.Pace) { u := "USD"; p.Quotas[0].Unit = &u; p.Quotas[0].Format = "dollars" }, 601, false, false},
-		{"count", func(_ *Resolved, p *quota.Pace) { u := "requests"; p.Quotas[0].Unit = &u }, 601, false, false},
-		{"unknown-unit", func(_ *Resolved, p *quota.Pace) { p.Quotas[0].Unit = nil }, 601, false, false},
-		{"estimated", func(_ *Resolved, p *quota.Pace) { p.Quotas[0].Estimated = true }, 601, false, false},
-		{"no-denominator-evidence", func(_ *Resolved, p *quota.Pace) { p.Quotas[0].SourceNote = nil }, 601, false, false},
-		{"free-zero-not-token", func(_ *Resolved, p *quota.Pace) { p.Quotas[0].Unit = nil; p.Quotas[0].RemainingValue = ptr(0) }, 601, false, false},
-		{"token-total-zero", func(_ *Resolved, p *quota.Pace) { p.Quotas[0].LimitValue = ptr(0); p.Quotas[0].UsedValue = ptr(0) }, 1, true, true},
-		{"explicit-zero", func(_ *Resolved, p *quota.Pace) { p.Quotas[0].RemainingValue = ptr(0) }, 1, true, true},
-		{"stale", func(_ *Resolved, p *quota.Pace) { p.RefreshedAt = now.Add(-11 * time.Minute).Format(time.RFC3339Nano) }, 601, false, false},
-		{"future", func(_ *Resolved, p *quota.Pace) { p.RefreshedAt = now.Add(time.Minute).Format(time.RFC3339Nano) }, 601, false, false},
-		{"failed-old-A-for-B", func(r *Resolved, p *quota.Pace) { r.QuotaBinding.Account.Value = "B"; p.RefreshOutcome = "failed" }, 601, false, false},
-		{"mismatched", func(_ *Resolved, p *quota.Pace) { p.CacheIdentityMatch = "mismatched" }, 601, false, false},
-		{"unknown-match", func(_ *Resolved, p *quota.Pace) { p.CacheIdentityMatch = "unknown" }, 601, false, false},
-		{"missing-bound-window", func(_ *Resolved, p *quota.Pace) { p.Quotas = p.Quotas[:1] }, 601, false, false},
-		{"unknown-binding", func(r *Resolved, _ *quota.Pace) { r.QuotaBinding = nil }, 601, false, false},
-		{"unknown-reset", nil, 600, false, true},
-		{"expired-reset", func(_ *Resolved, p *quota.Pace) {
-			v := now.Add(-time.Minute).Format(time.RFC3339Nano)
-			p.Quotas[1].ResetsAt = &v
-		}, 601, false, false},
+		{"http://127.0.0.1:3425/v1", "zcode/GLM-5.3", "zcode"},
+		{"http://localhost:3425/v1", "cursor/auto", "cursor"},
+		{"http://127.0.0.1:3425", "claude/claude-sonnet-4-5", "claude"},
+		{"http://127.0.0.1:3425/v1", "cursor", ""},
+		{"http://127.0.0.1:3425/v1", "/auto", ""},
+		{"http://127.0.0.1:3426/v1", "zcode/GLM-5.3", ""},
+		{"https://127.0.0.1:3425/v1", "zcode/GLM-5.3", ""},
+		{"http://127.0.0.1.evil.cn:3425/v1", "zcode/GLM-5.3", ""},
+		{"", "opencode-go/glm-5.3", ""},
+		{"127.0.0.1:3425", "zcode/GLM-5.3", ""},
+	} {
+		r := Resolved{ID: "pi+" + tc.cliModel, CLIModel: tc.cliModel, Rules: Rules{Endpoint: tc.endpoint}}
+		b := MagpieBinding(r, "h1", quota.MagpieURL)
+		if got := ""; b != nil {
+			got = b.Provider
+			if !b.Valid(r, "h1") || b.Valid(r, "h3") {
+				t.Fatal("绑定只对本组合、本机器有效", b)
+			}
+			if got != tc.provider {
+				t.Fatalf("%s %s: %q", tc.endpoint, tc.cliModel, got)
+			}
+		} else if tc.provider != "" {
+			t.Fatalf("%s %s 应绑定 %s", tc.endpoint, tc.cliModel, tc.provider)
+		}
+		r2, _ := ResolveExecution(context.Background(), nil, r, "h1")
+		if (r2.QuotaBinding != nil) != (tc.provider != "") {
+			t.Fatal("缺省 ResolveExecution 应按端点与模型挂绑定", tc.endpoint, tc.cliModel, r2.QuotaBinding)
+		}
+	}
+	t.Setenv("ATRIUM_MAGPIE_URL", "http://127.0.0.1:4555/")
+	if r, _ := ResolveExecution(context.Background(), nil, viaMagpie("zcode/GLM-5.3"), "h1"); r.QuotaBinding != nil {
+		t.Fatal("ATRIUM_MAGPIE_URL 改了网关，缺省地址的端点不再算经 magpie")
+	}
+	r := viaMagpie("zcode/GLM-5.3")
+	r.Rules.Endpoint = "http://localhost:4555/v1"
+	if r, _ = ResolveExecution(context.Background(), nil, r, "h1"); r.QuotaBinding == nil || r.QuotaBinding.Provider != "zcode" {
+		t.Fatal("端点与 ATRIUM_MAGPIE_URL 同一地址应绑定", r.QuotaBinding)
+	}
+}
+
+// 「窗口将满」：经 magpie 的组合按那台机器的读数避让；直连与别的机器额度未知，不连坐。
+func TestExecutionQuotaMagpie(t *testing.T) {
+	t.Setenv("ATRIUM_MAGPIE_URL", "")
+	now := time.Now().UnixMilli()
+	reading := func(host string, used float64) quota.Stored {
+		return quota.Stored{Host: host, Reading: quota.Reading{Account: quota.MagpieAccount, OK: true, ReadAt: now,
+			Plans: []quota.MagpiePlan{{Provider: "cursor", Plan: "Pro", Windows: []quota.Window{{ID: "Cursor models", Used: used, ResetsAt: now + 3600_000}}}}}}
+	}
+	via := viaMagpie("cursor/auto")
+	direct := Resolved{ID: "cursor+auto", Spec: Spec{Tool: "cursor", Model: "auto"}, CLIModel: "auto"}
+	for _, tc := range []struct {
+		name string
+		r    Resolved
+		host string
+		rows []quota.Stored
+		stop bool
+	}{
+		{"full", via, "h1", []quota.Stored{reading("h1", 92)}, true},
+		{"room", via, "h1", []quota.Stored{reading("h1", 40)}, false},
+		{"other-host-unknown", via, "h3", []quota.Stored{reading("h1", 92)}, false},
+		{"other-host-own-reading", via, "h3", []quota.Stored{reading("h1", 40), reading("h3", 95)}, true},
+		{"direct-not-bound", direct, "h1", []quota.Stored{reading("h1", 92)}, false},
+		{"no-binding", via, "h1", []quota.Stored{reading("h1", 92)}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			r := Resolved{ID: "pi+actual/a", Spec: Spec{Tool: "pi", Model: "actual/a"}, QuotaBinding: &ExecutionBinding{Worker: "pi+actual/a", Host: quota.LocalHost, Provider: "actual", Card: "card", Source: evidence, Account: id, WindowIDs: []string{"week", "month"}}}
-			p := quota.Pace{Account: "card", RefreshedAt: now.Format(time.RFC3339Nano), SourceFacts: quota.SourceFacts{AccountIdentity: &id, CacheIdentityMatch: "matched", DataQuality: "cache", Quotas: []quota.SourceWindow{
-				{ID: "week", UsedPercent: ptr(25), LimitValue: ptr(1000), UsedValue: ptr(200), Unit: &unit, SourceNote: &evidence, Format: "count"},
-				{ID: "month", UsedPercent: ptr(25), Format: "percent"},
-			}}}
-			if tc.change != nil {
-				tc.change(&r, &p)
+			r := tc.r
+			if tc.name != "no-binding" {
+				r, _ = ResolveExecution(context.Background(), nil, r, tc.host)
 			}
-			a := Availability{Now: now.UnixMilli(), Reserve: 20, Sources: []quota.Pace{p}}
-			sp, why := a.CheckResolved(r, quota.LocalHost, tc.need)
-			if why != "" || (sp.Stop != "") != tc.stop || (len(sp.TokenWindows) > 0) != tc.capacity {
-				t.Fatalf("sp=%+v why=%s want stop=%v capacity=%v", sp, why, tc.stop, tc.capacity)
+			a := Availability{Now: now, Reserve: 20, Readings: tc.rows}
+			sp, why := a.CheckResolved(r, tc.host, 1000)
+			if why != "" || (sp.Stop != "") != tc.stop || len(sp.TokenWindows) != 0 {
+				t.Fatalf("sp=%+v why=%s", sp, why)
 			}
-			if tc.name == "fits" {
-				c := sp.TokenWindows[0]
-				if c.Total != 1000 || c.Used != 200 || c.Remaining != 800 || c.Available != 600 {
-					t.Fatal(c)
-				}
+			if tc.stop && !strings.Contains(sp.Stop, "Cursor models 已用") {
+				t.Fatal(sp.Stop)
 			}
-			t.Logf("expected stop=%v capacity=%v; actual stop=%q token_windows=%d", tc.stop, tc.capacity, sp.Stop, len(sp.TokenWindows))
+			if tc.stop && a.QuotaReset(r.QuotaBinding) != now+3600_000 {
+				t.Fatal("恢复时刻应取 magpie 窗口的重置时间")
+			}
 		})
+	}
+	a := Availability{Now: now, Reserve: 20, Readings: []quota.Stored{reading("h1", 92)}, Marks: []Mark{{Tool: "pi", Model: via.Spec.Model, Host: "h1", Kind: SignalQuota, Until: now + 1000, Reason: "额度用尽"}}}
+	r, _ := ResolveExecution(context.Background(), nil, via, "h1")
+	if _, why := a.CheckResolved(r, "h1"); !strings.Contains(why, "额度用尽") {
+		t.Fatal("标记仍先于读数判定", why)
+	}
+	if a.QuotaReset(nil) != 0 {
+		t.Fatal("没有绑定不给恢复时刻")
 	}
 }
 
 func TestExecutionSamePool(t *testing.T) {
-	a := ExecutionBinding{Provider: "actual", Source: "execution proof", Account: quota.AccountIdentity{Kind: "accountHash", Value: "A", Source: "account+organization"}, Scope: &quota.SharedScope{ID: "pool", Source: "synthetic pool proof", WindowIDs: []string{"week"}}, WindowIDs: []string{"week"}}
+	a := ExecutionBinding{Worker: "pi+cursor/auto", Host: "h1", Provider: "cursor"}
 	for _, tc := range []struct {
 		name   string
 		change func(*ExecutionBinding)
 		want   bool
 	}{
-		{"same-pool-other-model", func(b *ExecutionBinding) { b.Worker = "other/model" }, true},
-		{"different-account", func(b *ExecutionBinding) { b.Account.Value = "B" }, false},
-		{"unknown-pool", func(b *ExecutionBinding) { b.Scope = nil }, false},
-		{"different-boundary", func(b *ExecutionBinding) { b.Account.Source = "other" }, false},
-		{"different-window", func(b *ExecutionBinding) { b.WindowIDs = []string{"month"} }, false},
+		{"same-provider-other-model", func(b *ExecutionBinding) { b.Worker = "pi+cursor/gpt-5" }, true},
+		{"other-provider", func(b *ExecutionBinding) { b.Provider = "zai" }, false},
+		{"other-host", func(b *ExecutionBinding) { b.Host = "h3" }, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			b := a
@@ -90,5 +129,8 @@ func TestExecutionSamePool(t *testing.T) {
 				t.Fatalf("got %v want %v", got, tc.want)
 			}
 		})
+	}
+	if SamePool(&a, nil) || SamePool(nil, &a) {
+		t.Fatal("没有绑定不同池")
 	}
 }

@@ -9,25 +9,19 @@ import (
 )
 
 // Availability 是本轮缓存来源与标记快照，不读取凭据或云端。
-// Readings 保留机器/provider 来源，不代表已关联当前执行组合的账号或共享池。
+// Readings 保留机器/provider 来源；只有 magpie 读数经执行绑定参与判定，其余不代表当前执行组合的账号或共享池。
 // t865 在 Launcher 注入侧复用；org 无需依赖 workers。
 type Availability struct {
 	Readings []quota.Stored
-	// Sources 仅属于 quota.LocalHost；含完整来源事实，不证明执行组合绑定。
-	Sources []quota.Pace
-	Marks   []Mark
-	Reserve int
-	Now     int64
+	Marks    []Mark
+	Reserve  int
+	Now      int64
 }
 
 func LoadAvailability(ctx context.Context, env *app.Env) (Availability, error) {
 	a := Availability{Now: store.Now()}
 	var err error
 	a.Readings, err = quota.Cached(ctx, env.DB)
-	if err != nil {
-		return a, err
-	}
-	a.Sources, err = quota.CachedSources(ctx, env.DB, a.Now)
 	if err != nil {
 		return a, err
 	}
@@ -39,8 +33,8 @@ func LoadAvailability(ctx context.Context, env *app.Env) (Availability, error) {
 	return a, err
 }
 
-// CheckResolved 共用 marks 与本轮已证实的执行绑定；没有绑定则额度未知。
-// 对绑定来源逐窗复用 SpareOf/Reserve，token需求仅对明确分母的窗口生效。
+// CheckResolved 共用 marks 与本轮执行绑定；没有绑定（直连）或那台机器没有新鲜 magpie 读数则额度未知。
+// 有窗口到了给用户留的份额就不派（quota.MagpieSpare）；token 需求只对有 token 窗口的读数生效，magpie 不给。
 // t865 可在 Launcher 注入侧调用 ResolveExecution/LoadAvailability/CheckResolved。
 func (a Availability) CheckResolved(r Resolved, host string, tokens ...int64) (quota.Spare, string) {
 	sp, why := a.Check(r.Spec, host)

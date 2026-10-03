@@ -1,6 +1,7 @@
 package hosts
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"fmt"
@@ -389,7 +390,12 @@ func Pick(ctx context.Context, env *app.Env, need Need, pinned string) (Choice, 
 	var cands []Candidate
 	for _, h := range list {
 		c := candidate(h, busy[h.ID], pause.Paused(active, pause.Scope{Host: h.ID}), theHub.isPolling(h.ID), now)
-		_, c.Unavailable = available.CheckResolved(w, h.ID)
+		r, err := workers.ResolveExecution(ctx, env, w, h.ID)
+		if err != nil {
+			return Choice{}, err
+		}
+		sp, why := available.CheckResolved(r, h.ID)
+		c.Unavailable = cmp.Or(why, sp.Stop)
 		cands = append(cands, c)
 	}
 	return Choose(cands, need, pinned), nil

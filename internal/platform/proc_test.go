@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 )
@@ -45,6 +46,45 @@ func TestStartDetachedAndKillTree(t *testing.T) {
 	}
 	if _, err := Start(Spec{Path: "/bin/sh"}); err == nil {
 		t.Fatal("不给 Env 应拒绝")
+	}
+}
+
+// 工作目录已被删除时报工作目录。Detached（设了 SysProcAttr）时 Go 不预先查目录，原样报的是
+// 「fork/exec <程序>: no such file or directory」，像是程序不存在（t946 卡在 gate，t962）。
+func TestStartReportsMissingDir(t *testing.T) {
+	for _, detached := range []bool{false, true} {
+		dir := t.TempDir()
+		script := filepath.Join(dir, "ok")
+		if err := os.WriteFile(script, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		spec, err := Script(script, WorkerEnv(runtime.GOOS, EnvMap(os.Environ())))
+		if err != nil {
+			t.Fatal(err)
+		}
+		spec.Detached = detached
+
+		spec.Dir = dir
+		cmd, err := Start(spec)
+		if err != nil {
+			t.Fatalf("detached=%v：目录存在时应能拉起：%v", detached, err)
+		}
+		if err := cmd.Wait(); err != nil {
+			t.Fatal(err)
+		}
+
+		missing := filepath.Join(dir, "gone")
+		spec.Dir = missing
+		_, err = Start(spec)
+		if err == nil || !strings.Contains(err.Error(), "工作目录") || !strings.Contains(err.Error(), missing) {
+			t.Fatalf("detached=%v：目录不存在应报工作目录 %s，实际：%v", detached, missing, err)
+		}
+
+		spec.Dir, spec.Path = dir, filepath.Join(dir, "no-such-program")
+		_, err = Start(spec)
+		if err == nil || strings.Contains(err.Error(), "工作目录") {
+			t.Fatalf("detached=%v：目录存在而程序不存在应原样报错，实际：%v", detached, err)
+		}
 	}
 }
 

@@ -76,7 +76,12 @@ func TestStartReportsMissingDir(t *testing.T) {
 		missing := filepath.Join(dir, "gone")
 		spec.Dir = missing
 		_, err = Start(spec)
-		if err == nil || !strings.Contains(err.Error(), "工作目录") || !strings.Contains(err.Error(), missing) {
+		if runtime.GOOS == "windows" {
+			// Windows 报 ERROR_DIRECTORY（The directory name is invalid.），不属于 fs.ErrNotExist，原样返回。
+			if err == nil || strings.Contains(err.Error(), "工作目录") {
+				t.Fatalf("detached=%v：Windows 上目录不存在应原样报错，实际：%v", detached, err)
+			}
+		} else if err == nil || !strings.Contains(err.Error(), "工作目录") || !strings.Contains(err.Error(), missing) {
 			t.Fatalf("detached=%v：目录不存在应报工作目录 %s，实际：%v", detached, missing, err)
 		}
 

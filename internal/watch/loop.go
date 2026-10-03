@@ -312,11 +312,13 @@ func perform(ctx context.Context, env *app.Env, hk Hooks, t ledger.Task, f Facts
 		return nil
 	}
 	target := f.Owner
-	if h.Who == "u1" { // 等你验收：经秘书提醒
+	if h.Kind == "leader" || h.Kind == "secretary" {
+		target = h.Who
+	} else if h.Who == "u1" { // 等你验收：经秘书提醒
 		target = org.Secretary
 	}
 	if act == Escalate {
-		up, err := upOf(ctx, db, t.Org)
+		up, err := upOf(ctx, db, h.Who, t.Org)
 		if err != nil {
 			return err
 		}
@@ -328,10 +330,6 @@ func perform(ctx context.Context, env *app.Env, hk Hooks, t ledger.Task, f Facts
 // overdue 发一条到期事件；同一次等待同一轮只发一回。
 func overdue(ctx context.Context, db *store.DB, target, task, dept string, h Holder, lv int, now int64, title string) error {
 	key := fmt.Sprintf("overdue:%s:%s:%s:%d:%d", task, h.Who, h.Role, h.Since, lv)
-	seen, err := events.Seen(ctx, db, target, key)
-	if err != nil || seen {
-		return err
-	}
 	next := h.Next
 	if next == "" && task != "" {
 		next = "atrium task show " + task
@@ -341,6 +339,11 @@ func overdue(ctx context.Context, db *store.DB, target, task, dept string, h Hol
 		body["title"] = title
 	}
 	return db.Tx(ctx, func(tx *sql.Tx) error {
+		// 键已包含 holder：转交不改变这次等待，且查重与写入必须同一事务。
+		seen, err := events.Seen(ctx, tx, "", key)
+		if err != nil || seen {
+			return err
+		}
 		return events.Emit(ctx, tx, events.Event{Kind: events.Overdue, Task: task, Dept: dept, Target: target, Key: key, Body: body})
 	})
 }

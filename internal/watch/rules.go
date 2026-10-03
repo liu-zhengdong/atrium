@@ -78,7 +78,7 @@ type Holder struct {
 // Facts 是判定当前等待对象需要的事实，由调用方从账本、组织、内存里取来。
 type Facts struct {
 	Task         ledger.Task
-	Owner        string            // 所属部门往上最近的负责人，没有是 secretary
+	Owner        string            // 实际处理负责人；没有则取部门负责人或 secretary；验收取部门负责人
 	Acceptor     string            // 等验收时部门的验收人（org.AcceptLeader、org.AcceptUser）；别的阶段不取
 	Deps         []ledger.DepState // 依赖（待派、排队的任务才取）
 	DepEnded     map[string]int64  // 已结束的依赖各自结束的时刻（待派的任务才取）

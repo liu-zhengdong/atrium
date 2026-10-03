@@ -65,6 +65,8 @@ func TestBuild(t *testing.T) {
 		{tool: "codex", in: Request{Prompt: "x", PromptFile: pf, Dir: dir, ComputerUse: []string{`mcp_servers={computer-use={command="cu"}}`}}, want: []string{"--ignore-user-config", "-C", dir, "-c", "-"}},
 		{tool: "opencode", in: in("p/m", "low"), want: []string{"run", "--format", "json", "--auto", "-m", "p/m", "--variant", "low"}},
 		{tool: "kimi", in: in("k2", ""), want: []string{"-p", "请先完整读取任务说明文件 " + pf + "，然后按文件内容执行。", "--output-format", "stream-json", "-m", "k2"}},
+		{tool: "command-code", in: in("deepseek-v4.1-flash", ""), want: []string{"--print", "--output-format", "json", "请先完整读取任务说明文件 " + pf + "，然后按文件内容执行。", "--model", "deepseek-v4.1-flash"}},
+		{tool: "command-code", in: in("", "high"), bad: "不接受思考强度"},
 		{tool: "kimi", in: in("", "high"), bad: "不接受思考强度"},
 		{tool: "grok", in: in("g", "low"), want: []string{"--prompt-file", pf, "--output-format", "streaming-messages-json", "-m", "g", "--reasoning-effort", "low", "--always-approve", "--cwd", dir}},
 		{tool: "pi", in: in("opencode-go/glm-5.3-flash", "high"), want: []string{"-p", "--mode", "json", "-na", "--model", "opencode-go/glm-5.3-flash", "--thinking", "high"}},
@@ -581,6 +583,10 @@ func TestEnded(t *testing.T) {
 	}
 	if r := pi.LastReply(`{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"审阅结论：通过"}]}}` + "\n" + `{"type":"agent_settled"}`); r != "审阅结论：通过" {
 		t.Errorf("pi 最后回复：%q", r)
+	}
+	cc, _ := Builtin("command-code")
+	if r := cc.LastReply(`{"type":"assistant","message":{"content":[{"type":"text","text":"中间轮"}]}}` + "\n" + `{"type":"result","subtype":"success","finalText":"交付结论：完成\n审阅结论：通过"}`); r != "交付结论：完成\n审阅结论：通过" {
+		t.Errorf("command-code 最后回复（收尾行 finalText）：%q", r)
 	}
 }
 

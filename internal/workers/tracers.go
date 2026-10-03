@@ -11,6 +11,48 @@ import (
 // 各工具的日志解析（reader）：挂在各自的 Driver.read 上。每个 reader 把认得的事件都列出来（用不上的也列，返回 true），
 // 列表以外的返回 false，经过里记成「没认出」——工具改了格式看得见。样本在 testdata/<工具>-*.jsonl。
 
+// command-code --print --output-format json：逐行 JSON，过程事件包在 {"type":"event","event":{…}} 里（引擎同 pi：
+// run_start 带会话 id，message_end 带这轮的话，tool_queued/tool_completed 是一次调用与结果，delta 与 *_start/_end 是过程信号），
+// 收尾一行 type=result 带 usage（累计值，只取这份）与最终正文。花费读数没有，只记 token；
+// tool_completed 没有失败标记、收尾行没有 is_error，失败形状等首件真活的样本再补。
+func readCommandCode(p *Parser, e event, _ string) bool {
+	switch e.str("type") {
+	case "event":
+	case "result":
+		us := e.obj("usage")
+		p.addUsage(Usage{Tokens: Tokens{Input: number(us, "inputTokens"), Output: number(us, "outputTokens"), CacheRead: number(us, "cacheReadTokens"), CacheWrite: number(us, "cacheWriteTokens")}})
+		return true
+	default:
+		return false
+	}
+	ie := event(asMap(e["event"]))
+	switch ie.str("type") {
+	case "run_start":
+		p.t.Session = ie.str("sessionId")
+	case "model_request_end":
+		if m := ie.str("model"); m != "" {
+			p.t.Model = m
+		}
+	case "message_end":
+		for _, c := range asList(ie["content"]) {
+			m := event(asMap(c))
+			if m.str("type") == "text" && m.str("text") != "" {
+				p.say(m.str("text"))
+			}
+		}
+	case "tool_queued":
+		id, name := ie.str("toolCallId"), ie.str("toolName")
+		cmd := ie.obj("input").str("command")
+		if cmd == "" {
+			cmd = p.step(name, ie.obj("input"))
+		}
+		p.call(id, cmd)
+	case "tool_completed":
+		p.result(ie.str("toolCallId"), 0, toolText(ie["result"]))
+	}
+	return true
+}
+
 // claude -p --output-format stream-json：assistant 的 text 是它说的话、tool_use 是调用，user 的 tool_result 是结果，result 收尾。
 func readClaude(p *Parser, e event, _ string) bool {
 	if e["parent_tool_use_id"] != nil {

@@ -95,9 +95,14 @@ func Script(script string, env map[string]string) (Spec, error) {
 
 // OpenLog 打开给子进程当标准输出的日志文件，接着末尾写。不用 O_APPEND：Windows 上那样打开的句柄只有追加权限，
 // Git for Windows 的 sh 等 MSYS 程序往里写会失败（exit 1、一行输出都没有）。同一文件同时只该有一个子进程在写。
+// 打开时超过 8MiB 则就地截尾到最近 2MiB；单次运行中不轮转。
 func OpenLog(path string) (*os.File, error) {
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY, 0o600)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
+		return nil, err
+	}
+	if err := trimLog(f); err != nil {
+		f.Close()
 		return nil, err
 	}
 	if _, err := f.Seek(0, io.SeekEnd); err != nil {

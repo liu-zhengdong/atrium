@@ -1,6 +1,6 @@
 // Package quota 是额度：自带读取 Claude Code、Codex、OpenCode Go 的用量（读本机已登录凭据调供应商用量接口，只读），
 // 其余账号本机有 OpenQuota 就用 `openquota pace --json` 补；远程机器上报的读数按机器/provider 保留。
-// 读取只在服务的后台循环里做（loop），读数存 quota_cache；分派任务、网页、命令都只取存下的读数（Last）。给用户留的份额（缺省 20%）扣掉后才算富余。「工具+模型@机器」撞了额度的标记在 workers。
+// 读取只在服务的后台循环里做（loop），读数存 quota_cache；分派任务、网页、命令都只取存下的读数（Last）。富余 = 周期已过 − 已用，不扣给用户留的份额（缺省 20%）；已用到 100 − 留给用户的份额 就不再派（SpareOf）。「工具+模型@机器」撞了额度的标记在 workers。
 //
 // Spares/Last 仅展示摘要，不作跨机器选择依据。给 hosts：Local（代理读本机）、Record（服务收远程读数）。
 package quota
@@ -313,7 +313,7 @@ func Last(ctx context.Context, env *app.Env) (Overview, error) {
 	return ov, nil
 }
 
-// Spares 给分派任务：每个账号的富余（已扣给用户留的份额）。
+// Spares 给分派任务：每个账号的富余与能不能派（见 SpareOf）。
 func Spares(ctx context.Context, env *app.Env) (map[string]Spare, error) {
 	ov, err := Last(ctx, env)
 	if err != nil {
@@ -375,7 +375,7 @@ func Commands(t *cli.Table) {
 		}})
 	t.Add(cli.Command{Path: "quota set", Summary: "改额度设置（只有用户能改）",
 		Flags: []cli.Flag{
-			{Name: "reserve", Value: "百分比", Help: "给用户留的份额（缺省 20），分派任务扣掉后才算富余"},
+			{Name: "reserve", Value: "百分比", Help: "给用户留的份额（缺省 20），账号已用到 100 减它就不再派任务"},
 		},
 		Run: func(c *cli.Ctx) error {
 			if err := c.MaxArgs(0); err != nil {

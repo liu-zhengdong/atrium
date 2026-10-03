@@ -11,28 +11,37 @@ const pause = ms => new Promise(r => setTimeout(r, ms));
  if (!info) throw Error('隔离网页未就绪');
  const shots=path.join(dir,'成品'); await fs.mkdir(shots,{recursive:true});
  const api = async p => { const r=await fetch(info.base+'/ui/api/'+p); assert.equal(r.status,200); const d=await r.json();assert.equal(d.ok,true);return d.result; };
- const browser=await chromium.launch({headless:true});
+ const browser=await chromium.launch({headless:true, ...(process.env.ATRIUM_TEST_CHROMIUM ? {executablePath:process.env.ATRIUM_TEST_CHROMIUM} : {})});
  const report=[]; const errors=[];
  try {
- const context=await browser.newContext({viewport:{width:1280,height:900},deviceScaleFactor:2});
- const page=await context.newPage(); page.on('pageerror',e=>errors.push(e.message));
+ const context=await browser.newContext({viewport:{width:1280,height:900},deviceScaleFactor:2,reducedMotion:"reduce"});
+ const page=await context.newPage(); page.on('pageerror',e=>errors.push(e.message)); page.on('console',m=>{if(m.type()==='error') errors.push(m.text());});
  const read = async (hash,selector,expected) => {
   await page.goto(info.base+'/'+hash); await page.locator(selector).first().waitFor();
   await page.waitForFunction(({selector,expected})=>document.querySelector(selector)?.textContent.includes(expected),{selector,expected});
-  await pause(300);
+  await page.locator(selector).first().waitFor({state:"visible"}); await pause(300);
  };
  const nav=await api('nav'); assert.equal(nav.names.a1,'负责人1');assert.equal(nav.names.a10,'负责人10');
  const schema = d => Array.isArray(d) ? ['array',...d.map(schema)] : d && typeof d==='object' ? Object.fromEntries(Object.entries(d).map(([k,v])=>[k,schema(v)])) : typeof d;
  const paths=['nav','today','dept/'+info.dept,'task/'+info.task,'task/'+info.draft,'task/'+info.unknown,'choice/'+info.choice,'schedule/'+info.schedule];
  const before=await Promise.all(paths.map(api));
+	const machine = async () => { const r=await fetch(info.base+'/api/tasks/'+info.task,{headers:{Authorization:'Bearer isolated-test'}}); assert.equal(r.status,200); return (await r.json()).result; };
+	const machineBefore=await machine();
+	assert.equal(machineBefore.parties.by,'a1'); assert.equal(machineBefore.parties.owner,'a10');
+	assert.equal(machineBefore.history.at(-1).actor,'a1'); assert.equal(machineBefore.history.at(-1).body,'a1 历史正文<&保持');
+	assert.equal(machineBefore.party_labels,undefined); assert.equal(machineBefore.owner_label,undefined);
  assert.equal(before[3].holder,'负责人10（a10）：待分派');
  assert.equal(before[4].by_name,'负责人1（a1）');assert.equal(before[5].by_name,'未登记负责人（a99）');
  const routes=[
   ['部门','#'+info.dept,'.lead','a10'],
   ['负责人','#'+info.dept+'/a10','#drawer h3','a10'],
   ['等待','#'+info.dept+'/'+info.task,'.holder','a10'],
+  ['处理人','#'+info.dept,'[data-task="'+info.task+'"] .owner','a10'],
+  ['今天处理人','#today','[data-task="'+info.running+'"] .owner','a10'],
+  ['经历','#'+info.dept+'/'+info.task,'.history','a1'],
   ['来源','#'+info.dept+'/'+info.draft,'.facts','a1'],
   ['未登记','#'+info.dept+'/'+info.unknown,'.facts','a99'],
+  ['已删除','#'+info.dept+'/'+info.deleted,'.facts','a2'],
   ['选项','#today/'+info.choice,'#drawer .sub-t','a1'],
   ['定时','#'+info.dept+'/'+info.schedule,'#drawer .sub-t','a10'],
   ['规矩','#'+info.dept+'/rules','.rule','a1'],
@@ -49,6 +58,7 @@ const pause = ms => new Promise(r => setTimeout(r, ms));
    await page.waitForFunction(()=>document.querySelector('#drawer h3')?.textContent.includes('非常长名字（a10）'));
    assert.ok((await page.locator('.lead').textContent()).includes('非常长名字（a10）'));
    const after=await Promise.all(paths.map(api));
+	assert.deepEqual(await machine(),machineBefore);
    assert.deepEqual(after.map(schema),before.map(schema));
    assert.equal(after[4].by_lead,before[4].by_lead);
    assert.equal(after[3].task.detail,'a1 历史原文不能被改名');
@@ -58,7 +68,7 @@ const pause = ms => new Promise(r => setTimeout(r, ms));
    await page.setViewportSize({width,height:900});await page.emulateMedia({colorScheme:theme});
    for(const [label,hash,selector,id] of routes) {
     const names=(await api('nav')).names;
-    const expected=id==='a99'?'未登记负责人（a99）':names[id]+'（'+id+'）';
+    const expected=['a99','a2'].includes(id)?'未登记负责人（'+id+'）':names[id]+'（'+id+'）';
     await read(hash,selector,expected);
     const overflow=await page.evaluate(()=> {
      const els=[document.documentElement,document.querySelector('#scroll'),...(document.querySelector('#island').classList.contains('open')?[document.querySelector('.dbody')]:[])];
@@ -75,9 +85,16 @@ const pause = ms => new Promise(r => setTimeout(r, ms));
     });
     assert.deepEqual(splitIDs,[],`${mode}/${width}/${theme}/${label} 括号短号拆行`);
     assert.deepEqual(overflow,[],`${mode}/${width}/${theme}/${label} 横向溢出`);
+    if(label==='经历') await page.locator('.history summary').click();
+    if(label==='处理人' || label==='今天处理人') {
+     await page.locator(selector+' a').click();
+     await page.waitForFunction(()=>location.hash.endsWith('/a10'));
+     await page.waitForFunction(()=>document.querySelector('#drawer h3')?.textContent.includes('（a10）'));
+     await read(hash,selector,expected);
+    }
     if(label==='来源') {
-     const href=await page.locator('.facts a').getAttribute('href');assert.equal(href,'#'+info.root+'/a1');
-     await page.locator('.facts a').click();await page.waitForFunction(()=>document.querySelector('#drawer h3')?.textContent.includes('（a1）'));
+     const href=await page.locator('.facts a').last().getAttribute('href');assert.equal(href,'#'+info.root+'/a1');
+     await page.locator('.facts a').last().click();await page.waitForFunction(()=>document.querySelector('#drawer h3')?.textContent.includes('（a1）'));
     }
     if(label==='规矩') assert.ok((await page.locator('#page').textContent()).includes('a1 历史原文'));
     if(label==='资料') { assert.equal((await page.locator('#viewer').textContent()).trim(),'a1 历史原文保持');assert.equal(await page.locator('#drawer .sub-t script').count(),0); }
@@ -85,7 +102,7 @@ const pause = ms => new Promise(r => setTimeout(r, ms));
     if(label==='部门') { await page.locator('.lead').click();await page.waitForFunction(()=>location.hash.endsWith('/a10'));await page.waitForFunction(()=>document.querySelector('#drawer h3')?.textContent.includes('（a10）')); }
     if(label==='部门') await read(hash,selector,expected);
     report.push(`${mode}/${width}/${theme}/${label}:通过`);
-    if(['部门','等待','规矩','资料','上报'].includes(label)) await page.screenshot({path:path.join(shots,`${mode}-${width}-${theme}-${label}.png`)});
+    if(['等待','经历','处理人','今天处理人'].includes(label)) await page.screenshot({path:path.join(shots,`${mode}-${width}-${theme}-${label}.png`)});
    }
   }
  }

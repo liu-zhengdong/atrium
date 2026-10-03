@@ -186,6 +186,10 @@ func TestBuildPrompt(t *testing.T) {
 		strings.Contains(p, "material add") || !strings.Contains(p, "交不了资料") || strings.Contains(p, "## 技能") {
 		t.Errorf("没有仓库的提示词：\n%s", p)
 	}
+	p = BuildPrompt(PromptInput{Task: "t5", Title: "审阅 t1", Review: true})
+	if strings.Contains(p, "交付结论") {
+		t.Errorf("审阅任务的提示词不该附交付结论：\n%s", p)
+	}
 	if r := ResumePrompt([]string{"改用 B"}); !strings.Contains(r, "- 改用 B") || !strings.Contains(r, langRule) {
 		t.Errorf("继续的补充：\n%s", r)
 	}

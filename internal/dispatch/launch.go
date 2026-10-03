@@ -96,6 +96,10 @@ func (d *dispatcher) launch(ctx context.Context, t ledger.Task, o launchOpts) er
 	if in.Bounces, err = bounceNotes(ctx, db, t.ID); err != nil {
 		return err
 	}
+	// 审阅任务（gates 建的）提示词不附交付结论那条：它的最后一行是审阅结论。
+	if _, in.Review, err = gates.Last(ctx, db, t.ID, gates.KindReviewOf); err != nil {
+		return err
+	}
 	if in.Guide, err = repoGuide(data, t.Repo, dir); err != nil {
 		return err
 	}

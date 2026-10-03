@@ -25,6 +25,7 @@ type PromptInput struct {
 	Dir     string   // 工作地点（本机文件夹，原地干）；与 Repo 只有一个
 	Origin  string   // 本机仓库 origin 的地址（gates.Origin；没有为空），和 Repo 一起定交付方式
 	Branch  string
+	Review  bool   // 审阅任务：提示词不附交付结论那条（gates.PromptRules）
 	Guide   string // 目标仓库自己的约定（.agents/README.md 正文）；没有就空
 }
 
@@ -85,7 +86,7 @@ func BuildPrompt(in PromptInput) string {
 		fmt.Fprintf(&b, "\n## 这个仓库的约定（.agents/README.md）\n\n%s\n", g)
 	}
 	section("上次交付被交回的原因（先解决这些）", in.Bounces)
-	section("通用约束", append(append(gates.PromptRules(in.Repo, in.Dir, in.Origin, in.Branch), commonRules...), showRule(in.Org)))
+	section("通用约束", append(append(gates.PromptRules(in.Repo, in.Dir, in.Origin, in.Branch, in.Review), commonRules...), showRule(in.Org)))
 	return b.String()
 }
 

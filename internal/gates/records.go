@@ -17,7 +17,7 @@ import (
 //	worktree        dispatch 拉起执行者时记 Worktree：{"host":"hN","dir":"<那台上的绝对路径>"}；交付检查按 host 查事实
 //	risk            task run --risk 记：high / medium / low（没记按 low）
 //	result          执行者退出时记它最后的回复原文；审阅结论从这里读
-//	worker_require  gates 建审阅任务时记（Requirement 的 JSON）；dispatch 挑执行者时按它排除
+//	worker_require  gates 建审阅任务时记（Requirement 的 JSON）；dispatch 挑执行者、点名入队时按它排除
 const (
 	KindWorktree = "worktree"
 	KindRisk     = "risk"

@@ -2,6 +2,7 @@ package gates_test
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"log/slog"
 	"os"
@@ -347,6 +348,7 @@ func TestReview(t *testing.T) {
 		{"打回", "codex+gpt", "a.go:1 缺测试\n审阅结论：打回", ledger.Queued, ""},
 		{"没写结论", "codex+gpt", "看过了", ledger.Blocked, ledger.StageReview},
 		{"审阅者与原执行者同工具不算", "claude+sonnet", "审阅结论：通过", ledger.Blocked, ledger.StageReview},
+		{"审阅者拉起过原任务不算", "codex+gpt", "审阅结论：通过", ledger.Blocked, ledger.StageReview},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -355,6 +357,14 @@ func TestReview(t *testing.T) {
 			e.gh.Branch(dir, "t1-work", map[string]string{"a.go": "package a\n"})
 			e.gh.Open("t1-work", goodBody)
 			task := e.delivered("做事", "claude+haiku", dir)
+			first := "kimi+k2"
+			if c.name == "审阅者拉起过原任务不算" {
+				first = c.reviewer
+			}
+			for _, w := range []string{first, "claude+haiku"} { // 中途换过人：先别人后 claude
+				raw, _ := json.Marshal(workers.Run{Worker: w, Why: workers.WhyFirst})
+				ledger.Record(e.ctx, e.db, task.ID, workers.RunKind, "dispatch", string(raw))
+			}
 			detail := "分批写内容，保留后续批次表"
 			if _, err := e.db.ExecContext(e.ctx, `UPDATE tasks SET detail = ? WHERE id = ?`, detail, task.ID); err != nil {
 				t.Fatal(err)
@@ -376,7 +386,7 @@ func TestReview(t *testing.T) {
 				t.Fatalf("审阅任务遗漏原说明、补充说明或优先级：%s", rt.Detail)
 			}
 			req, _, _ := gates.Last(e.ctx, e.db, rt.ID, gates.KindRequire)
-			if !strings.Contains(req, `"not_tool":"claude"`) || !strings.Contains(req, `"min_trust":"medium"`) {
+			if !strings.Contains(req, `"not_tool":"claude"`) || !strings.Contains(req, `"min_trust":"medium"`) || !strings.Contains(req, `"not_workers":["`+first+`","claude+haiku"]`) {
 				t.Fatalf("审阅者要求不对：%s", req)
 			}
 			e.sweep() // 审阅任务还在排队：原任务不动，也不重复建
@@ -404,6 +414,9 @@ func TestReview(t *testing.T) {
 			}
 			if got := e.get(task.ID); got.Status != c.status || got.Stage != c.stage {
 				t.Fatalf("原任务 %s/%s，期望 %s/%s：%s", got.Status, got.Stage, c.status, c.stage, e.lastNote(task.ID))
+			}
+			if first == c.reviewer && !strings.Contains(e.lastNote(task.ID), c.reviewer+" "+gates.RecusedWhy) {
+				t.Fatalf("受阻理由应写明回避：%s", e.lastNote(task.ID))
 			}
 		})
 	}

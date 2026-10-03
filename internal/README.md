@@ -8,7 +8,7 @@ Go 代码怎么分包、包之间怎么调用、并行开发时各自改哪里�
 2. **接入不改 `cmd/atrium/main.go`**：每个包导出 `Module() app.Module`，模块列表已为全部包排好位置。你只在自己包里填 `Commands`、`Routes`、`Run`。
 3. **命令注册在自己包里**：`Commands(t *cli.Table)` 里 `t.Group(...)` 声明自己的组（每组只声明一次），`t.Add(...)` 加命令。`task` 组由 ledger 声明，别的包直接往里加 `task run` 之类，不再声明。
 4. **共享文件只有三个**，改时只动自己那一段，合并冲突按段解决：
-   - `internal/store/schema.sql`：每张表一段，归属见下表。开发期不做迁移，改表就改这里，本地删库重建。
+   - `internal/store/schema.sql`：每张表一段，归属见下表。表定义只在这里维护。store.Open 仅对已确认的旧 choices CHECK 做保留数据的定向事务升级；未知结构报错停止，不引入通用迁移。
    - `go.mod` / `go.sum`：依赖使用标准库、`modernc.org/sqlite`、`gopkg.in/yaml.v3`（档案）、`github.com/pelletier/go-toml/v2`（执行者工具配置）。冲突时 `go mod tidy`。
    - `scripts/smoke.sh`：主路径冒烟，加步骤只往末尾 `stop` 之前追加自己的一段。
 5. **快检查**：`.agents/check`（gofmt、vet 与 Windows/Linux 交叉编译、build、全部测试、`--help` 冒烟）。端到端：`scripts/smoke.sh`。单包测试超过 30 秒在 PR 里说明。
@@ -141,7 +141,7 @@ type Module struct {
 - 负责人唤醒：`org.Overview(ctx, q, data, dept)` 总览全文；`org.Materials(…, MaterialFilter{Org})` 细节清单。
 - 删部门（`org edit oN --delete [--into oM]`，`org/delete.go`）：存了部门编号的每张表都登记在那里——并入时挪走（`deptMovables`）、挡着要人先处理（`deptBlockers`）或随部门删掉（`DeleteDept` 的语句表）三者之一。新加这类表时同时登记，否则删部门会留下悬空引用。
 - 权限：`org.CheckReach(ctx, q, actor, dept)`（用户都行；负责人只到自己部门及下属）；`org.CheckUser(actor, 做什么)`（拍板、凭据只有用户）。
-- 交付检查（gates）：没有仓库也没有工作地点的任务读工作目录根的 `choice.json`（远程经代理），交付检查用 `agenda.ParseChoice` 核对（不合法按交付检查未通过交回），应用时 `agenda.Settle(ctx, db, task, raw)` 登记成选项单。
+- 交付检查（gates）：没有仓库也没有工作地点的任务读工作目录根的 `choice.json`（远程经代理），交付检查用 `agenda.ParseChoice` 核对（不合法按交付检查未通过交回），应用时 `agenda.Settle(ctx, db, data, task, raw)` 登记成选项单。它与 CLI 经 `AddChoice` 在分配短号、写单和发事件前共用依据校验；每项须有 `mN/相对路径`，使用实例资料目录，经与 `material ls` 相同的 `Material.ReadFile` 读取实际文件，不只查元数据。
 - 验收人：`org.Acceptor(ctx, q, dept)` → `auto`／`leader`／`user` 与设它的部门；`org.MayAccept(actor, who)`：用户与秘书都能判，负责人不能代用户验收。
 - 负责人的执行者组合与 `task run --worker` 同一种写法；登记时经 `org.CheckWorker`（workers 接上的 `Resolve`）核对。
 - dispatch 装配时设 `agenda.Enqueue = func(ctx, env, task, actor) error`（即 task run）；定时任务每轮建任务后调它。挑机器时经 `agenda.LocalOnly(ctx, q, task)` 判这一轮能不能派远程（体验巡检要开只读网页，只派本机）。

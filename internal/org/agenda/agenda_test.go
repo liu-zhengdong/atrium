@@ -15,6 +15,7 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/api"
 	"github.com/liu-zhengdong/atrium/internal/app"
 	"github.com/liu-zhengdong/atrium/internal/cli"
+	"github.com/liu-zhengdong/atrium/internal/config"
 	"github.com/liu-zhengdong/atrium/internal/ledger"
 	"github.com/liu-zhengdong/atrium/internal/org"
 	"github.com/liu-zhengdong/atrium/internal/pause"
@@ -143,7 +144,7 @@ func TestCadence(t *testing.T) {
 func sample(n int) ChoiceInput {
 	in := ChoiceInput{Title: "下一步", Recommend: []int{1}, Reason: "最快见效"}
 	for i := 0; i < n; i++ {
-		in.Options = append(in.Options, OptionInput{Title: "方向" + string(rune('A'+i)), Gain: "多", WhyNow: "现在", Cost: "少", IfNot: "慢", Evidence: "数据"})
+		in.Options = append(in.Options, OptionInput{Title: "方向" + string(rune('A'+i)), Gain: "多", WhyNow: "现在", Cost: "少", IfNot: "慢", Evidence: "数据见 m1/27.svg"})
 	}
 	return in
 }
@@ -206,7 +207,10 @@ func setup(t *testing.T) (*app.Env, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &app.Env{DB: db, Pause: &pause.Store{DB: db}, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}, d.ID
+	if _, err := org.AddMaterial(context.Background(), db, dir, org.MaterialInput{Org: d.ID, Note: "测试依据", Files: []org.MaterialFile{{Name: "27.svg", Content: []byte("<svg/>")}}}, "u1"); err != nil {
+		t.Fatal(err)
+	}
+	return &app.Env{DB: db, Paths: config.Paths{Data: dir}, Pause: &pause.Store{DB: db}, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}, d.ID
 }
 
 func TestChoiceFlow(t *testing.T) {
@@ -214,7 +218,7 @@ func TestChoiceFlow(t *testing.T) {
 	ctx := context.Background()
 	in := sample(4)
 	in.Org = dept
-	c, err := AddChoice(ctx, env.DB, in, "", "u1")
+	c, err := AddChoice(ctx, env.DB, env.Paths.Data, in, "", "u1")
 	if err != nil || c.ID != "c1" || len(c.Options) != 4 {
 		t.Fatalf("%+v %v", c, err)
 	}
@@ -234,7 +238,7 @@ func TestChoiceFlow(t *testing.T) {
 	if _, err := Decide(ctx, env.DB, c.ID, nil, "", "u1"); code(err) != "conflict" {
 		t.Fatal("拍过板的不能再拍")
 	}
-	c2, _ := AddChoice(ctx, env.DB, in, "", "u1")
+	c2, _ := AddChoice(ctx, env.DB, env.Paths.Data, in, "", "u1")
 	if _, err := Decide(ctx, env.DB, c2.ID, []int{9}, "", "u1"); code(err) != "usage" {
 		t.Fatal("越界的选项应拒绝")
 	}
@@ -249,7 +253,7 @@ func TestChoiceFlow(t *testing.T) {
 	inWithDept := sample(3)
 	inWithDept.Org = dept
 	inWithDept.Options[0].Org = dept2.ID
-	c3, err := AddChoice(ctx, env.DB, inWithDept, "", "u1")
+	c3, err := AddChoice(ctx, env.DB, env.Paths.Data, inWithDept, "", "u1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -274,11 +278,11 @@ func TestChoiceFlow(t *testing.T) {
 		t.Fatalf("应给分部负责人发一条 task.assigned 事件，得到 %d 条", assignedCount)
 	}
 	for i := 0; i < org.MaxChoices; i++ {
-		if _, err := AddChoice(ctx, env.DB, in, "", "u1"); err != nil {
+		if _, err := AddChoice(ctx, env.DB, env.Paths.Data, in, "", "u1"); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if _, err := AddChoice(ctx, env.DB, in, "", "u1"); code(err) != "limit" {
+	if _, err := AddChoice(ctx, env.DB, env.Paths.Data, in, "", "u1"); code(err) != "limit" {
 		t.Fatalf("待拍板满了应拒绝：%v", err)
 	}
 }
@@ -287,19 +291,19 @@ func TestSettle(t *testing.T) {
 	env, dept := setup(t)
 	ctx := context.Background()
 	task, _ := ledger.Add(ctx, env.DB, ledger.NewTask{Title: "调研", Org: dept}, "u1")
-	if c, err := Settle(ctx, env.DB, task.ID, nil); c != nil || err != nil {
+	if c, err := Settle(ctx, env.DB, env.Paths.Data, task.ID, nil); c != nil || err != nil {
 		t.Fatal("没有 choice.json 什么都不做")
 	}
-	if _, err := Settle(ctx, env.DB, task.ID, []byte(`{"title":"x","options":[],"extra":1}`)); code(err) != "usage" {
+	if _, err := Settle(ctx, env.DB, env.Paths.Data, task.ID, []byte(`{"title":"x","options":[],"extra":1}`)); code(err) != "usage" {
 		t.Fatalf("不认识的字段应拒绝：%v", err)
 	}
-	raw := []byte(`{"title":"下一步","options":[` + strings.Repeat(`{"title":"A","gain":"g","why_now":"w","cost":"c","if_not":"i","evidence":"e"},`, 2) +
-		`{"title":"B","gain":"g","why_now":"w","cost":"c","if_not":"i","evidence":"e"}],"recommend":[2],"reason":"r"}`)
-	c, err := Settle(ctx, env.DB, task.ID, raw)
+	raw := []byte(`{"title":"下一步","options":[` + strings.Repeat(`{"title":"A","gain":"g","why_now":"w","cost":"c","if_not":"i","evidence":"m1/27.svg"},`, 2) +
+		`{"title":"B","gain":"g","why_now":"w","cost":"c","if_not":"i","evidence":"m1/27.svg"}],"recommend":[2],"reason":"r"}`)
+	c, err := Settle(ctx, env.DB, env.Paths.Data, task.ID, raw)
 	if err != nil || c.Org != dept || c.Task != task.ID {
 		t.Fatalf("%+v %v", c, err)
 	}
-	again, err := Settle(ctx, env.DB, task.ID, raw)
+	again, err := Settle(ctx, env.DB, env.Paths.Data, task.ID, raw)
 	if err != nil || again.ID != c.ID {
 		t.Fatal("同一件任务只登记一次")
 	}
@@ -312,7 +316,7 @@ func TestChoiceAddStrict(t *testing.T) {
 	dir := t.TempDir()
 	env := func(k string) string { return map[string]string{"ATRIUM_DATA": dir}[k] }
 	file := filepath.Join(dir, "choice.json")
-	raw := `{"title":"下一步","options":[{"title":"A","gain":"g","why_now":"w","cost":"c","if_not":"i","evidence":"e","orgs":"o2"}],"recommend":[1],"reason":"r"}`
+	raw := `{"title":"下一步","options":[{"title":"A","gain":"g","why_now":"w","cost":"c","if_not":"i","evidence":"m1/27.svg","orgs":"o2"}],"recommend":[1],"reason":"r"}`
 	if err := os.WriteFile(file, []byte(raw), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -383,7 +387,7 @@ func TestScheduleTick(t *testing.T) {
 	env.Pause.Clear(ctx, dept)
 	in := sample(3)
 	in.Org = dept
-	c, _ := AddChoice(ctx, env.DB, in, "", "u1")
+	c, _ := AddChoice(ctx, env.DB, env.Paths.Data, in, "", "u1")
 	if _, err := Decide(ctx, env.DB, c.ID, nil, "不急", "u1"); err != nil {
 		t.Fatal(err)
 	}

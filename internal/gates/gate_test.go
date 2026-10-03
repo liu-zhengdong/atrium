@@ -294,8 +294,8 @@ func TestGateNoWorktreeBlocks(t *testing.T) {
 
 // 没有仓库的任务（调研）：过交付检查即完成；工作目录根有 choice.json 就登记成选项单，不合法交回执行者改。
 func TestGateNoRepo(t *testing.T) {
-	good := `{"title":"下一步","options":[` + strings.Repeat(`{"title":"A","gain":"g","why_now":"w","cost":"c","if_not":"i","evidence":"e"},`, 2) +
-		`{"title":"B","gain":"g","why_now":"w","cost":"c","if_not":"i","evidence":"e"}],"recommend":[2],"reason":"r"}`
+	good := `{"title":"下一步","options":[` + strings.Repeat(`{"title":"A","gain":"g","why_now":"w","cost":"c","if_not":"i","evidence":"m1/27.svg"},`, 2) +
+		`{"title":"B","gain":"g","why_now":"w","cost":"c","if_not":"i","evidence":"m1/27.svg"}],"recommend":[2],"reason":"r"}`
 	cases := []struct {
 		name, choice string
 		want         ledger.Status
@@ -312,6 +312,7 @@ func TestGateNoRepo(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			e.choiceMaterial(d.ID)
 			task, _ := ledger.Add(e.ctx, e.db, ledger.NewTask{Title: "调研", Org: d.ID}, "u1")
 			e.start(task.ID, "kimi+k2")
 			dir := t.TempDir()

@@ -1,4 +1,4 @@
--- Atrium v2 全部表。开发期不做迁移：改表就改这里，删掉开发库重建。
+-- Atrium v2 全部表。表定义的唯一来源；store.Open 仅升级已确认的旧 choices CHECK，其他结构不迁移。
 -- 时间一律 Unix 毫秒；短号（t1、o1……）由 ids 表发，全局持久、不复用。
 
 CREATE TABLE IF NOT EXISTS ids (

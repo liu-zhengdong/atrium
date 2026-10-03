@@ -64,8 +64,8 @@ func (l *localGit) Run(ctx context.Context, dir, name string, args ...string) (s
 // 交付检查按工作树登记的机器取事实：本机直接 git，远程经代理（只读 git、读 choice.json）；PR 仍由服务查（假 gh）。
 // 没有仓库的任务不要求工作树。
 func TestGateWhere(t *testing.T) {
-	choice := `{"title":"下一步","options":[` + strings.Repeat(`{"title":"A","gain":"g","why_now":"w","cost":"c","if_not":"i","evidence":"e"},`, 2) +
-		`{"title":"B","gain":"g","why_now":"w","cost":"c","if_not":"i","evidence":"e"}],"recommend":[2],"reason":"r"}`
+	choice := `{"title":"下一步","options":[` + strings.Repeat(`{"title":"A","gain":"g","why_now":"w","cost":"c","if_not":"i","evidence":"m1/27.svg"},`, 2) +
+		`{"title":"B","gain":"g","why_now":"w","cost":"c","if_not":"i","evidence":"m1/27.svg"}],"recommend":[2],"reason":"r"}`
 	cases := []struct {
 		name         string
 		remote, repo bool
@@ -94,6 +94,7 @@ func TestGateWhere(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			e.choiceMaterial(d.ID)
 			nt := ledger.NewTask{Title: "活", Org: d.ID}
 			if c.repo {
 				nt.Repo = "o/r"

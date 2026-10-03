@@ -90,15 +90,15 @@ func TestIdentityBrowser(t *testing.T) {
 	}
 	_, err = org.Edit(ctx, db, oldDept.ID, org.DeptPatch{Leader: &a10.ID}, "a1")
 	must(err)
-	c, err := agenda.AddChoice(ctx, db, agenda.ChoiceInput{Org: dept.ID, Title: "选项作者", Recommend: []int{1}, Reason: "固定隔离样本", Options: []agenda.OptionInput{
-		{Title: "方案一", Gain: "识别", WhyNow: "需要", Cost: "小", IfNot: "难辨认", Evidence: "隔离样本"},
-		{Title: "方案二", Gain: "识别", WhyNow: "需要", Cost: "小", IfNot: "难辨认", Evidence: "隔离样本"},
-		{Title: "方案三", Gain: "识别", WhyNow: "需要", Cost: "小", IfNot: "难辨认", Evidence: "隔离样本"},
+	mat, err := org.AddMaterial(ctx, db, data, org.MaterialInput{Org: dept.ID, Note: "资料记录人", Files: []org.MaterialFile{{Name: "样本.md", Content: []byte("a1 历史原文保持")}}}, a1.ID)
+	must(err)
+	c, err := agenda.AddChoice(ctx, db, data, agenda.ChoiceInput{Org: dept.ID, Title: "选项作者", Recommend: []int{1}, Reason: "固定隔离样本", Options: []agenda.OptionInput{
+		{Title: "方案一", Gain: "识别", WhyNow: "需要", Cost: "小", IfNot: "难辨认", Evidence: mat.ID + "/样本.md"},
+		{Title: "方案二", Gain: "识别", WhyNow: "需要", Cost: "小", IfNot: "难辨认", Evidence: mat.ID + "/样本.md"},
+		{Title: "方案三", Gain: "识别", WhyNow: "需要", Cost: "小", IfNot: "难辨认", Evidence: mat.ID + "/样本.md"},
 	}}, "", a1.ID)
 	must(err)
 	sched, err := agenda.AddSchedule(ctx, db, agenda.NewSchedule{Org: dept.ID, Title: "定时建立人", Kind: "task", Every: "7d"}, a10.ID, store.Now(), time.Local)
-	must(err)
-	mat, err := org.AddMaterial(ctx, db, data, org.MaterialInput{Org: dept.ID, Note: "资料记录人", Files: []org.MaterialFile{{Name: "样本.md", Content: []byte("a1 历史原文保持")}}}, a1.ID)
 	must(err)
 	must(events.Emit(ctx, db, events.Event{Kind: events.LeaderEscalate, Task: task.ID, Dept: dept.ID, Target: org.Secretary, Body: map[string]any{"from": a1.ID, "label": "无法解决", "note": "上报卡身份"}}))
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))

@@ -61,6 +61,7 @@ func fixture(t *testing.T) (*app.Env, *hub, *httptest.Server) {
 	must(org.Add(ctx, db, org.NewDept{Name: "公司", Leader: "a1"}))
 	must(org.Add(ctx, db, org.NewDept{Name: "运行时", Parent: "o1", Leader: "a2"}))
 	must(org.Add(ctx, db, org.NewDept{Name: "别处"}))
+	must(org.AddMaterial(ctx, db, dir, org.MaterialInput{Org: "o1", Note: "测试依据", Files: []org.MaterialFile{{Name: "27.svg", Content: []byte("<svg/>")}}}, "u1"))
 	must(org.AddPoint(ctx, db, "o1", org.NewPoint{Text: "简洁优先"}, "u1"))
 	must(ledger.Add(ctx, db, ledger.NewTask{Title: "在 o2", Org: "o2"}, "u1"))
 	must(ledger.Add(ctx, db, ledger.NewTask{Title: "在 o3", Org: "o3"}, "u1"))
@@ -123,7 +124,7 @@ func code(err error) string {
 
 // choice 是一份最小的合法选项单。
 func choice(dept string) map[string]any {
-	opt := map[string]string{"title": "A", "gain": "g", "why_now": "w", "cost": "c", "if_not": "i", "evidence": "e"}
+	opt := map[string]string{"title": "A", "gain": "g", "why_now": "w", "cost": "c", "if_not": "i", "evidence": "m1/27.svg"}
 	return map[string]any{"org": dept, "title": "下一步", "options": []any{opt, opt, opt}, "recommend": []int{1}, "reason": "r"}
 }
 

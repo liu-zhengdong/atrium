@@ -715,8 +715,13 @@ func TestDeptHeadAndTaskLinks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	opt := agenda.OptionInput{Title: "A", Gain: "g", WhyNow: "w", Cost: "c", IfNot: "i", Evidence: "e"}
-	c, err := agenda.AddChoice(ctx, db, agenda.ChoiceInput{Org: sub.ID, Title: "下一步", Options: []agenda.OptionInput{opt, opt, opt},
+	env.Paths.Data = t.TempDir()
+	material, err := org.AddMaterial(ctx, db, env.Paths.Data, org.MaterialInput{Org: sub.ID, Note: "测试依据", Files: []org.MaterialFile{{Name: "27.svg", Content: []byte("<svg/>")}}}, "u1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	opt := agenda.OptionInput{Title: "A", Gain: "g", WhyNow: "w", Cost: "c", IfNot: "i", Evidence: material.ID + "/27.svg"}
+	c, err := agenda.AddChoice(ctx, db, env.Paths.Data, agenda.ChoiceInput{Org: sub.ID, Title: "下一步", Options: []agenda.OptionInput{opt, opt, opt},
 		Recommend: []int{1}, Reason: "r"}, round.ID, "secretary")
 	if err != nil {
 		t.Fatal(err)

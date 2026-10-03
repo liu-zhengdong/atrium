@@ -109,7 +109,7 @@ func dryRun(q *api.Req, env *app.Env, id string, o Options) (RunResult, error) {
 	if err != nil {
 		return RunResult{}, err
 	}
-	v, err := get(env).view(ctx, t, o.Risk, map[string]bool{}, o.Host)
+	v, err := get(env).view(ctx, t, o, map[string]bool{})
 	if err != nil {
 		return RunResult{}, err
 	}
@@ -137,6 +137,7 @@ func Commands(t *cli.Table) {
 	t.Add(cli.Command{Path: "task run", Args: "<tN>", Summary: "分派任务：进分派任务队列（依赖没完成的等完成后再派），自动挑执行者与机器拉起；--dry-run 只看候选与推荐理由",
 		Flags: []cli.Flag{
 			{Name: "worker", Value: "工具+模型[:强度]", Help: "写死执行者（缺省自动挑：档案能接、紧急／修复或 risk 高于 low 只挑 trust≥medium、额度富余、不正忙）。只写工具 = 跟随工具自带的最新模型（harness/<工具> 档案写了 model 就用它）；写了模型 = 固定"},
+			{Name: "tokens", Value: "数量", Help: "本轮任务明确的 token 需求（非负整数，0 为未知；仅已证实同池同窗 token 容量用于判断）"},
 			{Name: "risk", Value: "级别", Help: "low（缺省）/ medium / high：执行者档案 max_risk 要够；high 合入前另派审阅"},
 			{Name: "host", Value: "hN", Help: "写死机器（缺省本机优先、空位最多）"},
 			{Name: "secret", Value: "名称", Multi: true, Help: "分派任务时按名称注入的凭据（从任务部门往上找）"},
@@ -150,14 +151,18 @@ func Commands(t *cli.Table) {
 			if err := c.MaxArgs(1); err != nil {
 				return err
 			}
-			body := runBody{Options: Options{Worker: c.Str("worker"), Risk: c.Str("risk"), Host: c.Str("host"), Secrets: c.List("secret")},
+			tokens, err := c.Int("tokens", 0)
+			if err != nil {
+				return err
+			}
+			body := runBody{Options: Options{Tokens: int64(tokens), Worker: c.Str("worker"), Risk: c.Str("risk"), Host: c.Str("host"), Secrets: c.List("secret")},
 				DryRun: c.Bool("dry-run")}
 			var res RunResult
 			if err := c.Call("POST", "/api/tasks/"+url.PathEscape(id)+"/run", body, &res); err != nil {
 				return err
 			}
 			if body.DryRun {
-				return c.Done(res, dryText(res), dryNext(id, res, body.Risk))
+				return c.Done(res, dryText(res), dryNext(id, res, body.Risk, body.Tokens))
 			}
 			msg, follow := fmt.Sprintf("%s 已进分派任务队列（第 %d 位）", id, res.Position), "atrium task log "+id+" --follow"
 			if len(res.Waiting) > 0 {
@@ -386,13 +391,16 @@ func hostLine(kind, host, reason string) string {
 	return s
 }
 
-func dryNext(id string, r RunResult, risk string) string {
+func dryNext(id string, r RunResult, risk string, tokens int64) string {
 	if r.Pick.Recommended == "" {
 		return "atrium workers"
 	}
 	next := "atrium task run " + id + " --worker " + r.Pick.Recommended
 	if risk != "" {
 		next += " --risk " + risk
+	}
+	if tokens > 0 {
+		next += " --tokens " + strconv.FormatInt(tokens, 10)
 	}
 	return next
 }

@@ -181,7 +181,7 @@ func Requeue(ctx context.Context, env *app.Env, id string, why watch.Why) error 
 	}
 	o := Options{Risk: "low"}
 	if run != nil {
-		o.Risk, o.Secrets = run.Risk, run.Secrets
+		o.Risk, o.Secrets, o.Tokens = run.Risk, run.Secrets, run.Tokens
 		outcome := workers.OutFail
 		if why.Signal == watch.SigQuota {
 			outcome = workers.OutQuota

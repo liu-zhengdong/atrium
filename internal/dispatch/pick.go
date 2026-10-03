@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/liu-zhengdong/atrium/internal/ledger"
+	"github.com/liu-zhengdong/atrium/internal/quota"
 	"github.com/liu-zhengdong/atrium/internal/workers"
 )
 
@@ -42,6 +43,7 @@ func Shaky(fails int) bool { return fails >= ShakyFails }
 
 // PickInput 是挑执行者的全部输入。
 type PickInput struct {
+	Tokens   int64 // 明确任务需求，0 未知
 	Risk     string
 	Priority ledger.Priority // 活的分量：紧急、修复只交给够 trust 的（NeedTrust）
 	Facts    []Fact
@@ -52,16 +54,17 @@ type PickInput struct {
 
 // Candidate 是 --dry-run 列出的一位候选。
 type Candidate struct {
-	ID       string       `json:"id"`
-	Stat     workers.Stat `json:"stat"`
-	Trust    string       `json:"trust"`
-	MaxRisk  string       `json:"max_risk"`
-	Eligible bool         `json:"eligible"`
-	Refusals []string     `json:"refusals,omitempty"`
-	Busy     bool         `json:"busy,omitempty"`
-	Spare    *float64     `json:"spare,omitempty"` // 富余百分点（与 atrium quota 同一个数）；没数据为空
-	Rank     int          `json:"rank,omitempty"`  // 能接的里排第几（1 起）
-	Fails    int          `json:"fails,omitempty"` // 近 ShakyWindow 次拉起里启动失败几次
+	ID           string              `json:"id"`
+	Stat         workers.Stat        `json:"stat"`
+	Trust        string              `json:"trust"`
+	MaxRisk      string              `json:"max_risk"`
+	Eligible     bool                `json:"eligible"`
+	Refusals     []string            `json:"refusals,omitempty"`
+	Busy         bool                `json:"busy,omitempty"`
+	Spare        *float64            `json:"spare,omitempty"` // 富余百分点（与 atrium quota 同一个数）；没数据为空
+	TokenWindows []quota.TokenWindow `json:"token_windows,omitempty"`
+	Rank         int                 `json:"rank,omitempty"`  // 能接的里排第几（1 起）
+	Fails        int                 `json:"fails,omitempty"` // 近 ShakyWindow 次拉起里启动失败几次
 }
 
 // PickView 是挑执行者的结论：候选（能接的按推荐顺序在前）、推荐与理由。
@@ -125,6 +128,8 @@ func Pick(in PickInput) PickView {
 			s, has = *f.Quota, true
 		}
 		if has {
+			c.TokenWindows = s.TokenWindows
+			s = s.WithDemand(in.Tokens)
 			if s.Stop != "" {
 				c.Refusals = append(c.Refusals, s.Stop)
 			}

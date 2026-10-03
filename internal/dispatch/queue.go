@@ -18,6 +18,7 @@ import (
 
 // Options 是 task run 的选项；也是队列里一行的内容。
 type Options struct {
+	Tokens  int64    `json:"tokens,omitempty"` // 本轮任务明确的 token 需求，0 为未知
 	Worker  string   `json:"worker,omitempty"` // 空表示自动挑
 	Risk    string   `json:"risk,omitempty"`   // 缺省 low
 	Host    string   `json:"host,omitempty"`   // 空表示自动挑
@@ -29,6 +30,9 @@ var secretNameRE = regexp.MustCompile(`^[A-Z_][A-Z0-9_]{0,63}$`)
 
 // check 核对选项（纯的部分）并补缺省。
 func (o *Options) check() error {
+	if o.Tokens < 0 {
+		return api.Usage("--tokens: 应为非负整数")
+	}
 	if o.Risk == "" {
 		o.Risk = "low"
 	}
@@ -98,7 +102,7 @@ func queued(ctx context.Context, q store.Querier) ([]item, error) {
 			it.Err = err
 		} else if last != nil {
 			// 交回原执行者：同一执行者、同一台机器（工作目录在那里，接不了就等或转受阻，不换机）、同样的风险与凭据。
-			it.Opts = Options{Worker: last.Worker, Risk: last.Risk, Host: last.Host, Secrets: last.Secrets}
+			it.Opts = Options{Worker: last.Worker, Risk: last.Risk, Host: last.Host, Secrets: last.Secrets, Tokens: last.Tokens}
 		}
 		if it.Opts.Risk == "" {
 			it.Opts.Risk = "low"

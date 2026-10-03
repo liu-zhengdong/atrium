@@ -39,11 +39,19 @@ func LoadAvailability(ctx context.Context, env *app.Env) (Availability, error) {
 	return a, err
 }
 
-// CheckResolved 只用已证实的失败组合/机器。当前读数没有当前解析凭据匹配及
-// 模型/共享池成员证据，不能把工具、provider、Finger 或套餐名当关联事实。
-// Spare 保持未知；来源补齐后由此入口关联，展示 Last 不参与调度。
-func (a Availability) CheckResolved(r Resolved, host string) (quota.Spare, string) {
-	return a.Check(r.Spec, host)
+// CheckResolved 共用 marks 与本轮已证实的执行绑定；没有绑定则额度未知。
+// 对绑定来源逐窗复用 SpareOf/Reserve，token需求仅对明确分母的窗口生效。
+// t865 可在 Launcher 注入侧调用 ResolveExecution/LoadAvailability/CheckResolved。
+func (a Availability) CheckResolved(r Resolved, host string, tokens ...int64) (quota.Spare, string) {
+	sp, why := a.Check(r.Spec, host)
+	if why != "" {
+		return sp, why
+	}
+	need := int64(0)
+	if len(tokens) > 0 {
+		need = tokens[0]
+	}
+	return a.checkBinding(r, host, need)
 }
 
 // QuotaMarked 允许额度失败组合由具体机器的 mark 判定，而非全局 tried

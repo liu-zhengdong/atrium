@@ -268,7 +268,7 @@ func TestFlowQuotaRequeue(t *testing.T) {
 	if len(marks) != 1 || marks[0].Target() != "codex@"+LocalHost || marks[0].Until <= store.Now() {
 		t.Fatalf("应标记本机的 codex 额度用尽：%+v", marks)
 	}
-	v, err := d.view(ctx, tk, "low", nil)
+	v, err := d.view(ctx, tk, Options{Risk: "low"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -360,7 +360,7 @@ func TestFlowLoginRequeue(t *testing.T) {
 	if len(marks) != 1 || marks[0].Target() != "grok@"+LocalHost || marks[0].Until != 0 {
 		t.Fatalf("本机的 grok 应标没登录、等人处理：%+v", marks)
 	}
-	v, err := d.view(ctx, tk, "low", nil)
+	v, err := d.view(ctx, tk, Options{Risk: "low"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

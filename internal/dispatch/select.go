@@ -11,7 +11,8 @@ import (
 )
 
 // view 收集事实并挑执行者（task run --dry-run 与自动分派任务同一份）。
-func (d *dispatcher) view(ctx context.Context, t ledger.Task, risk string, exclude map[string]bool, pinned ...string) (PickView, error) {
+func (d *dispatcher) view(ctx context.Context, t ledger.Task, o Options, exclude map[string]bool) (PickView, error) {
+	risk, tokens := o.Risk, o.Tokens
 	db := d.env.DB
 	var preferred []string
 	if t.Skill != "" {
@@ -77,16 +78,16 @@ func (d *dispatcher) view(ctx context.Context, t ledger.Task, risk string, exclu
 			}
 			// 满载只影响何时拉起，不影响工具与任务能否匹配。
 			need.Urgent = true
-			host := ""
-			if len(pinned) > 0 {
-				host = pinned[0]
-			}
-			choice, err := pickHost(ctx, d.env, need, host)
+			choice, err := pickHost(ctx, d.env, need, o.Host)
 			if err != nil {
 				return PickView{}, err
 			}
 			if choice.Host != "" {
-				sp, why := available.CheckResolved(r, choice.Host)
+				r, err = workers.ResolveExecution(ctx, d.env, r, choice.Host)
+				if err != nil {
+					return PickView{}, err
+				}
+				sp, why := available.CheckResolved(r, choice.Host, tokens)
 				f.Quota = &sp
 				if why != "" {
 					f.Unavailable = why
@@ -119,5 +120,5 @@ func (d *dispatcher) view(ctx context.Context, t ledger.Task, risk string, exclu
 	if err != nil {
 		return PickView{}, err
 	}
-	return Pick(PickInput{Risk: risk, Priority: t.Priority, Facts: facts, Busy: busy, Exclude: exclude}), nil
+	return Pick(PickInput{Tokens: tokens, Risk: risk, Priority: t.Priority, Facts: facts, Busy: busy, Exclude: exclude}), nil
 }

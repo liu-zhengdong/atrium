@@ -374,7 +374,7 @@ func TestViewIsolated(t *testing.T) {
 	if !env.Paths.Isolated() {
 		t.Fatal("临时目录应算隔离实例")
 	}
-	v, err := d.view(ctx, tk, "low", nil)
+	v, err := d.view(ctx, tk, Options{Risk: "low"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -389,7 +389,7 @@ func TestViewIsolated(t *testing.T) {
 	oldIsolated := isolated
 	isolated = func(*app.Env) bool { return false }
 	t.Cleanup(func() { isolated = oldIsolated })
-	if v, err = d.view(ctx, tk, "low", nil); err != nil || refused(v, "claude") {
+	if v, err = d.view(ctx, tk, Options{Risk: "low"}, nil); err != nil || refused(v, "claude") {
 		t.Errorf("用户的服务照常挑内置工具：%+v %v", v, err)
 	}
 }

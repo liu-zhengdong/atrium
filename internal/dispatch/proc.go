@@ -13,6 +13,7 @@ import (
 
 // proc 是本机一个在跑的执行者进程（自己拉起的，或服务重启后继续跟进的）。
 type proc struct {
+	binding *workers.ExecutionBinding // 本次启动事实；adopt 后未知，不反推账号
 	task    string
 	run     workers.Run
 	adapter *workers.Driver

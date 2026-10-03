@@ -160,7 +160,7 @@ func (d *dispatcher) try(ctx context.Context, it item) error {
 	if p, err := d.paused(ctx, t, choice.Host); err != nil || p {
 		return err
 	}
-	o := launchOpts{W: w, Host: choice.Host, Risk: it.Opts.Risk, Secrets: it.Opts.Secrets, Why: workers.WhyFirst}
+	o := launchOpts{Tokens: it.Opts.Tokens, W: w, Host: choice.Host, Risk: it.Opts.Risk, Secrets: it.Opts.Secrets, Why: workers.WhyFirst}
 	if len(it.Opts.Avoid) > 0 {
 		o.Why = workers.WhySwitch
 	}
@@ -235,7 +235,7 @@ func (d *dispatcher) choose(ctx context.Context, t ledger.Task, o Options, exclu
 	for _, a := range o.Avoid {
 		exclude[a] = true
 	}
-	v, err := d.view(ctx, t, o.Risk, exclude, o.Host)
+	v, err := d.view(ctx, t, o, exclude)
 	if err != nil {
 		return w, false, err
 	}
@@ -270,6 +270,7 @@ func busyTools(ctx context.Context, q store.Querier) (map[string]bool, error) {
 }
 
 type launchOpts struct {
+	Tokens  int64
 	W       workers.Resolved
 	Host    string
 	Risk    string

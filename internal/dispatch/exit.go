@@ -76,6 +76,12 @@ func (d *dispatcher) exited(ctx context.Context, p *proc, code int) error {
 	if err != nil {
 		return err
 	}
+	if err := d.markSharedFailure(ctx, p, sig); err != nil {
+		if isAPI(err) {
+			return d.block(ctx, p.task, "共享池恢复受阻："+err.Error())
+		}
+		return err
+	}
 	// 每轮都记结果，包括空回复，防止新一轮无正文时沿用旧结论。
 	if err := ledger.Record(ctx, db, p.task, gates.KindResult, actor, p.adapter.LastReply(log.Text)); err != nil {
 		return err
@@ -110,7 +116,7 @@ func (d *dispatcher) exited(ctx context.Context, p *proc, code int) error {
 		}
 		return apply(ledger.Block, note+"；停机中没有重新拉起，恢复后 atrium task run "+p.task)
 	}
-	o := launchOpts{Host: p.run.Host, Risk: p.run.Risk, Secrets: p.run.Secrets}
+	o := launchOpts{Tokens: p.run.Tokens, Host: p.run.Host, Risk: p.run.Risk, Secrets: p.run.Secrets}
 	switch route.Do {
 	case "same", "resume", "restart":
 		o.W, err = workers.Resolve(ctx, db, p.run.Worker)
@@ -123,7 +129,7 @@ func (d *dispatcher) exited(ctx context.Context, p *proc, code int) error {
 		}
 	case "switch":
 		var wait bool
-		o.W, wait, err = d.choose(ctx, t, Options{Risk: p.run.Risk}, tried)
+		o.W, wait, err = d.choose(ctx, t, Options{Risk: p.run.Risk, Tokens: p.run.Tokens}, tried)
 		if err == nil && wait {
 			err = api.Conflict("能换的执行者都正忙")
 		}

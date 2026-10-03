@@ -1,6 +1,6 @@
 // Package gates 是交付检查与验收：执行者退出后运行时自己查事实（PR、提交、推送、改动规模、PR 正文），
 // 按档案 checks 判过或不过。执行者自称完成不算数；自称没做成、未完成或受阻照信，交回。
-// 高风险或低信任的交付先另派不同工具、不同模型的审阅者；
+// 高风险或低信任的交付先另派不同工具、不同模型、没拉起过被审任务的审阅者；
 // 部门的验收人是 leader、user 时停在等验收，由 task accept / task reject 判。
 //
 // 交付方式（pr、local、choice、message：怎么交、查什么、怎么应用）在 delivery.go（local 的交付检查与应用在 local.go）；
@@ -31,6 +31,7 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/org"
 	"github.com/liu-zhengdong/atrium/internal/pause"
 	"github.com/liu-zhengdong/atrium/internal/store"
+	"github.com/liu-zhengdong/atrium/internal/workers"
 )
 
 // Actor 是运行时交付检查在经历里的署名。
@@ -381,7 +382,7 @@ func (g *Gate) review(ctx context.Context, t ledger.Task) error {
 		return err
 	}
 	if why := req.Refusal(reviewer); why != "" {
-		_, err := Block(ctx, g.DB, t.ID, fmt.Sprintf("审阅任务 %s 的审阅者不合格：%s", rt.ID, why))
+		_, err := Block(ctx, g.DB, t.ID, fmt.Sprintf("审阅任务 %s 的审阅者不合格：%s %s", rt.ID, reviewer.Name, why))
 		return err
 	}
 	if err := record(ctx, g.DB, t.ID, KindReview, map[string]any{"reviewer": rt.ID, "worker": rt.Worker, "pass": pass, "notes": notes}); err != nil {
@@ -443,7 +444,11 @@ func (g *Gate) startReview(ctx context.Context, t ledger.Task) error {
 	if err != nil {
 		return err
 	}
-	req := Requirement{NotTool: author.Tool, NotModel: author.Model, MinTrust: "medium"}
+	launched, err := workers.Launched(ctx, g.DB, t.ID)
+	if err != nil {
+		return err
+	}
+	req := Requirement{NotTool: author.Tool, NotModel: author.Model, MinTrust: "medium", NotWorkers: launched}
 	if err := record(ctx, g.DB, rt.ID, KindRequire, req); err != nil {
 		return err
 	}

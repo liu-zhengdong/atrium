@@ -3,6 +3,7 @@ package gates
 import (
 	"fmt"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -260,30 +261,40 @@ func NeedReview(risk, trust string) (bool, string) {
 	return len(why) > 0, strings.Join(why, "，")
 }
 
-// Requirement 是审阅者的要求：不同工具、不同模型、trust 至少 medium。
-// 记在审阅任务经历里（kind "worker_require"，JSON），dispatch 挑执行者时按它排除。
+// Requirement 是审阅者的要求：与原执行者不同工具、不同模型，trust 至少 medium，
+// 且回避拉起过被审任务的每一位执行者（NotWorkers）。
+// 记在审阅任务经历里（kind "worker_require"，JSON）；dispatch 挑执行者与点名入队时按它排除，gates 读结论前再按它核对。
 type Requirement struct {
-	NotTool  string `json:"not_tool"`
-	NotModel string `json:"not_model,omitempty"`
-	MinTrust string `json:"min_trust"`
+	NotTool    string   `json:"not_tool"`
+	NotModel   string   `json:"not_model,omitempty"`
+	MinTrust   string   `json:"min_trust"`
+	NotWorkers []string `json:"not_workers,omitempty"`
 }
 
-// Refusal 判一个执行者当不当得了审阅者；当得了返回空串。
+// Refusal 判一个执行者当不当得了审阅者；当得了返回空串，当不了返回不带名字的理由。
 func (r Requirement) Refusal(p Profile) string {
 	switch {
-	case p.Tool == r.NotTool:
-		return p.Name + " 与原执行者同一工具 " + p.Tool
+	case r.NotTool != "" && p.Tool == r.NotTool:
+		return "与原执行者同一工具 " + p.Tool
 	case r.NotModel != "" && p.Model == r.NotModel:
-		return p.Name + " 与原执行者同一模型 " + p.Model
+		return "与原执行者同一模型 " + p.Model
 	case trustRank(p.Trust) < trustRank(r.MinTrust):
 		t := p.Trust
 		if t == "" {
 			t = "unknown"
 		}
-		return fmt.Sprintf("%s 的 trust=%s，审阅者至少 %s", p.Name, t, r.MinTrust)
+		return fmt.Sprintf("trust=%s，审阅者至少 %s", t, r.MinTrust)
+	case r.Recused(p.Name):
+		return RecusedWhy
 	}
 	return ""
 }
+
+// RecusedWhy 是因回避被排除的理由。
+const RecusedWhy = "拉起过被审任务，审阅要回避"
+
+// Recused：这位执行者拉起过被审任务。
+func (r Requirement) Recused(worker string) bool { return slices.Contains(r.NotWorkers, worker) }
 
 var (
 	verdictLine = regexp.MustCompile(`审阅结论\s*[:：]\s*\**\s*(通过|打回)`)

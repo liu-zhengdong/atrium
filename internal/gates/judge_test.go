@@ -97,12 +97,13 @@ func TestNeedReview(t *testing.T) {
 }
 
 func TestRefusal(t *testing.T) {
-	req := Requirement{NotTool: "claude", NotModel: "opus", MinTrust: "medium"}
+	req := Requirement{NotTool: "claude", NotModel: "opus", MinTrust: "medium", NotWorkers: []string{"claude+opus", "agy"}}
 	cases := []struct {
 		p  Profile
 		ok bool
 	}{
 		{Profile{Name: "codex", Tool: "codex", Model: "gpt", Trust: "medium"}, true},
+		{Profile{Name: "agy", Tool: "agy", Model: "gemini", Trust: "high"}, false}, // 拉起过被审任务：回避
 		{Profile{Name: "codex", Tool: "codex", Model: "gpt", Trust: "high"}, true},
 		{Profile{Name: "c2", Tool: "claude", Model: "sonnet", Trust: "high"}, false},
 		{Profile{Name: "oc", Tool: "opencode", Model: "opus", Trust: "high"}, false},

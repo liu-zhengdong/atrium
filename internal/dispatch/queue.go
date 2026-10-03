@@ -203,6 +203,13 @@ func Enqueue(ctx context.Context, env *app.Env, id string, o Options, actor stri
 		if why := r.Rules.Refusal(o.Risk, false); why != "" {
 			return t, api.Conflict("%s 接不了：%s", r.ID, why).WithNext("atrium task run " + id + " --dry-run --risk " + o.Risk)
 		}
+		req, err := requirement(ctx, db, id)
+		if err != nil {
+			return t, err
+		}
+		if why := reviewRefusal(req, r.ID, r.Spec.Tool, r.Spec.Model, r.Rules.EffectiveTrust()); why != "" {
+			return t, api.Conflict("%s 接不了：%s", r.ID, why).WithNext("atrium task run " + id + " --dry-run --risk " + o.Risk)
+		}
 		o.Worker = r.ID
 	}
 	raw, _ := json.Marshal(o)
@@ -261,15 +268,9 @@ func union(a, b []string) []string {
 	return out
 }
 
-// require 是审阅任务对执行者的要求（gates 建审阅任务时记在经历 worker_require）：不同工具、不同模型、trust 够。
-type require struct {
-	NotTool  string `json:"not_tool"`
-	NotModel string `json:"not_model,omitempty"`
-	MinTrust string `json:"min_trust"`
-}
-
-func requirement(ctx context.Context, q store.Querier, task string) (require, error) {
-	var r require
+// requirement 取审阅任务对执行者的要求（gates 建审阅任务时记在经历 worker_require）；不是审阅任务返回零值，什么都不排除。
+func requirement(ctx context.Context, q store.Querier, task string) (gates.Requirement, error) {
+	var r gates.Requirement
 	body, ok, err := gates.Last(ctx, q, task, gates.KindRequire)
 	if err != nil || !ok {
 		return r, err
@@ -277,15 +278,10 @@ func requirement(ctx context.Context, q store.Querier, task string) (require, er
 	return r, json.Unmarshal([]byte(body), &r)
 }
 
-// refusal 判一位候选合不合审阅要求（纯函数）；合格返回空。
-func (r require) refusal(f Fact) string {
-	switch {
-	case r.NotTool != "" && f.Tool == r.NotTool:
-		return "审阅要换工具：与原执行者同是 " + f.Tool
-	case r.NotModel != "" && f.Model == r.NotModel:
-		return "审阅要换模型：与原执行者同是 " + f.Model
-	case r.MinTrust != "" && workers.TrustLevel(f.Trust) < workers.TrustLevel(r.MinTrust):
-		return "审阅者 trust 至少 " + r.MinTrust + "，它是 " + f.Trust
+// reviewRefusal 判一位执行者合不合审阅要求（纯函数）；合格返回空。
+func reviewRefusal(req gates.Requirement, id, tool, model, trust string) string {
+	if why := req.Refusal(gates.Profile{Name: id, Tool: tool, Model: model, Trust: trust}); why != "" {
+		return "审阅要求：" + why
 	}
 	return ""
 }

@@ -437,6 +437,9 @@ func TestPickSkipsMarked(t *testing.T) {
 
 func TestAgentRoutesAuth(t *testing.T) {
 	g := newRig(t)
+	oldQuotaAccounts := quota.DisabledAccounts
+	defer func() { quota.DisabledAccounts = oldQuotaAccounts }()
+	workers.Routes(api.NewRouter(g.env.Log), g.env)
 	dir := t.TempDir()
 	a, stop, _ := g.agent(dir)
 	defer stop()
@@ -461,6 +464,18 @@ func TestAgentRoutesAuth(t *testing.T) {
 		t.Fatalf("别台的运行应拒绝：%v", err)
 	}
 	// 额度上报：按机器记进 quota_cache。
+	for _, auto := range []string{"false", "true"} {
+		src := "---\nauto: " + auto + "\n---\n"
+		if _, err := workers.SaveProfile(ctx, g.env.DB, "harness/claude", workers.Edit{Source: &src}, "u1"); err != nil {
+			t.Fatal(err)
+		}
+		var reply struct {
+			Disabled map[string]bool `json:"disabled"`
+		}
+		if err := hostClient.Do(ctx, "POST", "/api/agent/quota", map[string]any{"readings": []quota.Reading{}}, &reply); err != nil || reply.Disabled["claude"] != (auto == "false") {
+			t.Fatalf("远程读取应跟随 auto=%s：%+v %v", auto, reply, err)
+		}
+	}
 	if err := hostClient.Do(ctx, "POST", "/api/agent/quota", map[string]any{"readings": []quota.Reading{{Account: "codex", OK: true, Finger: "f1", ReadAt: store.Now()}}}, nil); err != nil {
 		t.Fatal(err)
 	}

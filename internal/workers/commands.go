@@ -204,6 +204,7 @@ func asAPI(err error, target **api.Error) bool {
 
 // Routes 注册执行者接口。
 func Routes(r *api.Router, env *app.Env) {
+	quota.DisabledAccounts = disabledQuotaAccounts
 	hook(env)
 	r.Handle("GET /api/workers/quality", func(q *api.Req) (any, error) {
 		return ReadQuality(q.Context(), env.DB)

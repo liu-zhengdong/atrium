@@ -200,6 +200,9 @@ func TestReaderFailures(t *testing.T) {
 		return nil, nil
 	}
 	cases := map[string]string{"claude": "登录已过期", "codex": "只用 API key", "opencode": "没有登录 OpenCode Go"}
+	if r := ReadAccount(ctx, d, "claude"); strings.Contains(r.Reason, "自动续期") || strings.Contains(r.Reason, "运行 claude") {
+		t.Fatalf("过期提示仍许诺 CLI 恢复订阅登录：%s", r.Reason)
+	}
 	for a, want := range cases {
 		if r := ReadAccount(ctx, d, a); r.OK || !strings.Contains(r.Reason, want) {
 			t.Errorf("%s: %+v", a, r)
@@ -239,18 +242,18 @@ func TestLocalCache(t *testing.T) {
 	now := time.UnixMilli(1_800_000_000_000)
 	d.Now = func() time.Time { return now }
 	l := NewLocal(d)
-	if got := l.Due(context.Background()); len(got) != 3 {
+	if got := l.Due(context.Background(), nil); len(got) != 3 {
 		t.Fatalf("第一次应读三家：%d", len(got))
 	}
-	if got := l.Due(context.Background()); len(got) != 0 {
+	if got := l.Due(context.Background(), nil); len(got) != 0 {
 		t.Fatalf("缓存内不该再读：%d", len(got))
 	}
 	now = now.Add(61 * time.Second) // 失败的（claude、codex 没登录）1 分钟后再读，读到的 5 分钟
-	if got := l.Due(context.Background()); len(got) != 2 {
+	if got := l.Due(context.Background(), nil); len(got) != 2 {
 		t.Fatalf("1 分钟后只重读失败的两家：%d", len(got))
 	}
 	now = now.Add(5 * time.Minute)
-	if got := l.Due(context.Background()); len(got) != 3 || calls != 2 {
+	if got := l.Due(context.Background(), nil); len(got) != 3 || calls != 2 {
 		t.Fatalf("5 分钟后都到期：%d，请求 %d 次", len(got), calls)
 	}
 }

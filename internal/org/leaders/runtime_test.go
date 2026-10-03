@@ -475,9 +475,16 @@ func (f *fakeLauncher) launch(ctx context.Context, l Launch) (platform.Spec, err
 func TestWake(t *testing.T) {
 	env, h, _ := fixture(t)
 	ctx := context.Background()
-	f := &fakeLauncher{h: h, db: env.DB, ack: true, cmd: "exit 0"}
+	f := &fakeLauncher{h: h, db: env.DB, ack: true, cmd: "echo 本次输出"}
 	SetLauncher(f.launch)
 	t.Cleanup(func() { SetLauncher(nil) })
+	var segs []string
+	old := WakeUsage
+	WakeUsage = func(_ context.Context, _ store.Querier, profile, log string) (string, string, error) {
+		segs = append(segs, log)
+		return "m-" + profile, `{"currency":"USD"}`, nil
+	}
+	t.Cleanup(func() { WakeUsage = old })
 	round := func() {
 		t.Helper()
 		if err := h.round(ctx, env); err != nil {
@@ -544,6 +551,72 @@ func TestWake(t *testing.T) {
 	round()
 	if targetOf(2) != "secretary" {
 		t.Fatalf("a1 连续失败应转交秘书：%s", targetOf(2))
+	}
+
+	// 每次唤醒一条记录；用量只拿这次的日志段；没拉起来的不读日志、没有用时。
+	ws, err := ReadWakes(ctx, env.DB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	type row struct{ leader, outcome, reason, model string }
+	var got []row
+	for _, w := range ws {
+		got = append(got, row{w.Leader, w.Outcome, w.Reason, w.Model})
+		if (w.Outcome == WakeSetup) != (w.DurationMS == nil) || w.Profile != "fake" {
+			t.Fatalf("用时与组合：%+v", w)
+		}
+	}
+	want := []row{
+		{"a2", WakeOK, "", "m-fake"},
+		{"a2", WakeFail, "没确认 1/1 件", "m-fake"},
+		{"a2", WakeFail, "没确认 1/1 件；已转交 a1", "m-fake"},
+		{"a1", WakeSetup, "拉起接口还没接上（leaders.SetLauncher）", ""},
+		{"a1", WakeSetup, "拉起接口还没接上（leaders.SetLauncher）", ""},
+	}
+	if fmt.Sprint(got) != fmt.Sprint(want) || ws[2].N != 2 || ws[4].N != 2 || ws[0].N != 1 || ws[0].Usage != `{"currency":"USD"}` || ws[3].Usage != "{}" {
+		t.Fatalf("唤醒记录：%+v", ws)
+	}
+	if len(segs) != 3 {
+		t.Fatalf("只有拉起来的唤醒取用量：%d", len(segs))
+	}
+	for _, s := range segs {
+		if strings.Count(s, "=== ") != 1 || !strings.Contains(s, "本次输出") {
+			t.Fatalf("日志段应只含这一次唤醒：%q", s)
+		}
+	}
+
+	// 用量取不到不挡记录。
+	WakeUsage = func(context.Context, store.Querier, string, string) (string, string, error) {
+		return "", "", errors.New("解析失败")
+	}
+	SetLauncher(f.launch)
+	f.ack = true
+	events.Emit(ctx, env.DB, events.Event{Kind: events.TaskStatus, Task: "t1", Dept: "o2", Target: "a2", Level: events.Act})
+	round()
+	if ws, err = ReadWakes(ctx, env.DB); err != nil || len(ws) != 6 || ws[5].Outcome != WakeOK || ws[5].Usage != "{}" {
+		t.Fatalf("用量取不到也要落记录：%+v %v", ws, err)
+	}
+}
+
+func TestWakeResult(t *testing.T) {
+	boom := errors.New("超过 20m0s 没结束，已结束")
+	for _, c := range []struct {
+		started     bool
+		err         error
+		left, total int
+		to          []string
+		out, reason string
+	}{
+		{false, errors.New("a2 没有登记执行者组合"), 1, 1, nil, WakeSetup, "a2 没有登记执行者组合"},
+		{true, nil, 0, 3, nil, WakeOK, ""},
+		{true, errors.New("exit status 1"), 0, 3, nil, WakeOK, ""},
+		{true, nil, 2, 3, nil, WakeFail, "没确认 2/3 件"},
+		{true, boom, 3, 3, []string{"a1", "secretary"}, WakeFail, "没确认 3/3 件；超过 20m0s 没结束，已结束；已转交 a1、secretary"},
+	} {
+		out, reason := WakeResult(c.started, c.err, c.left, c.total, c.to)
+		if out != c.out || reason != c.reason {
+			t.Errorf("%+v：得到 %s %q", c, out, reason)
+		}
 	}
 }
 

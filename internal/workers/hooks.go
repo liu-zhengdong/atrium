@@ -3,6 +3,7 @@ package workers
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 
@@ -51,6 +52,31 @@ func hook(env *app.Env) {
 	leaders.SetLauncher(func(ctx context.Context, l leaders.Launch) (platform.Spec, error) {
 		return LeaderSpec(ctx, env, l)
 	})
+	leaders.WakeUsage = func(ctx context.Context, q store.Querier, profile, log string) (string, string, error) {
+		model, u, err := LeaderUsage(ctx, q, profile, log)
+		if err != nil {
+			return "", "", err
+		}
+		raw, err := json.Marshal(u)
+		return model, string(raw), err
+	}
+}
+
+// LeaderUsage 从负责人一次唤醒的日志段取工具报的实际模型与用量，口径同任务拉起（RunUsage）：
+// 档案写了 usage 按声明取，否则用内置工具的解析，再按档案结算。
+func LeaderUsage(ctx context.Context, q store.Querier, profile, log string) (string, Usage, error) {
+	w, err := Resolve(ctx, q, profile)
+	if err != nil {
+		return "", Usage{}, err
+	}
+	p := NewParser(profile)
+	p.Feed(log)
+	t := p.Trace()
+	u := t.Usage
+	if w.Rules.Usage != nil {
+		u = ExtractUsage(log, *w.Rules.Usage)
+	}
+	return t.Model, Charge(u, w.Rules), nil
 }
 
 // LeaderSpec 把一次负责人唤醒翻成进程调用：按登记的执行者组合解析档案，提示词从标准输入或参数给（不即时补充说明）。

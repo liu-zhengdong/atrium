@@ -2,12 +2,15 @@ package workers
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"sort"
 
+	"github.com/liu-zhengdong/atrium/internal/org/leaders"
 	"github.com/liu-zhengdong/atrium/internal/store"
 )
 
-// ReadQuality 分页读取全部相关经历，每件任务仍由 Settle 判定，不截断历史。
+// ReadQuality 分页读取全部相关经历，每件任务仍由 Settle 判定，不截断历史；负责人唤醒记录另成行。
 func ReadQuality(ctx context.Context, db store.Querier) ([]Quality, error) {
 	byTask := map[string][]Event{}
 	var upper int64
@@ -53,5 +56,26 @@ func ReadQuality(ctx context.Context, db store.Querier) ([]Quality, error) {
 		}
 		all = append(all, ls...)
 	}
-	return Qualities(all), nil
+	ws, err := leaders.ReadWakes(ctx, db)
+	if err != nil {
+		return nil, err
+	}
+	wakes := make([]Attempt, 0, len(ws))
+	for _, w := range ws {
+		a, err := WakeAttempt(w)
+		if err != nil {
+			return nil, err
+		}
+		wakes = append(wakes, a)
+	}
+	return Qualities(all, wakes), nil
+}
+
+// WakeAttempt 把一条负责人唤醒记录当成一次拉起（Task 是负责人）。
+func WakeAttempt(w leaders.Wake) (Attempt, error) {
+	a := Attempt{Task: w.Leader, N: w.N, Worker: w.Profile, Model: w.Model, Outcome: w.Outcome, Reason: w.Reason, At: w.At, DurationMS: w.DurationMS}
+	if err := json.Unmarshal([]byte(w.Usage), &a.Usage); err != nil {
+		return Attempt{}, fmt.Errorf("负责人 %s 的唤醒记录 %d 用量坏了：%w", w.Leader, w.ID, err)
+	}
+	return a, nil
 }

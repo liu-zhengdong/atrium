@@ -8,9 +8,11 @@ import (
 )
 
 // Quality 是一个组合全部有结果的拉起；结果与用时口径复用 Count。
+// Leader 为真的是负责人唤醒：一次唤醒算一次拉起，与任务拉起口径不同，分开成行。
 type Quality struct {
 	Stat
 	Combo              string         `json:"combo"`
+	Leader             bool           `json:"leader"`
 	DeliveryRate       float64        `json:"delivery_rate"`
 	Retries            int            `json:"retries"`
 	RetryRate          float64        `json:"retry_rate"`
@@ -19,8 +21,15 @@ type Quality struct {
 	CostPerDeliveryUSD *float64       `json:"cost_per_delivery_usd"`
 }
 
-// Qualities 纯聚合；与 Recent 一样排除没有结果的拉起、合并强度。
-func Qualities(attempts []Attempt) []Quality {
+// Qualities 纯聚合任务拉起与负责人唤醒（各自按组合分组，任务在前）；与 Recent 一样排除没有结果的拉起、合并强度。
+func Qualities(tasks, wakes []Attempt) []Quality {
+	t, l := qualities(tasks, false), qualities(wakes, true)
+	sortQualities(t)
+	sortQualities(l)
+	return append(t, l...)
+}
+
+func qualities(attempts []Attempt, leader bool) []Quality {
 	groups := map[string][]Attempt{}
 	for _, a := range attempts {
 		if a.Outcome != "" {
@@ -29,7 +38,7 @@ func Qualities(attempts []Attempt) []Quality {
 	}
 	out := []Quality{}
 	for combo, ls := range groups {
-		q := Quality{Stat: Count(ls), Combo: combo, BounceReasons: map[string]int{}}
+		q := Quality{Stat: Count(ls), Combo: combo, Leader: leader, BounceReasons: map[string]int{}}
 		total := 0.0
 		for _, a := range ls {
 			if a.N > 1 {
@@ -52,6 +61,10 @@ func Qualities(attempts []Attempt) []Quality {
 		}
 		out = append(out, q)
 	}
+	return out
+}
+
+func sortQualities(out []Quality) {
 	sort.Slice(out, func(i, j int) bool {
 		a, b := out[i], out[j]
 		if a.DeliveryRate != b.DeliveryRate {
@@ -76,7 +89,14 @@ func Qualities(attempts []Attempt) []Quality {
 		}
 		return a.Combo < b.Combo
 	})
-	return out
+}
+
+// Name 是表里这一行的名字：负责人唤醒在组合后标「（负责人）」。
+func (q Quality) Name() string {
+	if q.Leader {
+		return q.Combo + "（负责人）"
+	}
+	return q.Combo
 }
 
 func (q Quality) costText() string {

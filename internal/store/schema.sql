@@ -343,6 +343,22 @@ CREATE TABLE IF NOT EXISTS worker_marks (
   PRIMARY KEY (tool, model, host)
 );
 
+-- 负责人唤醒记录：一次唤醒拉起一条，只追加（每天几十条，不清理），workers --quality 与任务拉起一起统计。
+-- profile 是这次用的执行者组合；n 是第几次连续尝试（上次没处理完再唤醒为 2）；outcome 取值同任务拉起（ok、fail、setup）；
+-- usage 是 workers.Usage 的 JSON。leader 不设外键：身份删掉后这个组合的记录照样计入质量统计。
+CREATE TABLE IF NOT EXISTS leader_wakes (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  leader      TEXT NOT NULL,
+  profile     TEXT NOT NULL,
+  n           INTEGER NOT NULL,
+  model       TEXT NOT NULL DEFAULT '',
+  outcome     TEXT NOT NULL CHECK (outcome IN ('ok', 'fail', 'setup')),
+  reason      TEXT NOT NULL DEFAULT '',
+  usage       TEXT NOT NULL DEFAULT '{}',
+  duration_ms INTEGER,
+  at          INTEGER NOT NULL
+);
+
 -- 待投递事件：订阅者 wait 取、ack 确认；租约内不重投。target 是投递对象（aN 或 secretary）。
 -- level：act 要处理、info 知会。key 是去重键：同一 target 同一 key 还没取走、没确认的合并成一条（count 加一）。
 CREATE TABLE IF NOT EXISTS events (

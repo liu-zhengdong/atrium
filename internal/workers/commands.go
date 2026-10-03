@@ -175,7 +175,7 @@ func Show(ctx context.Context, q store.Querier, name string) (Detail, error) {
 	}
 	quality := Quality{Combo: Combo(r.ID), BounceReasons: map[string]int{}}
 	for _, v := range qualities {
-		if v.Combo == quality.Combo {
+		if v.Combo == quality.Combo && !v.Leader {
 			quality = v
 			break
 		}

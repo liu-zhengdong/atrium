@@ -260,13 +260,17 @@ func Commands(t *cli.Table) {
 	ledger.HistoryText[ExitKind] = ExitText
 	ledger.HistoryText[RecountKind] = RecountText
 	t.Group("workers", "执行者：可派的组合、档案与近期拉起统计")
-	t.Add(cli.Command{Path: "workers quality", Summary: "按组合列全部历史的质量汇总（交付率、重试、花费、用时与交回原因）", Detail: qualityHelp, Run: qualityCmd})
 	t.Add(cli.Command{Path: "workers chrome-mcp", Local: true, Hidden: true,
 		Summary: "执行者 Chrome MCP 入口", Args: "[-- MCP 参数]",
 		Run: func(c *cli.Ctx) error { return runChromeMCP(c.Args, os.Stdin, c.Env.Stdout, c.Env.Stderr) }})
 	t.Add(cli.Command{Path: "workers", Args: "[执行者或 层/名]",
-		Summary: "列执行者（组合、信任、近 20 次拉起的结果、哪台上不可用）；给名字看叠加后的档案与每次拉起的明细，或一层原文",
+		Summary: "列执行者；--quality 看全量质量；给名字看档案、质量与近 20 次明细",
+		Detail:  qualityHelp,
+		Flags:   []cli.Flag{{Name: "quality", Bool: true, Help: "按组合列全量质量汇总（不带名字），按交付率、花费、用时排序"}},
 		Run: func(c *cli.Ctx) error {
+			if c.Bool("quality") {
+				return qualityCmd(c)
+			}
 			if err := c.MaxArgs(1); err != nil {
 				return err
 			}

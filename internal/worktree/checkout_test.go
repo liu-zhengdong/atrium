@@ -221,6 +221,48 @@ func TestEnsureRetryAfterFailedCheckout(t *testing.T) {
 	assertParentUntouched(t, gh, parent, before)
 }
 
+// 补检搬完 .git、登记（worktree repair）还没接上就中断的目录：重试不能只凭 .git 和顶层校验放行，
+// 复用时要先把登记接回目录，之后才能正常回收（t927 审阅 P2）。
+func TestEnsureRetryAfterFailedRepair(t *testing.T) {
+	gh, ctx, parent, dir := parentRepo(t, "task-t1")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "keep.txt"), []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	before := gh.Must(parent, "rev-parse", "HEAD")
+	fail := true
+	run := func(c context.Context, d, name string, args ...string) (string, error) {
+		if fail && name == "git" && len(args) > 1 && args[0] == "worktree" && args[1] == "repair" {
+			return "", errors.New("注入：登记修复失败")
+		}
+		return gh.Git.Run(c, d, name, args...)
+	}
+	checkout := func() error { return worktree.Create(ctx, gh.Work, dir, "task-t1", "main", run) }
+	if err := worktree.Ensure(ctx, dir, run, checkout); err == nil {
+		t.Fatal("登记修复失败时不该放行")
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".git")); err != nil {
+		t.Fatalf("这次应留下 .git，等重试接上登记：%v", err)
+	}
+	fail = false
+	if err := worktree.Ensure(ctx, dir, run, checkout); err != nil {
+		t.Fatalf("重试应把登记接上：%v", err)
+	}
+	assertOwnTop(t, gh, dir)
+	if err := worktree.Remove(ctx, gh.Work, dir, "task-t1", gh.Git.Run); err != nil {
+		t.Fatalf("重试后回收不了：%v", err)
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatalf("工作树没回收：%v", err)
+	}
+	if out := gh.Must(gh.Work, "branch", "--list", "task-t1"); out != "" {
+		t.Fatalf("残留分支：%s", out)
+	}
+	assertParentUntouched(t, gh, parent, before)
+}
+
 // 目标文件系统不区分大小写时（Windows 与默认的 macOS），已有的 readme.md 挡住仓库里的 README.md，拉起前拒绝。
 func TestEnsureCaseOnlyConflictRefuses(t *testing.T) {
 	gh, ctx, parent, dir := parentRepo(t, "task-t1")

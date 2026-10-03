@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/liu-zhengdong/atrium/internal/gates"
 	"github.com/liu-zhengdong/atrium/internal/ledger"
@@ -19,6 +20,9 @@ func (f flakyExec) Run(context.Context, string, string, ...string) (string, erro
 // dispatch 拉起时的外部 git 调用瞬断（t704 的 RPC failed）不该转受阻：记一
 // 轮重试、任务留在队列，下一轮 pump 重派成功；连续失败才转受阻（ledger 测）。
 func TestLaunchTransientRetries(t *testing.T) {
+	delays := ledger.RetryDelays
+	ledger.RetryDelays = []time.Duration{0, 0, 0} // 间隔到期检查在 ledger 测，这里只管触发重试
+	t.Cleanup(func() { ledger.RetryDelays = delays })
 	env, d := setup(t)
 	ctx := context.Background()
 	repo := gitRepo(t)

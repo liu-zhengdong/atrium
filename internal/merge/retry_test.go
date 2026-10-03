@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/liu-zhengdong/atrium/internal/gates"
 	"github.com/liu-zhengdong/atrium/internal/gates/fakegh"
@@ -35,6 +36,9 @@ func (r *racePush) Run(ctx context.Context, dir, name string, args ...string) (s
 // 队列取 PR 头后执行者中途强推，push --force-with-lease 被拒（stale info）。
 // 队列每轮 next 都重新取头，重跑一轮即可自愈：记一轮重试、不转受阻。
 func TestMergeStaleInfoRetries(t *testing.T) {
+	old := ledger.RetryDelays
+	ledger.RetryDelays = []time.Duration{0, 0, 0} // 间隔到期检查在 ledger 测，这里只管触发重试
+	t.Cleanup(func() { ledger.RetryDelays = old })
 	e := setup(t, nil)
 	task := e.deliver("t1-a", map[string]string{"a.go": "package a\n"})
 	e.gh.Commit(map[string]string{"other.go": "package o\n"}) // main 先前进：合入要 rebase 后强推分支，才会走到那条 push

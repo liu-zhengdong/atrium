@@ -4,6 +4,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/liu-zhengdong/atrium/internal/gates/fakegh"
 	"github.com/liu-zhengdong/atrium/internal/ledger"
@@ -12,6 +13,9 @@ import (
 // 关卡调 gh 瞬断（t691 的 unexpected EOF）不该转受阻：记一轮重试，任务留在
 // 原阶段，下一轮 Sweep 网络好了照常过；连续失败才转受阻（ledger 测）。
 func TestGateTransientRetries(t *testing.T) {
+	delays := ledger.RetryDelays
+	ledger.RetryDelays = []time.Duration{0, 0, 0} // 间隔到期检查在 ledger 测，这里只管触发重试
+	t.Cleanup(func() { ledger.RetryDelays = delays })
 	e := setup(t)
 	dir := filepath.Join(t.TempDir(), "wt")
 	e.gh.Branch(dir, "t1-work", map[string]string{"a.go": "package a\n"})

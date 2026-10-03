@@ -24,7 +24,7 @@ type Fact struct {
 	Waiting     string // 主机暂未就绪；仍符合条件，等待后再派
 	Exclusive   bool
 	Preferred   int          // 技能里的优先顺序（1 起）；0 不是
-	Stat        workers.Stat // 近 StatWindow 次表现，仅供展示
+	Stat        workers.Stat // 近 StatWindow 次表现；拉起次数用于同档轮转
 	Fails       int          // 这个「工具+模型」近 ShakyWindow 次拉起里启动失败几次（workers.Fails）
 }
 
@@ -87,7 +87,8 @@ func NeedTrust(priority ledger.Priority, risk string) (min, why string) {
 }
 
 // Pick 挑执行者（纯函数）：档案能接、装了、本机没标不可用、trust 够活的分量（NeedTrust）、额度没见底；
-// 能接的先把近期启动失败多的（Shaky）排到后面，再按技能优先、额度富余排（没有富余数据的排在有的后面，之间按档案顺序）；正忙的跳过。
+// 能接的先把近期启动失败多的（Shaky）排到后面，再按技能优先分档；同档按近期拉起次数升序、额度富余降序排
+// （次数相同时，没有富余数据的排在有的后面，之间按档案顺序）；正忙的跳过。
 func Pick(in PickInput) PickView {
 	minTrust, heavy := NeedTrust(in.Priority, in.Risk)
 	v := PickView{Risk: in.Risk, Candidates: []Candidate{}}
@@ -144,6 +145,9 @@ func Pick(in PickInput) PickView {
 		}
 		if a.pref != b.pref {
 			return a.pref < b.pref
+		}
+		if a.c.Stat.Launches != b.c.Stat.Launches {
+			return a.c.Stat.Launches < b.c.Stat.Launches
 		}
 		if (a.c.Spare == nil) != (b.c.Spare == nil) {
 			return a.c.Spare != nil

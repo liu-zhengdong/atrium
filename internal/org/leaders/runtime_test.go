@@ -512,7 +512,7 @@ func TestWake(t *testing.T) {
 		t.Fatalf("负责人的临时目录应是自己的会话临时目录 %s：%q", tmp, l.Env[platform.EnvKey(runtime.GOOS, "TMPDIR")])
 	}
 	if l.Profile != "fake" || l.Env["ATRIUM_WORKER"] != "" || l.Env["ATRIUM_DATA"] != env.Paths.Data ||
-		!strings.Contains(l.Prompt, "k1（o1）简洁优先") || !strings.Contains(l.Prompt, "## 用户的全局原则（~/AGENTS.md，优先于部门要点）\n\n先给结论") || !strings.Contains(l.Prompt, "#1") || !strings.Contains(l.Prompt, "发给 a1") ||
+		!strings.Contains(l.Prompt, "k1（o1）简洁优先") || !strings.Contains(l.Prompt, "## 用户的全局原则（~/AGENTS.md，优先于部门要点）\n\n先给结论") || !strings.Contains(l.Prompt, "#1") || !strings.Contains(l.Prompt, "发给 总部（a1）") ||
 		!strings.Contains(l.Prompt, "也归你管的下属部门：o4 网页") {
 		t.Fatalf("唤醒输入不对：%+v", l)
 	}

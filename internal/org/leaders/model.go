@@ -158,8 +158,9 @@ type DeptBrief struct {
 // PromptInput 是一次唤醒提示词的全部材料。
 type PromptInput struct {
 	Leader   org.Identity
-	Global   string // 用户的全局原则（org.Principles 拼好的一节）；没有为空
-	Skills   string // 技能索引（org.SkillIndex 拼好的一节）；没有为空
+	Names    map[string]string // identities 名册中的负责人名字，仅供纯文本呈现
+	Global   string            // 用户的全局原则（org.Principles 拼好的一节）；没有为空
+	Skills   string            // 技能索引（org.SkillIndex 拼好的一节）；没有为空
 	Depts    []DeptBrief
 	Memo     string
 	Events   []Event
@@ -174,7 +175,7 @@ func Prompt(in PromptInput) string {
 	if len(in.Depts) > 0 {
 		home = in.Depts[0].Dept.ID
 	}
-	w("你是 Atrium 组织里的负责人 %s（%s）。你是一次性进程：处理完下面这批事件、确认后退出。", in.Leader.ID, in.Leader.Name)
+	w("你是 Atrium 组织里的负责人 %s。你是一次性进程：处理完下面这批事件、确认后退出。", org.DisplayIdentity(in.Leader.ID, in.Names))
 	w("你的连续性存在 Atrium（要点、任务备注、你的备忘），不靠这次的记忆。你不写代码、不改仓库：活派给执行者，你负责判断、派、盯、收。")
 	w("")
 	if in.Global != "" {
@@ -272,7 +273,7 @@ func Prompt(in PromptInput) string {
 	w("- 可以：动你负责的部门及其下属的任务、要点、资料、定时任务，改介绍；在下属负责人管的区域里建、改、裁撤部门，登记新负责人时用 leader add <名字> --org oN 一步绑定部门，或用 org edit oN --leader <aN|-> 撤换、清除。直接下属负责人最多 %d 位，同一位可管多个部门。管辖分派任务部门（%s）的负责人还能改执行者档案、解除不可用标记（atrium workers edit，--clear 解除）。", org.MaxDirectLeaders, ProfileDept)
 	w("- 不可以：在自己直接管的地方改结构，或动管辖之外的部门。需要建分工时用 atrium leader escalate <要建什么、为什么> --kind beyond 上报；上一层收到后自己动手建（即审批），或回复不同意。不能停机或操作服务。")
 	w("")
-	w("## 上报（cross、beyond、stuck 发给 %s；notify、ask 直达秘书，其余自己处理）", in.Upstream)
+	w("## 上报（cross、beyond、stuck 发给 %s；notify、ask 直达秘书，其余自己处理）", org.DisplayIdentity(in.Upstream, in.Names))
 	w("完成结果自动发回任务分派人；自己建、自己收的任务在网页今天页的完成列表查看。")
 	for _, k := range Kinds {
 		w("- %s %s → atrium leader escalate 说明 --kind %s [--task tN]", k.Key, k.Label, k.Key)
@@ -284,7 +285,7 @@ func Prompt(in PromptInput) string {
 	w("## 收尾")
 	w("1. 在等什么、合完要做什么，写进那件任务的备注（task note tN），做了取舍的也写进去。备忘只留跨任务、下次醒来先要知道的几句提示，不记任务进展、命令用法和排障经过（排障经过写进部门资料）。")
 	w("2. 处理完确认：atrium events ack %s", strings.Join(ids, " "))
-	w("3. 退出。没确认的事件会再次唤醒你；连续 %d 次没处理完，会转交 %s。", MaxFails, in.Upstream)
+	w("3. 退出。没确认的事件会再次唤醒你；连续 %d 次没处理完，会转交 %s。", MaxFails, org.DisplayIdentity(in.Upstream, in.Names))
 	return b.String()
 }
 

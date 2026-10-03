@@ -3,6 +3,8 @@ package api
 import (
 	"context"
 	"errors"
+	"net"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -106,10 +108,48 @@ func TestSign(t *testing.T) {
 }
 
 func TestClientNotRunning(t *testing.T) {
-	c := &Client{Base: "http://127.0.0.1:1"}
-	err := c.Do(context.Background(), "GET", "/health", nil, nil)
-	var ae *Error
-	if !errors.As(err, &ae) || ae.Code != "not_running" || ae.Next != "atrium start" {
-		t.Fatalf("got %v", err)
+	for _, tc := range []struct {
+		name, op, message string
+		notRunning        bool
+	}{
+		{"refused", "dial", "connect: connection refused", true},
+		{"timeout", "dial", "i/o timeout", true},
+		{"reset", "dial", "connect: connection reset by peer", true},
+		{"read_reset", "read", "connection reset by peer", false},
+		{"write_broken_pipe", "write", "broken pipe", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cause := &net.OpError{Op: tc.op, Net: "tcp", Addr: &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 14310}, Err: errors.New(tc.message)}
+			calls := 0
+			c := &Client{Base: "http://127.0.0.1:14310", HTTP: &http.Client{Transport: clientErrorTransport(func(*http.Request) (*http.Response, error) {
+				calls++
+				return nil, cause
+			})}}
+			err := c.Do(context.Background(), "POST", "/api/materials", map[string]string{"org": "o4"}, nil)
+			if calls != 1 {
+				t.Fatalf("请求次数 = %d，失败后不应自动重试", calls)
+			}
+			var ae *Error
+			if !tc.notRunning {
+				if !errors.Is(err, cause) || errors.As(err, &ae) {
+					t.Fatalf("读写错误应原样返回，不应归为 not_running：%v", err)
+				}
+				return
+			}
+			if !errors.As(err, &ae) || ae.Code != "not_running" {
+				t.Fatalf("拨号错误应归为 not_running：%v", err)
+			}
+			if want := "连不上服务（" + c.Base + "）：" + cause.Error(); ae.Message != want {
+				t.Errorf("Message = %q，want %q", ae.Message, want)
+			}
+			if !strings.HasPrefix(ae.Next, "atrium start") || !strings.Contains(ae.Next, "远程机器的代理端口") ||
+				!strings.Contains(ae.Next, "反向隧道断开") || !strings.Contains(ae.Next, "稍候重试") {
+				t.Errorf("Next 应同时给出本机启动与远程隧道指引：%q", ae.Next)
+			}
+		})
 	}
 }
+
+type clientErrorTransport func(*http.Request) (*http.Response, error)
+
+func (f clientErrorTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }

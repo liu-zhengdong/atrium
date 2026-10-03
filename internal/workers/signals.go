@@ -454,6 +454,9 @@ func eventEnding(e event) (Ending, bool) {
 		if e["is_error"] == true {
 			return Ending{Known: true, Reason: "执行者报错收尾：" + oneLine(e.str("result")+" "+e.str("subtype"))}, true
 		}
+		if e.str("stopReason") == "permission_denied" {
+			return Ending{Known: true, Reason: "工具权限被拒，没干成（permission_denied；--print 下要放行参数）"}, true
+		}
 		return Ending{Known: true, OK: true}, true
 	case e.str("event") == "result":
 		r := e.obj("result")

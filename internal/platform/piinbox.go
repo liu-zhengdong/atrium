@@ -81,6 +81,21 @@ func ListPiInbox(home string) ([]PiInbox, error) {
 	return out, nil
 }
 
+// PiTokenFor 按收件地址在登记里找会话并读它此刻的口令：pi-inbox 每次 session_start 换口令和口令文件，
+// 收件地址按 pid 定、不变，所以被拒收后靠它取新口令。没有这个收件地址的登记时返回包着 os.ErrNotExist 的错误。
+func PiTokenFor(home, socket string) (string, error) {
+	list, err := ListPiInbox(home)
+	if err != nil {
+		return "", err
+	}
+	for _, in := range list {
+		if in.Socket == socket {
+			return in.Token()
+		}
+	}
+	return "", fmt.Errorf("登记里已没有收件地址 %s：%w", socket, os.ErrNotExist)
+}
+
 // Token 读口令文件。口令只在本机、只给 bridge 用，不进日志。
 func (in PiInbox) Token() (string, error) {
 	raw, err := os.ReadFile(in.KeyFile)
@@ -119,7 +134,10 @@ type piMessage struct {
 	DeliverAs string `json:"deliverAs"`
 }
 
-// SendPiMessages 投递若干条消息并逐条读回执；任一条没收下就报错。
+// ErrPiRejected：连上了会话，但会话回执拒收（如口令不对的 unauthorized）。和连不上分开：重试连接救不了它。
+var ErrPiRejected = errors.New("会话没收下")
+
+// SendPiMessages 投递若干条消息并逐条读回执；任一条没收下就报错（会话拒收的包着 ErrPiRejected）。
 // deliverAs=followUp：秘书会话忙时不打断，排在当前这轮之后。
 func SendPiMessages(endpoint, token string, messages []string, timeout time.Duration) error {
 	conn, err := DialEndpoint(endpoint, timeout)
@@ -159,7 +177,7 @@ func SendPiMessages(endpoint, token string, messages []string, timeout time.Dura
 			return fmt.Errorf("回执认不出（%q）：%w", strings.TrimSpace(line), err)
 		}
 		if !reply.OK {
-			return fmt.Errorf("会话没收下：%s", reply.Error)
+			return fmt.Errorf("%w：%s", ErrPiRejected, reply.Error)
 		}
 	}
 	return nil

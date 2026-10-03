@@ -91,6 +91,28 @@ func TestSendPiMessagesRefused(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "rate limited") {
 		t.Fatalf("会话拒收应报出它的理由：%v", err)
 	}
+	if !errors.Is(err, ErrPiRejected) || errors.Is(err, ErrEndpointGone) {
+		t.Fatalf("会话拒收应是 ErrPiRejected，不是连不上：%v", err)
+	}
+}
+
+func TestPiTokenFor(t *testing.T) {
+	home := t.TempDir()
+	key := filepath.Join(home, "7.new.key")
+	if err := os.WriteFile(key, []byte(`{"token":"t-new","pid":7}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	writeInbox(t, home, 7, `{"pid":7,"socketPath":"/tmp/7.sock","keyFile":"`+key+`"}`)
+	writeInbox(t, home, 8, `{"pid":8,"socketPath":"/tmp/8.sock","keyFile":"/tmp/没有.key"}`)
+	if token, err := PiTokenFor(home, "/tmp/7.sock"); err != nil || token != "t-new" {
+		t.Fatalf("应按收件地址读到登记里现在的口令：%v %q", err, token)
+	}
+	if _, err := PiTokenFor(home, "/tmp/9.sock"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("登记里没有这个收件地址应报 ErrNotExist：%v", err)
+	}
+	if _, err := PiTokenFor(home, "/tmp/8.sock"); err == nil {
+		t.Fatal("口令文件读不出应报错")
+	}
 }
 
 func TestSendPiMessagesNoReceipt(t *testing.T) {

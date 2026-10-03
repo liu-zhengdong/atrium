@@ -59,7 +59,12 @@ func Commands(t *cli.Table) {
 	t.Add(cli.Command{Path: "statusline", Summary: "一行状态给 Claude Code 状态栏：等你拍板、未结束任务在等谁、秘书在不在听", Hidden: true,
 		Run: func(c *cli.Ctx) error {
 			var v watch.View
-			err := c.Call("GET", "/api/top", nil, &v)
+			var err error
+			if c.JSON {
+				err = c.Call("GET", "/api/top", nil, &v)
+			} else {
+				v, err = watch.ReadHumanView(c)
+			}
 			var ae *api.Error
 			if errors.As(err, &ae) && ae.Code == "not_running" {
 				return c.Done(map[string]any{"running": false}, "Atrium 未运行", "")
@@ -504,8 +509,8 @@ func sessionBrief(c *cli.Ctx) (string, error) {
 		}
 		points = append(points, s.Points...)
 	}
-	var v watch.View
-	if err := c.Call("GET", "/api/top", nil, &v); err != nil {
+	v, err := watch.ReadHumanView(c)
+	if err != nil {
 		return "", err
 	}
 	var m struct {

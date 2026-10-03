@@ -1,11 +1,14 @@
 package watch
 
 import (
+	"encoding/json"
+	"strings"
+	"testing"
+	"time"
+
 	"github.com/liu-zhengdong/atrium/internal/events"
 	"github.com/liu-zhengdong/atrium/internal/ledger"
 	"github.com/liu-zhengdong/atrium/internal/store"
-	"testing"
-	"time"
 )
 
 // 隔离实例：真实 SQLite、账本、巡检与事件队列；时间与身份均为假数据。
@@ -46,6 +49,24 @@ func TestOverdueLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Logf("首次提醒 target=%s", target)
+	var raw string
+	if err := env.DB.QueryRow(`SELECT body FROM events WHERE id = ?`, id).Scan(&raw); err != nil {
+		t.Fatal(err)
+	}
+	row := events.Row{ID: id, Task: task.ID, Target: target, Kind: events.Overdue, Body: json.RawMessage(raw)}
+	line := events.Line(row, map[string]string{"a1": "Atrium 负责人", "a2": "部门负责人"})
+	if !strings.Contains(line, "收件人：Atrium 负责人（a1）") || !strings.Contains(line, "已 31 分钟") {
+		t.Fatal(line)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(row.Body, &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["holder"] != "a1" || strings.Contains(raw, "Atrium 负责人") {
+		t.Fatalf("提醒事实被改写：%s", raw)
+	}
+	t.Logf("watch overdue → Emit → Line: %s\n原始 body: %s", line, raw)
+
 	if target != "a1" {
 		t.Errorf("实际处理人a1，部门负责人a2；首次投给%s", target)
 	}

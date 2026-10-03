@@ -354,7 +354,11 @@ func (b *bridge) run(ctx context.Context) string {
 			pending = nil
 			continue
 		}
-		err := b.send(Prompt(batch, store.Now(), RemindAfter))
+		names, err := events.ReadNames(b.c)
+		if err != nil {
+			return fmt.Sprintf("读取负责人名册失败：%v", err)
+		}
+		err = b.send(Prompt(batch, store.Now(), RemindAfter, names))
 		b.noteDelivery(err)
 		if errors.Is(err, platform.ErrPiRejected) {
 			// 连得上但拒收，不进 Liveness 计时（2 分钟连不上的判定对它永不触发）；send 已重读口令重试过。

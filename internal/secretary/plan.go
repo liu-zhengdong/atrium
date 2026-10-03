@@ -116,7 +116,7 @@ func Merge(pending, rows []events.Row) []events.Row {
 }
 
 // Prompt 是送进会话的一条消息：「【Atrium 事件】」开头，每条一行摘要，末尾给看详情与确认的命令。
-func Prompt(b Batch, now int64, remind time.Duration) string {
+func Prompt(b Batch, now int64, remind time.Duration, names map[string]string) string {
 	all := append(append([]events.Row{}, b.Fresh...), b.Remind...)
 	minutes := int(remind.Minutes())
 	var lines []string
@@ -132,13 +132,13 @@ func Prompt(b Batch, now int64, remind time.Duration) string {
 		}
 	}
 	for _, r := range b.Fresh {
-		lines = append(lines, "- "+promptEventLine(r, now))
+		lines = append(lines, "- "+promptEventLine(r, now, names))
 	}
 	if len(b.Fresh) > 0 && len(b.Remind) > 0 {
 		lines = append(lines, fmt.Sprintf("送过 %d 分钟还没确认：", minutes))
 	}
 	for _, r := range b.Remind {
-		lines = append(lines, "- "+promptEventLine(r, now))
+		lines = append(lines, "- "+promptEventLine(r, now, names))
 	}
 	var ids, tasks []string
 	seen := map[string]bool{}
@@ -158,8 +158,8 @@ func Prompt(b Batch, now int64, remind time.Duration) string {
 }
 
 // promptEventLine 按事件发生时刻标出条龄，不以更新或上次送入时刻计算。
-func promptEventLine(r events.Row, now int64) string {
-	line := events.Line(r)
+func promptEventLine(r events.Row, now int64, names map[string]string) string {
+	line := events.Line(r, names)
 	age := now - r.At
 	if age > (10 * time.Minute).Milliseconds() {
 		if age >= time.Hour.Milliseconds() {

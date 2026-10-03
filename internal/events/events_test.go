@@ -213,7 +213,7 @@ func TestLegacyShippedEvent(t *testing.T) {
 	if err != nil || len(rows) != 1 || rows[0].Level != Info {
 		t.Fatalf("旧上报应保留已存的级别：%+v %v", rows, err)
 	}
-	if got := Summary(rows[0]); got != "a1 上报（已上线（里程碑））：请转告用户" {
+	if got := Summary(rows[0], nil); got != "未登记负责人（a1） 上报（已上线（里程碑））：请转告用户" {
 		t.Errorf("旧上报应使用已存的标签和说明：%q", got)
 	}
 	if rows, err := Pending(ctx, db, Secretary, false, 10); err != nil || len(rows) != 0 {
@@ -222,39 +222,39 @@ func TestLegacyShippedEvent(t *testing.T) {
 }
 
 func TestSummary(t *testing.T) {
-	if s := Summary(Row{Kind: LeaderEscalate, Body: []byte(`{"from":"a1","label":"无法解决","note":"证书要用户签"}`)}); s != "a1 上报（无法解决）：证书要用户签" {
+	if s := Summary(Row{Kind: LeaderEscalate, Body: []byte(`{"from":"a1","label":"无法解决","note":"证书要用户签"}`)}, nil); s != "未登记负责人（a1） 上报（无法解决）：证书要用户签" {
 		t.Errorf("上报 Summary = %q", s)
 	}
 	body, _ := json.Marshal(map[string]any{
 		"text": "部门 o2 的每部门要点已 8/7 条（满了找部门负责人）：先合并",
 		"next": "atrium org show o2",
 	})
-	if s := Summary(Row{Kind: LimitFull, Body: body}); s != "部门 o2 的每部门要点已 8/7 条（满了找部门负责人）：先合并 · atrium org show o2" {
+	if s := Summary(Row{Kind: LimitFull, Body: body}, nil); s != "部门 o2 的每部门要点已 8/7 条（满了找部门负责人）：先合并 · atrium org show o2" {
 		t.Errorf("上限 Summary = %q", s)
 	}
 	body, _ = json.Marshal(map[string]any{"from": "running", "to": "blocked", "title": "修登录"})
-	if s := Summary(Row{Kind: TaskStatus, Body: body}); s != "running → blocked「修登录」" {
+	if s := Summary(Row{Kind: TaskStatus, Body: body}, nil); s != "running → blocked「修登录」" {
 		t.Errorf("Summary = %q", s)
 	}
 	body, _ = json.Marshal(map[string]any{"from": "running", "to": "done", "stage": "released", "title": "修登录", "note": "已上线（v1.2.3）"})
-	if s := Summary(Row{Kind: TaskStatus, Body: body}); s != "running → done（released）「修登录」 · 已上线（v1.2.3）" {
+	if s := Summary(Row{Kind: TaskStatus, Body: body}, nil); s != "running → done（released）「修登录」 · 已上线（v1.2.3）" {
 		t.Errorf("Summary = %q", s)
 	}
 	body, _ = json.Marshal(map[string]any{"text": "卡住，等处理", "held_ms": 31 * 60000, "next": "atrium task show t1"})
-	if s := Summary(Row{Kind: Overdue, Body: body}); s != "到期：卡住，等处理（已 31 分钟） · atrium task show t1" {
+	if s := Summary(Row{Kind: Overdue, Body: body}, nil); s != "到期：卡住，等处理（已 31 分钟） · atrium task show t1" {
 		t.Errorf("Summary = %q", s)
 	}
-	if s := Summary(Row{Kind: TaskAssigned, Body: []byte(`{"title":"拆分任务分派任务"}`)}); s != "交给你去拆「拆分任务分派任务」：拆子任务、分派任务、收尾" {
+	if s := Summary(Row{Kind: TaskAssigned, Body: []byte(`{"title":"拆分任务分派任务"}`)}, nil); s != "交给你去拆「拆分任务分派任务」：拆子任务、分派任务、收尾" {
 		t.Errorf("TaskAssigned Summary = %q", s)
 	}
-	if s := Summary(Row{Kind: TaskAssigned, Body: []byte(`{"title":"拆分任务分派任务","tell":"也要改网页"}`)}); s != "交给你拆的「拆分任务分派任务」有补充：也要改网页" {
+	if s := Summary(Row{Kind: TaskAssigned, Body: []byte(`{"title":"拆分任务分派任务","tell":"也要改网页"}`)}, nil); s != "交给你拆的「拆分任务分派任务」有补充：也要改网页" {
 		t.Errorf("带补充的 TaskAssigned Summary = %q", s)
 	}
 	body, _ = json.Marshal(map[string]any{"target": "kimi@h3", "reason": "没登录", "next": "登录或装好运行环境后 atrium workers edit --clear kimi@h3"})
-	if s := Summary(Row{Kind: WorkerDown, Body: body}); s != "kimi@h3 不可用：没登录 · 登录或装好运行环境后 atrium workers edit --clear kimi@h3" {
+	if s := Summary(Row{Kind: WorkerDown, Body: body}, nil); s != "kimi@h3 不可用：没登录 · 登录或装好运行环境后 atrium workers edit --clear kimi@h3" {
 		t.Errorf("WorkerDown Summary = %q", s)
 	}
-	if l := Line(Row{ID: 7, Task: "t2", Kind: "x", Count: 3}); l != "#7 t2 x （合并 3 次）" {
+	if l := Line(Row{ID: 7, Task: "t2", Kind: "x", Count: 3}, nil); l != "#7 t2 x （合并 3 次）" {
 		t.Errorf("Line = %q", l)
 	}
 }

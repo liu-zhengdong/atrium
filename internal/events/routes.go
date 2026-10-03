@@ -11,6 +11,7 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/api"
 	"github.com/liu-zhengdong/atrium/internal/app"
 	"github.com/liu-zhengdong/atrium/internal/cli"
+	"github.com/liu-zhengdong/atrium/internal/org"
 )
 
 func Module() app.Module {
@@ -151,11 +152,19 @@ func Commands(t *cli.Table) {
 			if len(rows) == 0 {
 				return c.Done(rows, "没有新事件", "atrium events wait")
 			}
+			var names map[string]string
+			if !c.JSON {
+				var err error
+				names, err = ReadNames(c)
+				if err != nil {
+					return err
+				}
+			}
 			var b strings.Builder
 			ids := make([]string, len(rows))
 			for i, r := range rows {
 				ids[i] = strconv.FormatInt(r.ID, 10)
-				fmt.Fprintln(&b, Line(r))
+				fmt.Fprintln(&b, Line(r, names))
 			}
 			return c.Done(rows, b.String(), "atrium events ack "+strings.Join(ids, " "))
 		}})
@@ -196,17 +205,25 @@ func Commands(t *cli.Table) {
 		}})
 }
 
-// Line 是一条事件的一行摘要：#编号 任务 种类 标题 · 要点（合并次数）。
-func Line(r Row) string {
+// Line 是 CLI 与秘书共用的事件摘要：#编号 任务 要点（合并次数） · 收件人。
+func Line(r Row, names map[string]string) string {
 	parts := []string{fmt.Sprintf("#%d", r.ID)}
 	if r.Task != "" {
 		parts = append(parts, r.Task)
 	}
-	parts = append(parts, Summary(r))
+	parts = append(parts, Summary(r, names))
 	if r.Count > 1 {
 		parts = append(parts, fmt.Sprintf("（合并 %d 次）", r.Count))
 	}
-	return strings.Join(parts, " ")
+	line := strings.Join(parts, " ")
+	if r.Target != "" {
+		target := org.DisplayIdentity(r.Target, names)
+		if r.Target == Secretary {
+			target = "秘书"
+		}
+		line += " · 收件人：" + target
+	}
+	return line
 }
 
 // CallSurvivingRestart：服务平滑重启时长轮询会被打断（restarting）或短暂连不上，等新服务起来后重发（最多 30 秒）。

@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/liu-zhengdong/atrium/internal/api"
+	"github.com/liu-zhengdong/atrium/internal/org"
 )
 
 // LevelOf 是事件的缺省级别：任务失败、受阻、等验收、非用户本人做的完成，交给负责人去拆的任务，到期、上限满了、自升级失败与负责人上报要处理；
@@ -109,7 +110,7 @@ func field(body any, name string) string {
 }
 
 // Summary 是事件正文的一句话（bridge 注入、events wait 列表都用它）。
-func Summary(r Row) string {
+func Summary(r Row, names map[string]string) string {
 	var b map[string]any
 	if len(r.Body) > 0 {
 		_ = json.Unmarshal(r.Body, &b) // 正文不是对象时只显示种类
@@ -152,13 +153,14 @@ func Summary(r Row) string {
 		}
 		return line + title
 	case LeaderEscalate:
+		from := org.DisplayIdentity(s("from"), names)
 		switch s("kind") {
 		case "notify":
-			return fmt.Sprintf("%s 知会用户：%s（秘书转告用户后确认；不需回复或拍板，负责人继续派活）", s("from"), s("note"))
+			return fmt.Sprintf("%s 知会用户：%s（秘书转告用户后确认；不需回复或拍板，负责人继续派活）", from, s("note"))
 		case "ask":
-			return fmt.Sprintf("%s 问用户（%s）：%s（秘书转告用户后确认；用户回话用 atrium task tell %s <回话> 送回）", s("from"), r.Task, s("note"), r.Task)
+			return fmt.Sprintf("%s 问用户（%s）：%s（秘书转告用户后确认；用户回话用 atrium task tell %s <回话> 送回）", from, r.Task, s("note"), r.Task)
 		}
-		return fmt.Sprintf("%s 上报（%s）：%s", s("from"), s("label"), clip(s("note"), 80))
+		return fmt.Sprintf("%s 上报（%s）：%s", from, s("label"), clip(s("note"), 80))
 	case WorkerDown:
 		return s("target") + " 不可用：" + clip(s("reason"), 80) + " · " + s("next")
 	case LimitFull:

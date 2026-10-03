@@ -173,6 +173,23 @@ type Module struct {
 - **补充说明与并发**：核对 `workers/adapter.go` 的 `Tell`、会话续接与 `Exclusive`（通用命令行档案在 `workers/cli.go`），确认 `dispatch/actions.go` 的补充说明和 `dispatch/pick.go` 的并发约束适用。
 - **自动挑人**：在档案明确 `auto`、`trust`、`max_risk`，用 `workers/profile.go`、`workers/refusal.go` 与 `dispatch/select.go` 核对是否参与自动挑人及能接的风险。
 
+#### 通用 CLI 档案
+
+新工具在 `harness/<工具>` 档案中声明 `protocol: cli`，经 `workers edit --file` 保存；档案存在数据库中。`command` 仍只接受 PATH 命令名。应用内的脚本可用 PATH 上的解释器（如 `command: node`），将脚本绝对路径放进 `args`；只有没有可用解释器入口时才需要安装者提供 shim。
+
+参数模板与校验以 `workers/cli.go` 的 `CLISpec` 为准。支持会话续接的工具声明 `session_match`（恰有一个捕获组，取会话 id），并在 `args` 用 `{session_args}` 标出 `session_args` 的位置。例如：
+
+```yaml
+protocol: cli
+command: mytool
+args: ["--print", "{session_args}", "{prompt}"]
+session_args: ["--resume", "{session}"]
+session_match: '"session_id":"([0-9a-f-]{36})"'
+auto: false
+```
+
+该例假设工具接受 `--print`、`--resume` 并输出上述 JSON 字段，接入前必须按实际工具核对。首次启动省掉整组续接参数；有补充说明时，dispatch 等本轮退出，从日志开头的 64 KiB 取会话 id，下一轮将 id 与补充提示词交给同一工具。通用 CLI 的会话 id 为最多 128 个 ASCII 字符，以字母或数字开头，其余只含字母、数字、下划线、点和连字符；内置工具仍沿用 UUID 约束。没有声明会话的档案仍按重派处理，不尝试续接。日志格式、模型、认证与 `usage` 字段路径均须实测，不能由这个示例推断。
+
 ### 子进程（`internal/platform`）
 
 - 子进程只经 `platform.Start(platform.Spec{Path, Args, Dir, Env, Stdout, Stderr, Detached})` 拉起；`Env` 必填。任务执行者用 `platform.WorkerEnv(runtime.GOOS, platform.EnvMap(os.Environ()), tempDir)`，`tempDir` 是会话临时目录（本机或代理任务目录下的 `tmp`；负责人是 `leaders/<身份>/tmp`，每次唤醒先清空），统一覆盖 `TMPDIR`、`TMP`、`TEMP`；自检不传临时目录。执行者环境带 `ATRIUM_WORKER=1`，不继承其他 `ATRIUM_*` 与凭据；任务声明的凭据在其后逐个注入，再加 `ATRIUM_SERVER`、`ATRIUM_WORKER_TOKEN`，并经 `platform.SelfOnPath` 把服务（远程是代理）这个二进制排进 PATH 最前。服务与执行者保留环境中的 `GOFLAGS`；`WorkerEnv` 统一追加 `-trimpath`，让本机、远程执行者与合入检查的 Go 编译跨工作树复用缓存。

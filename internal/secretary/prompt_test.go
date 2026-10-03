@@ -29,8 +29,8 @@ func TestPromptBacklog(t *testing.T) {
 			r := row(7, now, "t3")
 			r.At = now - tc.age.Milliseconds()
 			for _, b := range []Batch{{Fresh: []events.Row{r}}, {Remind: []events.Row{r}}} {
-				p := Prompt(b, now, RemindAfter)
-				if tc.label == "" && strings.Contains(p, "（积压") || tc.label != "" && !strings.Contains(p, events.Line(r)+tc.label+"\n") {
+				p := Prompt(b, now, RemindAfter, nil)
+				if tc.label == "" && strings.Contains(p, "（积压") || tc.label != "" && !strings.Contains(p, events.Line(r, nil)+tc.label+"\n") {
 					t.Fatalf("条龄不符：\n%s", p)
 				}
 				if strings.Contains(strings.Split(p, "\n")[0], "断线期间积了 1 条") != tc.warning {
@@ -41,10 +41,10 @@ func TestPromptBacklog(t *testing.T) {
 	}
 	fresh, old := row(7, now, "t3"), row(4, now, "t3")
 	fresh.At, old.At = now, now-(12*time.Hour).Milliseconds()
-	p := Prompt(Batch{Fresh: []events.Row{fresh}, Remind: []events.Row{old}}, now, RemindAfter)
+	p := Prompt(Batch{Fresh: []events.Row{fresh}, Remind: []events.Row{old}}, now, RemindAfter, nil)
 	for _, want := range []string{
 		"【Atrium 事件】1 条要处理：断线期间积了 2 条，处理前先对照任务现状核实",
-		events.Line(fresh) + "\n", events.Line(old) + "（积压 12 小时）\n",
+		events.Line(fresh, nil) + "\n", events.Line(old, nil) + "（积压 12 小时）\n",
 		"送过 30 分钟还没确认：", "处理完确认：atrium events ack 7 4",
 	} {
 		if !strings.Contains(p, want) {

@@ -349,7 +349,7 @@ func TestAsk(t *testing.T) {
 	if target != org.Secretary || level != events.Act || !strings.Contains(body, `"kind":"ask"`) {
 		t.Fatalf("秘书须能领取问题：%s %s %s", target, level, body)
 	}
-	if got := events.Summary(events.Row{Kind: events.LeaderEscalate, Task: "t1", Body: []byte(body)}); !strings.Contains(got, "logo 挑几号？") ||
+	if got := events.Summary(events.Row{Kind: events.LeaderEscalate, Task: "t1", Body: []byte(body)}, nil); !strings.Contains(got, "logo 挑几号？") ||
 		!strings.Contains(got, "atrium task tell t1") {
 		t.Fatalf("秘书看到的一句话要带问题和回话命令：%s", got)
 	}

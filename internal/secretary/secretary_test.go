@@ -52,7 +52,7 @@ func TestMerge(t *testing.T) {
 }
 
 func TestPromptAndInbox(t *testing.T) {
-	p := Prompt(Batch{Fresh: []events.Row{row(7, 1, "t3")}, Remind: []events.Row{row(4, 1, "t1")}}, 0, 30*time.Minute)
+	p := Prompt(Batch{Fresh: []events.Row{row(7, 1, "t3")}, Remind: []events.Row{row(4, 1, "t1")}}, 0, 30*time.Minute, nil)
 	for _, want := range []string{"【Atrium 事件】1 条要处理：", "- #7 t3 running → blocked「活t3」", "送过 30 分钟还没确认：",
 		"看详情：atrium task show t3；atrium task show t1", "处理完确认：atrium events ack 7 4"} {
 		if !strings.Contains(p, want) {
@@ -62,7 +62,7 @@ func TestPromptAndInbox(t *testing.T) {
 	if !strings.HasPrefix(p, "【Atrium 事件】") {
 		t.Errorf("消息应以「【Atrium 事件】」开头：%s", p)
 	}
-	only := Prompt(Batch{Remind: []events.Row{row(4, 1, "")}}, 0, 30*time.Minute)
+	only := Prompt(Batch{Remind: []events.Row{row(4, 1, "")}}, 0, 30*time.Minute, nil)
 	if !strings.HasPrefix(only, "【Atrium 事件】提醒：1 条送过 30 分钟还没确认：") || strings.Contains(only, "看详情") {
 		t.Errorf("只有提醒：%s", only)
 	}
@@ -222,8 +222,8 @@ func TestBrief(t *testing.T) {
 
 // notify 沿用现有 bridge，但转告语义必须出现在实际注入消息里。
 func TestNotifyPrompt(t *testing.T) {
-	p := Prompt(Batch{Fresh: []events.Row{{ID: 9, Kind: events.LeaderEscalate, Body: json.RawMessage(`{"from":"a2","kind":"notify","note":"将调整应用配置"}`)}}}, 0, 30*time.Minute)
-	for _, want := range []string{"a2 知会用户", "将调整应用配置", "秘书转告用户后确认", "不需回复或拍板", "负责人继续派活", "atrium events ack 9"} {
+	p := Prompt(Batch{Fresh: []events.Row{{ID: 9, Kind: events.LeaderEscalate, Body: json.RawMessage(`{"from":"a2","kind":"notify","note":"将调整应用配置"}`)}}}, 0, 30*time.Minute, nil)
+	for _, want := range []string{"未登记负责人（a2） 知会用户", "将调整应用配置", "秘书转告用户后确认", "不需回复或拍板", "负责人继续派活", "atrium events ack 9"} {
 		if !strings.Contains(p, want) {
 			t.Fatalf("知会消息缺 %s：%s", want, p)
 		}

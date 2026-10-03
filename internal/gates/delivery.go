@@ -50,13 +50,19 @@ var noRepoRules = []string{"这件活没有仓库：在当前目录干，交付�
 
 // endRule 没有改动可查的交付（message、dir），交付检查只凭最后一行判（ParseEnding）。分派任务时分不出会不会有改动，所以除审阅任务外一律附。
 // 审阅任务不附：它的最后一行是审阅结论（ReviewBrief 与 ParseReview），附了这条执行者会把交付结论写在审阅结论之后，原任务的 ParseReview 严格末行读不到（t877 第 3 轮）。
+// noLandRule 是 pr 交付不让执行者做的应用动作；发布授权任务（ReleaseAuthorized）换成 releaseRule，授权内容以详述那一行为准。
+const (
+	noLandRule  = "不要合入、不要改默认分支、不要发版。"
+	releaseRule = "详述「授权（k52）」行内授权的发布动作（合入自己的 PR、打 tag、触发与等待 Actions、上传附件与更新清单）可以做；其余代码改动仍只交 PR。"
+)
+
 const endRule = "最后一行单独写 `交付结论：完成`；没做成、或停在动手前等人定，写 `交付结论：没做成`，原因写在它上面（任务详述另定了最后一行的照详述）。"
 
 var (
 	// pr：在分支上开 PR；交付检查查提交、推送、改动规模与 PR 正文；应用是合入队列（merge）加可选的发版（release）。
 	deliverPR = Delivery{Name: "pr",
 		Rules: []string{
-			"只交 PR：在当前任务工作树的分支 %s 上提交、推送；该分支已有 PR 就更新它，否则开 PR。不要进入其他任务的工作树，不要合入、不要改默认分支、不要发版。不用改代码的活不开 PR，结论写在最后的回复里。",
+			"只交 PR：在当前任务工作树的分支 %s 上提交、推送；该分支已有 PR 就更新它，否则开 PR。不要进入其他任务的工作树，" + noLandRule + "不用改代码的活不开 PR，结论写在最后的回复里。",
 			"PR 正文写「端到端验证」一节：在隔离实例里跑了什么、输出摘要；会停服务、改机器状态的步骤标注「只在隔离环境」。",
 		},
 		check: (*Gate).checkPR,
@@ -104,11 +110,15 @@ func localRepo(repo, origin string) bool {
 
 // PromptRules 是分派任务时提示词里怎么交（dispatch 附进「通用约束」）；origin 见 Origin。分派任务时还没有改动，有仓库按要改代码写
 // （规则里说了不用改代码时怎么交）；choice 与 message 分派任务时分不出来，提示词相同，要不要写 choice.json 由任务详述（调研定时任务）说。
-// review 是审阅任务：不附交付结论那条（见 endRule）。
-func PromptRules(repo, dir, origin, branch string, review bool) []string {
+// detail 是任务详述：发布授权任务把不让合入、发版那句换成 releaseRule。review 是审阅任务：不附交付结论那条（见 endRule）。
+func PromptRules(repo, dir, origin, branch, detail string, review bool) []string {
 	d := pick(repo, dir, origin, true, false)
+	release := ReleaseAuthorized(detail)
 	out := make([]string, len(d.Rules), len(d.Rules)+1)
 	for i, r := range d.Rules {
+		if release {
+			r = strings.Replace(r, noLandRule, releaseRule, 1)
+		}
 		out[i] = strings.ReplaceAll(r, "%s", branch)
 	}
 	if review {
@@ -278,6 +288,7 @@ func (g *Gate) landChoice(ctx context.Context, t ledger.Task) (landed, error) {
 }
 
 // checkPR 查事实、判定交付检查结果：git 在工作树所在机器上查（On），PR 由服务查 GitHub；过了记下 PR，按风险与信任定要不要审阅。
+// 发布授权任务（ReleaseAuthorized）的 PR 按授权已合入：pr_exists 换成 release_published（ReleaseChecks），不要求 PR 开着。
 func (g *Gate) checkPR(ctx context.Context, t ledger.Task) (checked, error) {
 	w, err := mustWorkspace(ctx, g.DB, t.ID)
 	if err != nil {
@@ -291,7 +302,8 @@ func (g *Gate) checkPR(ctx context.Context, t ledger.Task) (checked, error) {
 	if err != nil {
 		return checked{}, err
 	}
-	facts, err := Collect(ctx, On(g.R, w), w.Dir, repo)
+	r := On(g.R, w)
+	facts, err := Collect(ctx, r, w.Dir, repo)
 	if err != nil {
 		return checked{}, err
 	}
@@ -299,8 +311,15 @@ func (g *Gate) checkPR(ctx context.Context, t ledger.Task) (checked, error) {
 	if checks == nil {
 		checks = DefaultChecks
 	}
+	release := ReleaseAuthorized(t.Detail)
+	if release {
+		checks = ReleaseChecks(checks)
+		if facts.Releases, err = CollectReleases(ctx, r, w.Dir, repo, facts.PR); err != nil {
+			return checked{}, err
+		}
+	}
 	v := Judge(checks, facts)
-	if v.Pass && (facts.PR == nil || facts.PR.State != "OPEN") {
+	if !release && v.Pass && (facts.PR == nil || facts.PR.State != "OPEN") {
 		v.Pass = false
 		v.Reasons = append(v.Reasons, "pr_exists：分支 "+facts.Branch+" 没有开着的 PR，无从合入")
 	}
@@ -335,6 +354,7 @@ func (g *Gate) checkPR(ctx context.Context, t ledger.Task) (checked, error) {
 
 // landPR 进合入队列前再查一次：现问 GitHub 这个 PR 是不是草稿，并读这一轮回复。不读交付检查记录。
 // 执行者在审阅或等验收期间把 PR 转 ready，也要过这一道，不能沿用之前的通过。
+// 发布授权任务的 PR 已合入：发布动作执行者已做完，没有要应用的。
 func (g *Gate) landPR(ctx context.Context, t ledger.Task) (landed, error) {
 	cur, err := ledger.Get(ctx, g.DB, t.ID)
 	if err != nil {
@@ -350,6 +370,9 @@ func (g *Gate) landPR(ctx context.Context, t ledger.Task) (landed, error) {
 	info, err := ViewPR(ctx, g.R, repo, cur.PR)
 	if err != nil {
 		return landed{}, err
+	}
+	if ReleaseAuthorized(cur.Detail) && info.State == "MERGED" {
+		return landed{note: "PR 已按授权合入并发布，没有要应用的"}, nil
 	}
 	block, err := QueueBlock(ctx, g.DB, &info.PR, t.ID)
 	if err != nil {

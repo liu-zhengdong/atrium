@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -25,7 +26,11 @@ type ghPR struct {
 }
 
 func (p ghPR) pr() PR {
-	return PR{Number: p.Number, URL: p.URL, State: p.State, Draft: p.IsDraft, Head: p.HeadRefName, HeadID: p.HeadRefOid, Body: p.Body}
+	pr := PR{Number: p.Number, URL: p.URL, State: p.State, Draft: p.IsDraft, Head: p.HeadRefName, HeadID: p.HeadRefOid, Body: p.Body}
+	if p.MergeCommit != nil {
+		pr.MergeCommit = p.MergeCommit.Oid
+	}
+	return pr
 }
 
 // PRFields 是 gh --json 要的字段。isDraft 与 state 分开：草稿的 state 仍是 OPEN。
@@ -82,8 +87,7 @@ func DefaultBranch(ctx context.Context, r Runner, repo string) (string, error) {
 // PRInfo 是合入与上线要的 PR 事实。
 type PRInfo struct {
 	PR
-	Base        string
-	MergeCommit string
+	Base string
 }
 
 // ViewPR 按号或链接查一个 PR。
@@ -96,11 +100,43 @@ func ViewPR(ctx context.Context, r Runner, repo, ref string) (PRInfo, error) {
 	if err := json.Unmarshal([]byte(out), &p); err != nil {
 		return PRInfo{}, fmt.Errorf("gh pr view 输出不是 JSON：%w", err)
 	}
-	info := PRInfo{PR: p.pr(), Base: p.BaseRefName}
-	if p.MergeCommit != nil {
-		info.MergeCommit = p.MergeCommit.Oid
+	return PRInfo{PR: p.pr(), Base: p.BaseRefName}, nil
+}
+
+// ReleaseScan 是查发布时看的最近 release 个数（gh api 一页）。
+const ReleaseScan = 10
+
+// CollectReleases 查 GitHub 上最近 ReleaseScan 个 release，并在工作树里（先 fetch tag）判各自的 tag 是否包含 PR 的合入提交。
+// PR 没合入时不查（release_published 判不过，原因是未合入）。
+func CollectReleases(ctx context.Context, r Runner, dir, repo string, pr *PR) ([]Release, error) {
+	if pr == nil || pr.State != "MERGED" || pr.MergeCommit == "" {
+		return nil, nil
 	}
-	return info, nil
+	if _, err := r.Run(ctx, dir, "git", "--no-optional-locks", "fetch", "--quiet", "--tags", "origin"); err != nil {
+		return nil, err
+	}
+	raw, err := r.Run(ctx, "", "gh", "api", fmt.Sprintf("repos/%s/releases?per_page=%d", repo, ReleaseScan))
+	if err != nil {
+		return nil, err
+	}
+	var list []struct {
+		Tag    string     `json:"tag_name"`
+		Draft  bool       `json:"draft"`
+		Assets []struct{} `json:"assets"`
+	}
+	if err := json.Unmarshal([]byte(raw), &list); err != nil {
+		return nil, fmt.Errorf("gh api releases 输出不是 JSON：%w", err)
+	}
+	tags, err := r.Run(ctx, dir, "git", "--no-optional-locks", "tag", "--contains", pr.MergeCommit)
+	if err != nil {
+		return nil, err
+	}
+	contains := strings.Fields(tags)
+	out := make([]Release, 0, len(list))
+	for _, l := range list {
+		out = append(out, Release{Tag: l.Tag, Draft: l.Draft, Assets: len(l.Assets), Contains: slices.Contains(contains, l.Tag)})
+	}
+	return out, nil
 }
 
 // Collect 在执行者的工作树里查事实：分支、提交、推送、改动规模、PR 与正文「端到端验证」一节。

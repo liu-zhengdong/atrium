@@ -86,7 +86,7 @@ func BuildPrompt(in PromptInput) string {
 		fmt.Fprintf(&b, "\n## 这个仓库的约定（.agents/README.md）\n\n%s\n", g)
 	}
 	section("上次交付被交回的原因（先解决这些）", in.Bounces)
-	section("通用约束", append(append(gates.PromptRules(in.Repo, in.Dir, in.Origin, in.Branch, in.Review), commonRules...), showRule(in.Org)))
+	section("通用约束", append(append(gates.PromptRules(in.Repo, in.Dir, in.Origin, in.Branch, in.Detail, in.Review), commonRules...), showRule(in.Org)))
 	return b.String()
 }
 

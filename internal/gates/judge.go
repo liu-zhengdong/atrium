@@ -18,6 +18,9 @@ const (
 	CheckPR       = "pr_exists"       // 分支上有开着的 PR，头提交与本地一致
 	CheckGrowth   = "file_growth"     // 单个文件新增行数不超上限
 	CheckClaims   = "claims_verified" // PR 正文「端到端验证」一节不为空
+	// CheckRelease 是发布授权任务（ReleaseAuthorized）替换 pr_exists 的检查：PR 已合入，
+	// 有已发布（非草稿）的 release 其 tag 包含合入提交，且附件至少一个。版本号对不对上详述由审阅、验收看。
+	CheckRelease = "release_published"
 )
 
 // CheckCommitted 是本机交付（local）的交付检查：工作树都提交了、任务分支比本机主分支有新提交；不看推送与 PR，
@@ -25,10 +28,27 @@ const (
 const CheckCommitted = "committed"
 
 // Known 是全部交付检查名；档案写了别的名字判不过（写错了要看见，不静默跳过）。
-var Known = []string{CheckFinished, CheckPR, CheckGrowth, CheckClaims}
+var Known = []string{CheckFinished, CheckPR, CheckGrowth, CheckClaims, CheckRelease}
 
 // DefaultChecks：档案没写 checks 时查这些。
 var DefaultChecks = []string{CheckFinished, CheckPR}
+
+// releaseLine：任务详述里任一行以「授权（k52）」开头（行首空白不计，括号全半角都认）。
+var releaseLine = regexp.MustCompile(`(?m)^[ \t]*授权[（(]k52[）)]`)
+
+// ReleaseAuthorized：任务详述按 k52 写明了发布授权。授权内容只存详述这一行，不另设任务字段。
+func ReleaseAuthorized(detail string) bool { return releaseLine.MatchString(detail) }
+
+// ReleaseChecks 是发布授权任务的交付检查：去掉 pr_exists（交付时 PR 已按授权合入），必查 release_published，其余保留。
+func ReleaseChecks(checks []string) []string {
+	out := make([]string, 0, len(checks)+1)
+	for _, c := range checks {
+		if c != CheckPR && c != CheckRelease {
+			out = append(out, c)
+		}
+	}
+	return append(out, CheckRelease)
+}
 
 // MaxFileAdded 是 file_growth 的上限：一个文件一次新增的行数。
 const MaxFileAdded = 800
@@ -48,7 +68,17 @@ type PR struct {
 	Draft  bool   `json:"draft,omitempty"` // GitHub 草稿（gh 的 isDraft）；开着的草稿 state 仍是 OPEN
 	Head   string `json:"head"`            // 分支名
 	HeadID string `json:"head_oid"`        // 头提交
-	Body   string `json:"-"`
+	// MergeCommit 是合入提交（gh 的 mergeCommit）；没合入为空。
+	MergeCommit string `json:"merge_commit,omitempty"`
+	Body        string `json:"-"`
+}
+
+// Release 是 GitHub 上的一个 release，及其 tag 是否包含任务 PR 的合入提交（git 在工作树里判）。
+type Release struct {
+	Tag      string `json:"tag"`
+	Draft    bool   `json:"draft,omitempty"`
+	Assets   int    `json:"assets"`
+	Contains bool   `json:"contains"`
 }
 
 // Facts 是运行时查到的事实（不来自执行者自述）。
@@ -64,6 +94,8 @@ type Facts struct {
 	Numstat []FileStat `json:"-"`
 	Diff    string     `json:"diff"` // 改动规模一行人话
 	E2E     string     `json:"-"`    // PR 正文「端到端验证」一节
+	// Releases 只对发布授权任务查（CollectReleases）：最近 ReleaseScan 个 release。
+	Releases []Release `json:"releases,omitempty"`
 }
 
 // Result 是一道交付检查的结论。
@@ -145,10 +177,40 @@ func judgeOne(check string, f Facts) Result {
 		if !r.OK {
 			r.Evidence = "PR 正文没有「端到端验证」一节或该节为空：写在隔离实例里实测的命令与输出"
 		}
+	case CheckRelease:
+		r.OK, r.Evidence = releasePublished(f)
 	default:
 		r.Evidence = fmt.Sprintf("未知交付检查 %q（可用 %s）；改档案 checks", check, strings.Join(Known, "、"))
 	}
 	return r
+}
+
+// releasePublished 判 release_published：PR 已合入；最近的 release 里有已发布、tag 包含合入提交的，且附件至少一个。
+func releasePublished(f Facts) (bool, string) {
+	pr := f.PR
+	switch {
+	case pr == nil:
+		return false, "分支 " + f.Branch + " 没有 PR：开 PR 并按详述授权合入后再发版"
+	case pr.State != "MERGED" || pr.MergeCommit == "":
+		return false, fmt.Sprintf("PR #%d 状态是 %s，未合入：按详述「授权（k52）」合入 PR，再打 tag 发版", pr.Number, pr.State)
+	}
+	var empty *Release
+	for i, rel := range f.Releases {
+		if rel.Draft || !rel.Contains {
+			continue
+		}
+		if rel.Assets > 0 {
+			return true, fmt.Sprintf("release %s 已发布，附件 %d 个，tag 包含 PR #%d 的合入提交 %s", rel.Tag, rel.Assets, pr.Number, short(pr.MergeCommit))
+		}
+		if empty == nil {
+			empty = &f.Releases[i]
+		}
+	}
+	if empty != nil {
+		return false, fmt.Sprintf("release %s 已发布、tag 包含合入提交 %s，但附件为空：等 Actions 构建完或上传附件", empty.Tag, short(pr.MergeCommit))
+	}
+	return false, fmt.Sprintf("最近 %d 个 release 里没有包含 PR #%d 合入提交 %s 的已发布 release：在含它的提交上打 tag、等 Actions 发出 release（草稿要发布）",
+		ReleaseScan, pr.Number, short(pr.MergeCommit))
 }
 
 // Changed：工作树相对基线有改动（新提交或未提交的文件）。没有改动的有仓库任务按没有仓库交（按交付结论判）。

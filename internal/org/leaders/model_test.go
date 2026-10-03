@@ -6,8 +6,38 @@ import (
 	"testing"
 	"time"
 
+	"github.com/liu-zhengdong/atrium/internal/events"
+	"github.com/liu-zhengdong/atrium/internal/ledger"
 	"github.com/liu-zhengdong/atrium/internal/org"
 )
+
+func TestEscalateLevel(t *testing.T) {
+	st := func(s ledger.Status, g ledger.Stage) *ledger.State { return &ledger.State{Status: s, Stage: g} }
+	cases := []struct {
+		name string
+		kind string
+		task *ledger.State
+		want string
+	}{
+		{"cross·没挂任务", "cross", nil, events.Info},
+		{"cross·任务已完成", "cross", st(ledger.Done, ledger.StageMerged), events.Info},
+		{"cross·任务已取消", "cross", st(ledger.Cancelled, ""), events.Info},
+		{"cross·任务已上线", "cross", st(ledger.Running, ledger.StageReleased), events.Info},
+		{"cross·任务待派", "cross", st(ledger.Todo, ""), events.Act},
+		{"cross·任务在跑", "cross", st(ledger.Running, ledger.StageMerge), events.Act},
+		{"cross·任务受阻", "cross", st(ledger.Blocked, ""), events.Act},
+		{"cross·任务失败", "cross", st(ledger.Failed, ""), events.Act},
+		{"stuck·没挂任务", "stuck", nil, events.Act},
+		{"beyond·任务已完成", "beyond", st(ledger.Done, ""), events.Act},
+		{"notify·没挂任务", "notify", nil, events.Act},
+		{"ask·任务待派", "ask", st(ledger.Todo, ""), events.Act},
+	}
+	for _, c := range cases {
+		if got := EscalateLevel(c.kind, c.task); got != c.want {
+			t.Errorf("%s：EscalateLevel = %s，应为 %s", c.name, got, c.want)
+		}
+	}
+}
 
 func TestDue(t *testing.T) {
 	now := int64(100_000)

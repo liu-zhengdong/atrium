@@ -176,8 +176,10 @@ func (h *hub) round(ctx context.Context, env *app.Env) error {
 	}, func(p Pending, cause error) error {
 		// 这一批无法在该负责人处处理，转秘书；原记录不删除，后续不再唤醒这位。
 		env.Log.Warn("负责人待处理批次出错，转秘书", "leader", p.Leader, "err", cause)
-		_, err := events.Retarget(ctx, env.DB, p.IDs, p.Leader, org.Secretary)
-		return err
+		return env.DB.Tx(ctx, func(tx *sql.Tx) error {
+			_, err := events.Retarget(ctx, tx, p.IDs, p.Leader, org.Secretary)
+			return err
+		})
 	})
 }
 
@@ -528,6 +530,7 @@ func unacked(ctx context.Context, q store.Querier, leader string, ids []int64) (
 }
 
 // forwardUp 把 leader 没确认的事件逐条转交：从事件所属部门往上、跳过这位的最近负责人，没有就秘书。
+// 转给秘书时另落一条 stuck 级上报（负责人自己接不住的卡住事实），免得转过去的普通回执被降为知会后把这个阻塞一起藏起来。
 // 返回转交到的负责人与件数；出错时事务整体回滚，不返回目标。
 func forwardUp(ctx context.Context, db *store.DB, leader string, ids []int64) ([]string, int64, error) {
 	ps, err := org.Parents(ctx, db)
@@ -559,6 +562,17 @@ func forwardUp(ctx context.Context, db *store.DB, leader string, ids []int64) ([
 				return err
 			}
 			total += n
+			// 负责人自己接不住，这是新的卡住事实：转给秘书时补一条 stuck 级要处理上报。
+			// 转过去的普通回执会在 Retarget 里降为知会，别让它们把这个阻塞一起藏起来。
+			if to == org.Secretary {
+				if err := events.Emit(ctx, tx, events.Event{
+					Kind: events.LeaderEscalate, Target: org.Secretary, Level: events.Act,
+					Body: map[string]any{"from": leader, "kind": "stuck", "label": kindLabel("stuck"),
+						"note": fmt.Sprintf("连续 %d 次没处理完，%d 条事件转来", MaxFails, len(ids))},
+				}); err != nil {
+					return err
+				}
+			}
 		}
 		return nil
 	})

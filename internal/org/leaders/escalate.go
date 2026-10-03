@@ -21,7 +21,7 @@ type Escalation struct {
 }
 
 // Escalate：负责人上报一件事，发给上一层负责人（没有投秘书），notify、ask 直接投秘书；给了任务就在任务经历里也记一笔。
-// ask 另把问的话挂到任务上（ledger.SetAsk），等回话期间不计时。
+// ask 另把问的话挂到任务上（ledger.SetAsk），等回话期间不计时。级别见 EscalateLevel。
 // 转交下层上报（--event）时带上原文；原事件由这位自己 events ack。
 func Escalate(ctx context.Context, db *store.DB, leader string, in EscalateIn) (Escalation, error) {
 	if err := CheckEscalate(in); err != nil {
@@ -39,6 +39,7 @@ func Escalate(ctx context.Context, db *store.DB, leader string, in EscalateIn) (
 		}
 		body := map[string]any{"from": leader, "kind": in.Kind, "label": kindLabel(in.Kind), "note": in.Note}
 		task, dept := in.Task, ""
+		var state *ledger.State
 		if in.Event != 0 {
 			var target, kind, raw string
 			var evTask, evDept sql.NullString
@@ -69,6 +70,7 @@ func Escalate(ctx context.Context, db *store.DB, leader string, in EscalateIn) (
 				return err
 			}
 			dept = t.Org
+			state = &ledger.State{Status: t.Status, Stage: t.Stage}
 		}
 		if in.Kind == "ask" {
 			if task == "" {
@@ -84,7 +86,7 @@ func Escalate(ctx context.Context, db *store.DB, leader string, in EscalateIn) (
 		}
 		out = Escalation{To: to, Kind: in.Kind, Task: task}
 		if err := events.Emit(ctx, tx, events.Event{Kind: events.LeaderEscalate, Task: task, Dept: dept,
-			Target: out.To, Body: body}); err != nil {
+			Target: out.To, Level: EscalateLevel(in.Kind, state), Body: body}); err != nil {
 			return err
 		}
 		if task != "" {

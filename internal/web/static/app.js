@@ -176,6 +176,7 @@ function pausedNote(paused) {
    在整页对齐、切页签时不变宽（见 app.css .today）。标题行右侧是三个目标一行；下一行只放没有单独一节的：暂停、排队、草稿，都没有就不出。 */
 // 第三块的页签：今天完成（缺省）或接下来 7 天
 let soonTab = "done";
+let openReceipts = false; // 上报回执折起的展开状态：实时重绘会整段替换页面，重绘后按它还原
 /* 三个目标只写近 7 天一行（ledger.Measure 的三个数）；累计在 atrium top 里 */
 function goalsLine(g) {
   const w = g.week;
@@ -212,7 +213,20 @@ function renderToday(d) {
         <button data-soon-tab="done" class="${soonTab === "done" ? "on" : ""}">今天完成${count(d.shipped.length + d.shipped_more)}</button>
         <button data-soon-tab="soon" class="${soonTab === "soon" ? "on" : ""}">接下来 7 天${count(d.soon.rows.length)}</button></div>
       ${soonTab === "soon" ? soonHTML(d.soon) : d.shipped.length ? `<div class="rows">${shippedRows(d.shipped, d.shipped_more)}</div>` : `<div class="empty">今天还没有完成的</div>`}</section>
+    ${receiptsHTML(d.receipts, d.receipts_total)}
     </div>`;
+}
+
+/* 上报回执：对秘书只知会的上报（cross 收尾确认等），不等待办，折在页面底部按需展开；有任务的点进那件任务。
+   total 是总数：超出列出上限时写明还有几条更早的没列出，不静默截断；展开状态跨实时刷新保留。 */
+function receiptsHTML(rows, total) {
+  if (!rows || !rows.length) return "";
+  const more = total > rows.length ? `<div class="more">另有 ${total - rows.length} 条更早的没列出</div>` : "";
+  return `<details class="full receipts"${openReceipts ? " open" : ""}><summary>${icon.chev}上报回执<span class="n num">${total}</span></summary>
+    <div class="receipts-list">${rows.map(r => `<div class="receipt">
+      <div class="t">${esc(r.note)}</div>
+      <div class="m">${esc(r.from_name)} · ${esc(r.label || r.kind)}${r.task ? ` · <a href="#today/${esc(r.task)}">${esc(r.task)}</a>` : ""} · ${esc(ago(r.at))}前</div>
+    </div>`).join("")}${more}</div></details>`;
 }
 
 /* 今天完成（含完成未上线的）：对勾已说明做完，行尾不写状态字；more 是接口列表上限以外的件数 */
@@ -757,6 +771,10 @@ document.addEventListener("click", e => {
   const g = e.target.closest("[data-go]"); if (g) { location.hash = g.dataset.go; return; }
   if (e.target.closest("[data-close]") || e.target.id === "scrim") location.hash = hashWith(null);
 });
+/* 折起的展开状态：实时刷新（SSE 推 changed）会整段重画页面，记住 #page 里上报回执的展开，重画后按它还原 */
+document.addEventListener("toggle", e => {
+  if (e.target?.classList?.contains("receipts")) openReceipts = e.target.open;
+}, true);
 document.addEventListener("keydown", e => {
   if (e.key === "Escape" && parseHash().open) location.hash = hashWith(null);
   const sc = e.target.closest?.("[data-sched]");

@@ -44,6 +44,18 @@ func kindLabel(k string) string {
 	return ""
 }
 
+// EscalateLevel 纯判定：上报事件的级别。cross 不挂任务、或挂的任务已结束（完成、取消）或已上线的，是收尾确认，只知会；
+// 挂着未完成任务的 cross 与其余类别要处理。task 为 nil 表示没挂任务。
+func EscalateLevel(kind string, task *ledger.State) string {
+	if kind != "cross" {
+		return events.Act
+	}
+	if task == nil || task.Status == ledger.Done || task.Status == ledger.Cancelled || task.Stage == ledger.StageReleased {
+		return events.Info
+	}
+	return events.Act
+}
+
 // EscalateIn 是 leader escalate 的输入。
 type EscalateIn struct {
 	Kind  string `json:"kind"`
@@ -278,6 +290,7 @@ func Prompt(in PromptInput) string {
 	for _, k := range Kinds {
 		w("- %s %s → atrium leader escalate 说明 --kind %s [--task tN]", k.Key, k.Label, k.Key)
 	}
+	w("- cross：要别的部门配合必须 --task 挂上未完成的任务，上一层才会被唤醒；不挂任务或任务已完成、已上线的只记账、不叫人，收尾确认不用发")
 	w("- notify：将要动用户在用的应用或配置前，先经秘书知会用户。发完继续派活，不需要回复、不等拍板；知会不增加操作权限。")
 	w("- ask：只有用户知道的事（挑哪个编号、服务器地址、账号）问用户，必须 --task tN（待派的任务），一件任务同时挂一条（再问换成新的），最多 %d 字。等回话期间这件任务不计时，今天页「等你」里看得到；用户回话经 task tell 送回并唤醒你。不用问了自己 task tell tN 原因 撤回。几选一的方向用选项单（choice add）。", ledger.MaxAsk)
 	w("- 下层上报给你、你也要向上级上报的：atrium leader escalate 你的意见 --kind 同类 --event 编号（上面能看到原文），再确认原事件")

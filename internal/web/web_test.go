@@ -440,11 +440,22 @@ func TestRoutes(t *testing.T) {
 	}
 	// 负责人上报到秘书这层、还没确认的，进「等你」。
 	events.Emit(ctx, db, events.Event{Kind: events.LeaderEscalate, Task: task.ID, Dept: sub.ID, Target: org.Secretary,
-		Body: map[string]any{"from": a.ID, "label": "无法解决", "note": "证书要你签"}})
+		Body: map[string]any{"from": a.ID, "kind": "stuck", "label": "无法解决", "note": "证书要你签"}})
 	read("today", &today)
 	if len(today.Asks) != 1 || today.Asks[0].Kind != "escalate" || today.Asks[0].Title != "证书要你签" || today.Asks[0].ID != task.ID ||
 		today.Asks[0].Sub != "运行时负责人（"+a.ID+"） 上报：无法解决" {
 		t.Errorf("上报应进等你：%+v", today.Asks)
+	}
+	// 降为知会的无任务协作回执（cross）：不进「等你」，在今天页折起的次级入口可查。
+	events.Emit(ctx, db, events.Event{Kind: events.LeaderEscalate, Target: org.Secretary,
+		Body: map[string]any{"from": a.ID, "kind": "cross", "label": "需要别的部门配合", "note": "t866确认工作已闭合，回交t862"}})
+	read("today", &today)
+	if len(today.Asks) != 1 || today.Asks[0].Kind != "escalate" {
+		t.Errorf("协作回执不该进等你：%+v", today.Asks)
+	}
+	if len(today.Receipts) != 1 || today.Receipts[0].Note != "t866确认工作已闭合，回交t862" ||
+		today.Receipts[0].Label != "需要别的部门配合" || today.Receipts[0].FromName != "运行时负责人（"+a.ID+"）" {
+		t.Errorf("无任务回执应在次级入口可见：%+v", today.Receipts)
 	}
 	// 页面上提到身份、机器都写名字：侧栏带着名字表，抽屉里等负责人时写负责人的名字。
 	names, err := loadNav(ctx, db)
@@ -813,5 +824,35 @@ func TestTodayShippedMore(t *testing.T) {
 	today, err := loadToday(ctx, db, time.Now())
 	if err != nil || len(today.Shipped) != 100 || today.ShippedMore != 2 {
 		t.Fatalf("列出 %d 件、没列出 %d 件，want 100、2；err=%v", len(today.Shipped), today.ShippedMore, err)
+	}
+}
+
+// 回执列全并写明总数：列出的条数与总数一致，页面据此写清展示范围，不静默截断（旧实现截在 20 条）。
+func TestReceiptsComplete(t *testing.T) {
+	ctx := context.Background()
+	db, err := store.Open(filepath.Join(t.TempDir(), "atrium.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := org.Add(ctx, db, org.NewDept{Name: "组织"}); err != nil {
+		t.Fatal(err)
+	}
+	const n = 21 // 超过旧的 20 条上限
+	for i := 0; i < n; i++ {
+		if err := events.Emit(ctx, db, events.Event{Kind: events.LeaderEscalate, Target: org.Secretary,
+			Body: map[string]any{"from": "a1", "kind": "cross", "label": "需要别的部门配合", "note": "收尾确认"}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	today, err := loadToday(ctx, db, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(today.Receipts) != n || today.ReceiptsTotal != n {
+		t.Fatalf("应列出全部 %d 条并给出总数：列出 %d 总数 %d", n, len(today.Receipts), today.ReceiptsTotal)
+	}
+	if len(today.Asks) != 0 {
+		t.Fatalf("回执不进「等你」：%+v", today.Asks)
 	}
 }

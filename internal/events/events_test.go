@@ -70,7 +70,7 @@ func TestLevelAndKey(t *testing.T) {
 		{"等待到期", Overdue, nil, Act},
 		{"上限满了", LimitFull, map[string]any{"key": "points"}, Act},
 		{"负责人上报·卡住", LeaderEscalate, map[string]any{"kind": "stuck"}, Act},
-		{"负责人上报·跨部门", LeaderEscalate, map[string]any{"kind": "cross"}, Act},
+		{"负责人上报·跨部门（级别由 leaders 按任务另定）", LeaderEscalate, map[string]any{"kind": "cross"}, Act},
 		{"负责人上报·越权", LeaderEscalate, map[string]any{"kind": "beyond"}, Act},
 		{"交给负责人去拆", TaskAssigned, map[string]any{"title": "任务"}, Act},
 		{"未知种类", "other", map[string]any{"to": "failed"}, Info},
@@ -197,10 +197,212 @@ func TestEmitTask(t *testing.T) {
 	if n, _ := Pending(ctx, db, Secretary, true, 10); len(n) != 0 {
 		t.Fatalf("秘书不该收到：%+v", n)
 	}
-	// 负责人自己完成秘书派的活，事件应实际落库给秘书。
+	// 负责人自己完成秘书派的活，事件落库给秘书，但完成回执对秘书只知会。
 	emitTask("a1", Secretary, "done", "a1")
-	if n, _ := Pending(ctx, db, Secretary, true, 10); len(n) != 1 || n[0].Level != Act {
-		t.Fatalf("秘书应收到负责人自己完成的结果：%+v", n)
+	if n, _ := Pending(ctx, db, Secretary, true, 10); len(n) != 1 || n[0].Level != Info {
+		t.Fatalf("秘书应收到知会级的完成回执：%+v", n)
+	}
+}
+
+func TestSecretaryAct(t *testing.T) {
+	esc := func(kind string) map[string]any { return map[string]any{"kind": kind} }
+	cases := []struct {
+		name string
+		kind string
+		body any
+		want bool
+	}{
+		{"问用户", LeaderEscalate, esc("ask"), true},
+		{"知会用户", LeaderEscalate, esc("notify"), true},
+		{"卡住", LeaderEscalate, esc("stuck"), true},
+		{"越权", LeaderEscalate, esc("beyond"), true},
+		{"跨部门协作", LeaderEscalate, esc("cross"), false},
+		{"旧的里程碑上报", LeaderEscalate, esc("shipped"), false},
+		{"选项单", ChoiceOpen, nil, true},
+		{"等用户验收", TaskStatus, map[string]any{"to": "running", "accept_by": "user"}, true},
+		{"任务失败", TaskStatus, map[string]any{"to": "failed"}, true},
+		{"任务受阻", TaskStatus, map[string]any{"to": "blocked"}, true},
+		{"完成回执", TaskStatus, map[string]any{"to": "done", "by": "a1"}, false},
+		{"已上线回执", TaskStatus, map[string]any{"to": "done", "stage": "released", "event": "land"}, false},
+		{"到期", Overdue, nil, true},
+		{"执行者不可用", WorkerDown, nil, true},
+		{"上限满了", LimitFull, nil, true},
+		{"自升级失败", OnlineFailed, nil, true},
+		{"定时任务失败", ScheduleFail, nil, true},
+		{"远程机器记录失败", HostRecord, nil, true},
+		{"负责人接不住转来的任务", TaskAssigned, nil, true},
+		{"未知种类", "other", nil, false},
+	}
+	for _, c := range cases {
+		if got := SecretaryAct(c.kind, c.body); got != c.want {
+			t.Errorf("%s：SecretaryAct(%s, %v) = %v，应为 %v", c.name, c.kind, c.body, got, c.want)
+		}
+	}
+}
+
+// 秘书的要处理只收四类：其余落到秘书的降为知会（仍落库可查），负责人收的不降；积压只数四类（overdue 本就不计积压）。
+func TestSecretaryInbox(t *testing.T) {
+	db, ctx := openDB(t), context.Background()
+	for _, kind := range []string{"ask", "stuck", "beyond", "notify"} {
+		emit(t, db, Event{Kind: LeaderEscalate, Target: Secretary, Body: map[string]any{"kind": kind}})
+	}
+	emit(t, db, Event{Kind: LeaderEscalate, Target: Secretary, Level: Info, Body: map[string]any{"kind": "cross"}})
+	emit(t, db, Event{Kind: LeaderEscalate, Target: Secretary, Level: Act, Body: map[string]any{"kind": "cross"}})
+	emit(t, db, Event{Kind: Overdue, Target: Secretary})
+	emit(t, db, Event{Kind: TaskStatus, Target: Secretary, Body: map[string]any{"to": "done", "by": "a1"}})
+	emit(t, db, Event{Kind: TaskStatus, Target: "a1", Body: map[string]any{"to": "done", "by": "worker"}})
+	emit(t, db, Event{Kind: LeaderEscalate, Target: "a1", Body: map[string]any{"kind": "cross"}})
+
+	act, _ := Pending(ctx, db, Secretary, false, 50)
+	all, _ := Pending(ctx, db, Secretary, true, 50)
+	if len(act) != 5 || len(all) != 8 {
+		t.Fatalf("秘书要处理应 5 条（ask、stuck、beyond、notify、overdue），连知会共 8 条：%d / %d", len(act), len(all))
+	}
+	for _, r := range act {
+		if r.Kind == TaskStatus || strings.Contains(string(r.Body), "cross") {
+			t.Fatalf("完成回执、cross 不该进秘书的要处理：%+v", r)
+		}
+	}
+	if lead, _ := Pending(ctx, db, "a1", false, 50); len(lead) != 2 {
+		t.Fatalf("负责人收的完成回执与协作请求应仍要处理：%+v", lead)
+	}
+	bl, err := Backlogs(ctx, db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]int{}
+	for _, b := range bl {
+		got[b.Target] = b.Count
+	}
+	if got[Secretary] != 4 || got["a1"] != 2 {
+		t.Fatalf("积压：秘书应 4（不含 overdue 与知会）、a1 应 2：%+v", bl)
+	}
+}
+
+// 旧库里按旧规则以要处理落给秘书的普通回执（cross、完成回执），Reclassify 后降为知会、正文不变；
+// 卡住升级、已确认的、负责人收的不动；积压与取走只剩真要处理的。
+func TestReclassify(t *testing.T) {
+	db, ctx := openDB(t), context.Background()
+	insert := func(kind, target, body string, acked bool) {
+		t.Helper()
+		var ack any
+		if acked {
+			ack = 1
+		}
+		exec(t, db, `INSERT INTO events (at, updated_at, kind, level, key, target, body, acked_at) VALUES (1, 1, ?, 'act', '', ?, ?, ?)`,
+			kind, target, body, ack)
+	}
+	insert(LeaderEscalate, Secretary, `{"kind":"cross","note":"t866确认工作已闭合，回交t862"}`, false)
+	insert(TaskStatus, Secretary, `{"from":"running","to":"done","by":"a5"}`, false)
+	insert(LeaderEscalate, Secretary, `{"kind":"stuck","note":"卡了三次"}`, false)
+	insert(TaskStatus, Secretary, `{"to":"blocked"}`, false)
+	insert(TaskStatus, Secretary, `{"to":"done"}`, true)
+	insert(LeaderEscalate, "a1", `{"kind":"cross","note":"要配合"}`, false)
+
+	if a, _ := Pending(ctx, db, Secretary, false, 50); len(a) != 4 {
+		t.Fatalf("前提：旧库秘书要处理 4 条：%+v", a)
+	}
+	n, err := Reclassify(ctx, db)
+	if err != nil || n != 2 {
+		t.Fatalf("应降 2 条：%d %v", n, err)
+	}
+	act, _ := Pending(ctx, db, Secretary, false, 50)
+	if len(act) != 2 || !strings.Contains(string(act[0].Body), "卡了三次") || !strings.Contains(string(act[1].Body), "blocked") {
+		t.Fatalf("秘书要处理只剩 stuck 与受阻：%+v", act)
+	}
+	all, _ := Pending(ctx, db, Secretary, true, 50)
+	if len(all) != 4 || !strings.Contains(string(all[0].Body), "回交t862") || all[0].Level != Info {
+		t.Fatalf("降级的回执仍在、正文不变：%+v", all)
+	}
+	if lead, _ := Pending(ctx, db, "a1", false, 50); len(lead) != 1 {
+		t.Fatalf("负责人收的协作请求不动：%+v", lead)
+	}
+	bl, _ := Backlogs(ctx, db)
+	got := map[string]int{}
+	for _, b := range bl {
+		got[b.Target] = b.Count
+	}
+	if got[Secretary] != 2 || got["a1"] != 1 {
+		t.Fatalf("积压：秘书 2、a1 1：%+v", bl)
+	}
+	if taken, _ := Take(ctx, db, Secretary, false); len(taken) != 2 {
+		t.Fatalf("取走只剩 2 条：%+v", taken)
+	}
+	if n, err := Reclassify(ctx, db); err != nil || n != 0 {
+		t.Fatalf("再跑一次不再降：%d %v", n, err)
+	}
+
+	// 负责人接不住、转给秘书的：交给它拆的任务仍要处理，完成回执只知会。
+	insert(TaskAssigned, "a2", `{"title":"拆这件"}`, false)
+	insert(TaskStatus, "a2", `{"to":"done","by":"worker"}`, false)
+	var ids []int64
+	rows, _ := db.Query(`SELECT id FROM events WHERE target = 'a2'`)
+	for rows.Next() {
+		var id int64
+		rows.Scan(&id)
+		ids = append(ids, id)
+	}
+	rows.Close()
+	if n, err := Retarget(ctx, db, ids, "a2", Secretary); err != nil || n != 2 {
+		t.Fatalf("应转 2 条：%d %v", n, err)
+	}
+	var assigned, done string
+	db.QueryRow(`SELECT level FROM events WHERE id = ?`, ids[0]).Scan(&assigned)
+	db.QueryRow(`SELECT level FROM events WHERE id = ?`, ids[1]).Scan(&done)
+	if assigned != Act || done != Info {
+		t.Fatalf("转给秘书后：任务应要处理、完成回执应知会：%s %s", assigned, done)
+	}
+}
+
+// 转交只重定这次转交的事件：秘书名下别的 act 事件（含正文坏的）不受影响；全量重分类不在转交里做。
+func TestRetargetScoped(t *testing.T) {
+	db, ctx := openDB(t), context.Background()
+	insert := func(kind, target, body string) int64 {
+		t.Helper()
+		res, err := db.Exec(`INSERT INTO events (at, updated_at, kind, level, key, target, body) VALUES (1, 1, ?, 'act', '', ?, ?)`, kind, target, body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		id, _ := res.LastInsertId()
+		return id
+	}
+	// 秘书名下原本就有：一条卡住升级（四类之一），一条 cross（旧实现会被全量重分类降级），一条正文坏的。
+	stuck := insert(LeaderEscalate, Secretary, `{"kind":"stuck"}`)
+	unrelatedCross := insert(LeaderEscalate, Secretary, `{"kind":"cross"}`)
+	unrelatedBad := insert(TaskStatus, Secretary, `{"to":"done"`)
+	// a2 手上要转给秘书的两条：接不住的任务（要处理）与完成回执（知会）。
+	assigned := insert(TaskAssigned, "a2", `{"title":"拆这件"}`)
+	receipt := insert(TaskStatus, "a2", `{"to":"done","by":"worker"}`)
+
+	n, err := Retarget(ctx, db, []int64{assigned, receipt}, "a2", Secretary)
+	if err != nil {
+		t.Fatalf("秘书名下无关的坏正文不该挡住这次转交：%v", err)
+	}
+	if n != 2 {
+		t.Fatalf("应只转这次的两条：%d", n)
+	}
+	level := func(id int64) string {
+		t.Helper()
+		var lv string
+		if err := db.QueryRow(`SELECT level FROM events WHERE id = ?`, id).Scan(&lv); err != nil {
+			t.Fatal(err)
+		}
+		return lv
+	}
+	if level(assigned) != Act {
+		t.Fatalf("接不住的任务转给秘书后仍要处理：%s", level(assigned))
+	}
+	if level(receipt) != Info {
+		t.Fatalf("完成回执转给秘书后只知会：%s", level(receipt))
+	}
+	if level(stuck) != Act {
+		t.Fatalf("秘书名下无关的卡住升级不该被这次转交改动：%s", level(stuck))
+	}
+	if level(unrelatedCross) != Act {
+		t.Fatalf("局部转交不该承担全量重分类，无关的 cross 应保持原级：%s", level(unrelatedCross))
+	}
+	if level(unrelatedBad) != Act {
+		t.Fatalf("秘书名下无关的坏正文事件不该被这次转交改动：%s", level(unrelatedBad))
 	}
 }
 

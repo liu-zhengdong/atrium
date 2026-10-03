@@ -96,7 +96,7 @@ func Tick(ctx context.Context, env *app.Env, now int64, loc *time.Location) erro
 			if err != nil {
 				return err
 			}
-			return events.Emit(ctx, tx, events.Event{Kind: "schedule.failed", Target: target, Dept: x.Org, Key: "schedule.failed:" + x.ID, Level: events.Act, Body: map[string]any{"schedule": x.ID, "note": note}})
+			return events.Emit(ctx, tx, events.Event{Kind: events.ScheduleFail, Target: target, Dept: x.Org, Key: "schedule.failed:" + x.ID, Level: events.Act, Body: map[string]any{"schedule": x.ID, "note": note}})
 		})
 	})
 }

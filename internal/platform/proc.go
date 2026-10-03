@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -61,6 +62,12 @@ func Start(s Spec) (*exec.Cmd, error) {
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = s.Stdin, s.Stdout, s.Stderr
 	cmd.SysProcAttr = sysProcAttr(s.Detached, cmdLine)
 	if err := cmd.Start(); err != nil {
+		// 工作目录不存在时 Go 报的是「fork/exec <程序>: no such file or directory」，看起来像程序不存在。
+		if errors.Is(err, fs.ErrNotExist) && s.Dir != "" {
+			if _, statErr := os.Stat(s.Dir); os.IsNotExist(statErr) {
+				return nil, fmt.Errorf("工作目录 %s 不存在（可能已被删除）", s.Dir)
+			}
+		}
 		return nil, err
 	}
 	if s.Detached {

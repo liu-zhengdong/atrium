@@ -309,7 +309,7 @@ func RoundTask(x Schedule, unpicked []string, now int64, loc *time.Location) (ti
 
 // recentUnpicked 是部门最近几份拍过板的选项单里没选的，每份一行。
 func recentUnpicked(ctx context.Context, q store.Querier, dept string) ([]string, error) {
-	rows, err := q.QueryContext(ctx, `SELECT id FROM choices WHERE department = ? AND status != 'open'
+	rows, err := q.QueryContext(ctx, `SELECT id FROM choices WHERE department = ? AND status IN ('picked', 'passed')
 		ORDER BY decided_at DESC, id DESC LIMIT ?`, dept, recentChoices)
 	if err != nil {
 		return nil, err

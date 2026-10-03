@@ -140,7 +140,7 @@ func ReadGoals(ctx context.Context, q store.Querier, now int64) (Goals, error) {
 	}
 	err = q.QueryRowContext(ctx, `SELECT COALESCE(sum(c.decided_at >= ?), 0), count(*),
 		COALESCE(sum(c.decided_at >= ? AND o.task IS NOT NULL), 0), COALESCE(sum(o.task IS NOT NULL), 0)
-		FROM choice_options o JOIN choices c ON c.id = o.choice WHERE c.status <> 'open'`, since, since).
+		FROM choice_options o JOIN choices c ON c.id = o.choice WHERE c.status IN ('picked', 'passed')`, since, since).
 		Scan(&in.Offered.Week, &in.Offered.All, &in.Picked.Week, &in.Picked.All)
 	if err != nil {
 		return Goals{}, err

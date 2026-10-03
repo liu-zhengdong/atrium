@@ -23,8 +23,8 @@ func TestTable(t *testing.T) {
 			visible++
 		}
 	}
-	if visible > 60 {
-		t.Errorf("命令 %d 条，超过上限 60", visible)
+	if visible > 61 {
+		t.Errorf("命令 %d 条，超过上限 61", visible)
 	}
 	// 不列出的命令在帮助末尾点名，免得找不到。
 	var out strings.Builder

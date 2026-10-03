@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"unicode/utf8"
 
 	"github.com/liu-zhengdong/atrium/internal/api"
@@ -37,8 +38,12 @@ var ChoiceFormat = fmt.Sprintf(`格式（JSON；不认识的字段直接报错�
 - title：必填，最多 %d 字
 - options：%d–%d 项；每项 title（最多 %d 字）和 gain、why_now、cost、if_not、evidence 五栏都必填，五栏各最多 %d 字
 - options[].org：可选，这一项归哪个部门（oN，不写归出选项单的部门），选中后交给那里的负责人设计、拆分任务
+- evidence：自由文字；可识别的 mN 或 mN/相对路径须在资料中存在，否则拒绝建单
 - recommend：推荐第几项，从 1 起，至少一项、不重复
 - reason：必填，最多 %d 字`, maxChoiceTitle, org.MinOptions, org.MaxOptions, maxOptionTitle, maxOptionField, maxReason)
+
+// choiceMu 串行化拍板与作废，避免拍板建任务期间被作废。
+var choiceMu sync.Mutex
 
 type OptionInput struct {
 	Title    string `json:"title"`
@@ -72,7 +77,7 @@ type Choice struct {
 	Title     string   `json:"title"`
 	Recommend []int    `json:"recommend"`
 	Reason    string   `json:"reason"`
-	Status    string   `json:"status"` // open picked passed
+	Status    string   `json:"status"` // open picked passed void
 	Note      string   `json:"note,omitempty"`
 	CreatedBy string   `json:"created_by"`
 	CreatedAt int64    `json:"created_at"`
@@ -163,7 +168,7 @@ func Unpicked(c Choice) string {
 			skip = append(skip, o.Title)
 		}
 	}
-	if c.Status == "open" || len(skip) == 0 {
+	if (c.Status != "picked" && c.Status != "passed") || len(skip) == 0 {
 		return ""
 	}
 	s := fmt.Sprintf("%s「%s」没选：%s", c.ID, c.Title, strings.Join(skip, "、"))
@@ -216,6 +221,9 @@ func AddChoice(ctx context.Context, db *store.DB, in ChoiceInput, task, actor st
 					return err
 				}
 			}
+		}
+		if err := checkEvidence(ctx, tx, in.Options); err != nil {
+			return err
 		}
 		var open int
 		if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM choices WHERE department = ? AND status = 'open'`, in.Org).Scan(&open); err != nil {
@@ -339,6 +347,8 @@ func Choices(ctx context.Context, q store.Querier, dept string, all bool) ([]Cho
 // Decide 是用户拍板：picks 非空为 pick（各建一件任务），空为 pass。
 // 建任务走 ledger.Add（各自一个事务），所以先把会拒绝的都查完，再建任务，最后一个事务记结果。
 func Decide(ctx context.Context, db *store.DB, id string, picks []int, note, actor string) (Choice, error) {
+	choiceMu.Lock()
+	defer choiceMu.Unlock()
 	if utf8.RuneCountInString(note) > maxPickNote {
 		return Choice{}, api.Usage("--note: 最多 %d 字", maxPickNote)
 	}
@@ -347,7 +357,7 @@ func Decide(ctx context.Context, db *store.DB, id string, picks []int, note, act
 		return Choice{}, err
 	}
 	if c.Status != "open" {
-		return Choice{}, api.Conflict("%s 已经拍过板（%s）", id, c.Status).WithNext("atrium choice ls " + id)
+		return Choice{}, api.Conflict("%s 已结束（%s）", id, c.Status).WithNext("atrium choice ls " + id)
 	}
 	if picks != nil {
 		if err := CheckPicks("picks", picks, len(c.Options)); err != nil {

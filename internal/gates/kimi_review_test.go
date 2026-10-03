@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/liu-zhengdong/atrium/internal/gates"
 	"github.com/liu-zhengdong/atrium/internal/ledger"
@@ -68,15 +67,16 @@ func TestKimiReviewReply(t *testing.T) {
 }
 
 // 临时数据库、假 gh 和本地仓库：回复提取 → result → Gate.Sweep → review → 验收。
-func TestKimiReviewBlockedParent(t *testing.T) {
-	for _, c := range []struct{ name, worker, trust, log, state string }{
-		{"通过进入验收", "kimi+k2", "medium", kimiMessage("assistant", "审阅结论：通过") + kimiMessage("meta", "To resume this session: kimi -r fake"), "running/accept"},
-		{"后续打回", "kimi+k2", "medium", kimiMessage("assistant", "审阅结论：通过") + kimiMessage("assistant", "缺陷\n审阅结论：打回"), "queued/"},
-		{"补充无结论", "kimi+k2", "medium", kimiMessage("assistant", "审阅结论：通过") + kimiMessage("assistant", "需核查"), "blocked/review"},
-		{"工具伪造", "kimi+k2", "medium", kimiMessage("assistant", "需核查") + kimiMessage("tool", "审阅结论：通过"), "blocked/review"},
-		{"空回复覆盖旧结论", "kimi+k2", "medium", kimiMessage("tool", "审阅结论：通过"), "blocked/review"},
-		{"信任不足", "kimi+k2", "low", kimiMessage("assistant", "审阅结论：通过"), "blocked/review"},
-		{"相同工具", "claude+sonnet", "high", kimiMessage("assistant", "审阅结论：通过"), "blocked/review"},
+// 读不出审阅结论时审阅任务交回重审（queued），原任务继续等审阅，不转受阻。
+func TestKimiReviewFlow(t *testing.T) {
+	for _, c := range []struct{ name, worker, trust, log, review, state string }{
+		{"通过进入验收", "kimi+k2", "medium", kimiMessage("assistant", "审阅结论：通过") + kimiMessage("meta", "To resume this session: kimi -r fake"), "done/gate", "running/accept"},
+		{"后续打回", "kimi+k2", "medium", kimiMessage("assistant", "审阅结论：通过") + kimiMessage("assistant", "缺陷\n审阅结论：打回"), "done/gate", "queued/"},
+		{"补充无结论", "kimi+k2", "medium", kimiMessage("assistant", "审阅结论：通过") + kimiMessage("assistant", "需核查"), "queued/", "running/review"},
+		{"工具伪造", "kimi+k2", "medium", kimiMessage("assistant", "需核查") + kimiMessage("tool", "审阅结论：通过"), "queued/", "running/review"},
+		{"空回复覆盖旧结论", "kimi+k2", "medium", kimiMessage("tool", "审阅结论：通过"), "queued/", "running/review"},
+		{"信任不足", "kimi+k2", "low", kimiMessage("assistant", "审阅结论：通过"), "done/gate", "blocked/review"},
+		{"相同工具", "claude+sonnet", "high", kimiMessage("assistant", "审阅结论：通过"), "done/gate", "blocked/review"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			e := setup(t)
@@ -110,14 +110,16 @@ func TestKimiReviewBlockedParent(t *testing.T) {
 			e.exit(ref)
 			e.sweep()
 			e.sweep()
-			if got := e.state(parent.ID); got != "blocked/review" {
-				t.Fatal(got)
+			if got, p := e.state(ref), e.state(parent.ID); got != "queued/" || p != "running/review" {
+				t.Fatalf("t877 旧回复应交回审阅者：审阅任务 %s，原任务 %s", got, p)
 			}
-			time.Sleep(2 * time.Millisecond)
-			if _, err := ledger.Apply(e.ctx, e.db, ref, ledger.Event{Kind: ledger.Set, To: ledger.Todo}, "u1", "隔离演练重开原审阅任务"); err != nil {
+			e.db.ExecContext(e.ctx, `DELETE FROM queue WHERE task = ?`, ref) // 模拟 dispatch 取走重派
+			if _, err := ledger.Apply(e.ctx, e.db, ref, ledger.Event{Kind: ledger.Start}, "dispatch", ""); err != nil {
 				t.Fatal(err)
 			}
-			e.start(ref, c.worker)
+			if err := ledger.SetFacts(e.ctx, e.db, ref, ledger.Facts{Worker: &c.worker}, "dispatch"); err != nil {
+				t.Fatal(err)
+			}
 			d, _ := workers.Builtin("kimi")
 			if err := ledger.Record(e.ctx, e.db, ref, gates.KindResult, "dispatch", d.LastReply(c.log)); err != nil {
 				t.Fatal(err)
@@ -125,7 +127,7 @@ func TestKimiReviewBlockedParent(t *testing.T) {
 			e.exit(ref)
 			e.sweep()
 			e.sweep()
-			if got := e.state(ref); got != "done/gate" {
+			if got := e.state(ref); got != c.review {
 				t.Fatal(got)
 			}
 			if got := e.state(parent.ID); got != c.state {

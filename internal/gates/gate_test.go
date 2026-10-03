@@ -340,13 +340,17 @@ func TestReview(t *testing.T) {
 		name     string
 		reviewer string
 		result   string
+		rt       ledger.Status // 审阅任务
 		status   ledger.Status
 		stage    ledger.Stage
 	}{
-		{"通过", "codex+gpt", "看过了\n审阅结论：通过", ledger.Running, ledger.StageMerge},
-		{"打回", "codex+gpt", "a.go:1 缺测试\n审阅结论：打回", ledger.Queued, ""},
-		{"没写结论", "codex+gpt", "看过了", ledger.Blocked, ledger.StageReview},
-		{"审阅者与原执行者同工具不算", "claude+sonnet", "审阅结论：通过", ledger.Blocked, ledger.StageReview},
+		{"通过", "codex+gpt", "看过了\n审阅结论：通过", ledger.Done, ledger.Running, ledger.StageMerge},
+		{"打回", "codex+gpt", "a.go:1 缺测试\n审阅结论：打回", ledger.Done, ledger.Queued, ""},
+		// 读不出结论：交回审阅者重审，原任务继续等审阅，不转受阻。
+		{"没写结论", "codex+gpt", "看过了", ledger.Queued, ledger.Running, ledger.StageReview},
+		{"结论之后还有话", "codex+gpt", "审阅结论：通过\n交付结论：完成", ledger.Queued, ledger.Running, ledger.StageReview},
+		{"空回复", "codex+gpt", "", ledger.Queued, ledger.Running, ledger.StageReview},
+		{"审阅者与原执行者同工具不算", "claude+sonnet", "审阅结论：通过", ledger.Done, ledger.Blocked, ledger.StageReview},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -399,8 +403,11 @@ func TestReview(t *testing.T) {
 			ledger.Record(e.ctx, e.db, rt.ID, gates.KindWorktree, "dispatch", `{"host":"`+host+`","dir":"`+filepath.ToSlash(remoteDir)+`"}`)
 			e.exit(rt.ID)
 			e.sweep()
-			if got := e.get(rt.ID); got.Status != ledger.Done {
-				t.Fatalf("审阅任务应完成：%+v", got)
+			if got := e.get(rt.ID); got.Status != c.rt {
+				t.Fatalf("审阅任务 %s，期望 %s：%s", got.Status, c.rt, e.lastNote(rt.ID))
+			}
+			if c.rt == ledger.Queued && !strings.Contains(e.lastNote(rt.ID), "`审阅结论：通过` 或 `审阅结论：打回`") {
+				t.Fatalf("交回原因没写怎么补：%s", e.lastNote(rt.ID))
 			}
 			if got := e.get(task.ID); got.Status != c.status || got.Stage != c.stage {
 				t.Fatalf("原任务 %s/%s，期望 %s/%s：%s", got.Status, got.Stage, c.status, c.stage, e.lastNote(task.ID))
@@ -414,13 +421,14 @@ func TestReviewRerunAfterBlock(t *testing.T) {
 	cases := []struct {
 		name   string
 		result string
+		rt     ledger.Status // 审阅任务
 		status ledger.Status
 		stage  ledger.Stage
 		blocks int
 	}{
-		{"通过", "看过了\n审阅结论：通过", ledger.Running, ledger.StageMerge, 1},
-		{"打回", "a.go:1 缺测试\n审阅结论：打回", ledger.Queued, "", 1},
-		{"还是没写结论", "看过了", ledger.Blocked, ledger.StageReview, 2},
+		{"通过", "看过了\n审阅结论：通过", ledger.Done, ledger.Running, ledger.StageMerge, 1},
+		{"打回", "a.go:1 缺测试\n审阅结论：打回", ledger.Done, ledger.Queued, "", 1},
+		{"还是没写结论", "看过了", ledger.Queued, ledger.Blocked, ledger.StageReview, 1},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -447,8 +455,8 @@ func TestReviewRerunAfterBlock(t *testing.T) {
 			e.exit(ref)
 			e.sweep()
 			e.sweep()
-			if got := e.get(ref); got.Status != ledger.Done {
-				t.Fatalf("审阅任务应完成：%+v", got)
+			if got := e.get(ref); got.Status != c.rt {
+				t.Fatalf("审阅任务 %s，期望 %s：%s", got.Status, c.rt, e.lastNote(ref))
 			}
 			if got := e.get(task.ID); got.Status != c.status || got.Stage != c.stage || e.count(task.ID, "block") != c.blocks {
 				t.Fatalf("原任务 %s/%s、受阻 %d 次，期望 %s/%s、%d 次：%s", got.Status, got.Stage, e.count(task.ID, "block"), c.status, c.stage, c.blocks, e.lastNote(task.ID))

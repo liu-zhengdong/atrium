@@ -181,10 +181,15 @@ func (g *Gate) choiceFile(ctx context.Context, t ledger.Task) ([]byte, error) {
 
 // checkEnding 是没有改动可查的交付（message、dir）的交付检查：按执行者这一轮最后的回复里的交付结论判（ParseEnding）。
 // 没做成、没写都转受阻交处理人读回复定（补说明重派或收尾），不交回执行者重跑同一份提示词。
-// 审阅任务的结论由原任务读（最后一行是「审阅结论」），这里不看。
+// 审阅任务看的是审阅结论（reviewEnding），读不出就交回审阅者，原任务不卡在审阅阶段。
 func (g *Gate) checkEnding(ctx context.Context, t ledger.Task) (checked, error) {
-	if _, review, err := Last(ctx, g.DB, t.ID, KindReviewOf); err != nil || review {
-		return checked{note: "审阅结论在最后的回复里"}, err
+	_, review, err := Last(ctx, g.DB, t.ID, KindReviewOf)
+	if err != nil {
+		return checked{}, err
+	}
+	reply, err := roundResult(ctx, g.DB, t.ID)
+	if err != nil || review {
+		return reviewEnding(reply), err
 	}
 	where := "没有仓库"
 	switch {
@@ -192,10 +197,6 @@ func (g *Gate) checkEnding(ctx context.Context, t ledger.Task) (checked, error) 
 		where = "工作树相对基线没有改动，不要 PR"
 	case t.Dir != "":
 		where = "在工作地点原地干"
-	}
-	reply, err := roundResult(ctx, g.DB, t.ID)
-	if err != nil {
-		return checked{}, err
 	}
 	if reply == "" {
 		return checked{block: fmt.Sprintf("这一轮没记到执行者的回复（atrium task log %s 看原始输出）", t.ID)}, nil
@@ -212,6 +213,19 @@ func (g *Gate) checkEnding(ctx context.Context, t ledger.Task) (checked, error) 
 		return checked{block: where + "，执行者交付结论：" + word + "（" + why + "）" + next}, nil
 	}
 	return checked{note: where + "，交付结论：完成，结论在最后的回复里"}, nil
+}
+
+// reviewEnding 判审阅任务这一轮的回复读不读得出审阅结论（纯函数，与原任务读结论同一个 ParseReview）。
+// 读不出交回审阅者重审（交回计次，第 3 次转受阻）：回复为空多是取回复或登录出错，重派即可，不该让原任务等人重开审阅任务。
+func reviewEnding(reply string) checked {
+	const want = "最后一行单独写 `审阅结论：通过` 或 `审阅结论：打回`，问题写在它上面，它之后不再写别的"
+	if strings.TrimSpace(reply) == "" {
+		return checked{reasons: []string{"这一轮没记到审阅者的最后回复；审阅完在最后的回复里" + want}}
+	}
+	if _, _, ok := ParseReview(reply); !ok {
+		return checked{reasons: []string{"最后的回复读不出审阅结论：" + want}}
+	}
+	return checked{note: "审阅结论在最后的回复里"}
 }
 
 // CurrentReply 是执行者这一轮（最近一次拉起之后）最后的回复；这一轮没回复为空，不拿上一轮的充数。

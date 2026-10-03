@@ -6,8 +6,8 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/store"
 )
 
-// Cached 保留机器、账号指纹、套餐和读数时刻，供可用性判定使用。
-// 与 Last 共用存储读取；不启动额度读取器，不把跨账号摘要当机器事实。
+// Cached 保留机器、来源指纹、套餐标签和原读数时刻，供可用性判定使用。
+// 与 Last 共用存储读取；不启动额度读取器，不把 provider 摘要当当前账号或共享池事实。
 func Cached(ctx context.Context, q store.Querier) ([]Stored, error) {
 	return stored(ctx, q)
 }

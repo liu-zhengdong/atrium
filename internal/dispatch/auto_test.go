@@ -23,9 +23,6 @@ func TestNamedOnlyWorker(t *testing.T) {
 	defer db.Close()
 	env := &app.Env{DB: db, Paths: config.Paths{Data: dir}}
 	testLocalHost(t, env)
-	oldSpares := spares
-	spares = func(context.Context, *app.Env) (map[string]Spare, error) { return map[string]Spare{}, nil }
-	t.Cleanup(func() { spares = oldSpares })
 	src := "---\nprotocol: cli\ncommand: go\nargs: [\"{prompt}\"]\nauto: false\n---\n"
 	if _, err := workers.SaveProfile(ctx, db, "harness/fake", workers.Edit{Source: &src}, "u1"); err != nil {
 		t.Fatal(err)

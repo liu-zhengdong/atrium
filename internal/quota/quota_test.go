@@ -296,7 +296,7 @@ func TestMergeHosts(t *testing.T) {
 		rows       []Stored
 		from, note string
 	}{
-		{"本机优先", []Stored{good("h2", "B", now), good("h1", "A", now-100)}, "h1", "h2 登录的是另一个账号，没算进来"},
+		{"本机优先", []Stored{good("h2", "B", now), good("h1", "A", now-100)}, "h1", "h2 的来源读数未合入摘要（账号/共享池关系未知）"},
 		{"本机没有取远程", []Stored{good("h2", "B", now)}, "h2", "读自 h2"},
 		{"本机失败沿用上次", []Stored{good("h1", "A", now-100), bad("h1", now)}, "h1", "本次读不到（限流），沿用上次读数"},
 		{"太旧不用", []Stored{good("h1", "A", now-lastGood-1), bad("h1", now)}, "", "读不到：限流"},
@@ -370,7 +370,7 @@ func TestRecordAndLast(t *testing.T) {
 	ctx := context.Background()
 	now := store.Now()
 	w := []Window{{ID: "weekly", Used: 40, Period: week}}
-	// 两台读到同一账号（同一指纹）只算一份；h2 另一个账号不算。
+	// 相同/不同指纹都按机器保留，不能证明账号或套餐关系。
 	if err := Record(ctx, db, "h1", []Reading{{Account: "claude", OK: true, Finger: "A", ReadAt: now - 1000, Windows: w}}); err != nil {
 		t.Fatal(err)
 	}
@@ -386,14 +386,14 @@ func TestRecordAndLast(t *testing.T) {
 	}
 	var n int
 	db.QueryRow(`SELECT COUNT(*) FROM quota_cache`).Scan(&n)
-	if n != 3 {
-		t.Errorf("应有 3 行（A、B、codex 失败），得 %d", n)
+	if n != 4 {
+		t.Errorf("应有 4 行（各机器来源与 codex 失败），得 %d", n)
 	}
-	// h2 换登了 A：旧的 B 行清掉。
+	// h2 正常刷新换来源指纹，只替换该机器行。
 	Record(ctx, db, "h2", []Reading{{Account: "claude", OK: true, Finger: "A", ReadAt: now + 1, Windows: w}})
 	db.QueryRow(`SELECT COUNT(*) FROM quota_cache WHERE tool = 'claude'`).Scan(&n)
-	if n != 1 {
-		t.Errorf("换账号后应只剩 1 行，得 %d", n)
+	if n != 3 {
+		t.Errorf("换来源后其他机器两行仍保留，共 3 行，得 %d", n)
 	}
 	db.Exec(`INSERT INTO quota_settings (name, value) VALUES ('reserve_percent', 50)`)
 	env := &app.Env{DB: db, Paths: config.Paths{Data: t.TempDir()}}
@@ -476,7 +476,7 @@ func TestPoller(t *testing.T) {
 		t.Fatalf("到期应再跑：%v %d", err, runs)
 	}
 	ov, _ := Last(ctx, env)
-	if len(ov.Notes) != 2 || ov.Notes[0] != "OpenQuota 读取失败" || line("kimi").Source == "openquota" {
+	if len(ov.Notes) != 2 || ov.Notes[0] != "OpenQuota 读取失败" || line("kimi").Source != "openquota" {
 		t.Errorf("读不到时写原因：%+v", ov.Notes)
 	}
 	// OpenQuota 那一行不混进各台读数。

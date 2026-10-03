@@ -6,7 +6,7 @@ import (
 	"strings"
 )
 
-// Stored 是 quota_cache 的一行：某台机器对某个账号的最近一次读数。
+// Stored 是 quota_cache 的一行：某台机器对某个 provider 的来源读数；不证明当前执行账号或共享池。
 type Stored struct {
 	Host string `json:"host"`
 	Reading
@@ -26,8 +26,8 @@ type Line struct {
 	From   string `json:"from,omitempty"` // 自带读数来自哪台机器
 }
 
-// mergeHosts 按账号合并各台机器的自带读数（纯函数）：同一指纹只算一份（存储时已按指纹合一行）；
-// 本机登录的那个账号优先，本机没读到就用最新的；别的机器登录的是另一个账号时在说明里写明没算进来。
+// mergeHosts 是按 provider 收敛的展示摘要（纯函数），本机优先、否则取最新。
+// 未证明账号/套餐关系，不能用于跨机器挑人。
 func mergeHosts(rows []Stored, local string, now int64) map[string]Line {
 	byAcct := map[string][]Stored{}
 	for _, r := range rows {
@@ -76,7 +76,7 @@ func mergeHosts(rows []Stored, local string, now int64) map[string]Line {
 			others = append(others, g.Host)
 		}
 		if len(others) > 0 {
-			notes = append(notes, strings.Join(others, "、")+" 登录的是另一个账号，没算进来")
+			notes = append(notes, strings.Join(others, "、")+" 的来源读数未合入摘要（账号/共享池关系未知）")
 		}
 		out[acct] = Line{Pace: PaceOf(pick.Reading, now), Source: "builtin", Note: strings.Join(notes, "；"), From: pick.Host}
 	}

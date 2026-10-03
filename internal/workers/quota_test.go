@@ -35,7 +35,7 @@ func TestShowWithStoredQuota(t *testing.T) {
 	}
 	for _, c := range []struct{ name, want string }{
 		{"trae", "trae  已下架只点名"}, {"claude", "claude  富余 +25.0%"},
-		{"agy", "antigravity  富余 +20.0%"},
+		{"agy", "antigravity  富余 +20.0%（旧读数）"},
 	} {
 		d, err := showWithQuota(ctx, env, c.name)
 		if err != nil {

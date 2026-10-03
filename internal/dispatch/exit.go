@@ -56,18 +56,7 @@ func (d *dispatcher) exited(ctx context.Context, p *proc, code int) error {
 		}
 		if workers.Silent(tr, delivered) {
 			sig = workers.Signal{Kind: workers.SignalNoStart, Reason: "静默空转：完整零 usage，且无有效动作或产出"}
-			available, err := workers.LoadAvailability(ctx, d.env)
-			if err != nil {
-				return err
-			}
-			r, err := workers.Resolve(ctx, db, p.run.Worker)
-			if err != nil {
-				return err
-			}
-			// 只有缓存额度提供独立耗尽证据时才标 quota，零读数本身不是额度证据。
-			if sp, _ := available.CheckResolved(r, p.run.Host); sp.Stop != "" {
-				sig = workers.Signal{Kind: workers.SignalQuota, Reason: sp.Stop}
-			}
+
 		}
 	}
 	if p.lost {

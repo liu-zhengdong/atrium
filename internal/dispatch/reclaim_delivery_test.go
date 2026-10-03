@@ -33,12 +33,11 @@ func TestReclaimInPlaceDeliveryAndRequeue(t *testing.T) {
 	if _, err := workers.SaveProfile(ctx, d.env.DB, "harness/reclaimfake", workers.Edit{Source: &source}, "u1"); err != nil {
 		t.Fatal(err)
 	}
-	oldPick, oldSpares := pickHost, spares
+	oldPick := pickHost
 	pickHost = func(context.Context, *app.Env, HostNeed, string) (HostChoice, error) {
 		return HostChoice{Kind: "run", Host: LocalHost}, nil
 	}
-	spares = func(context.Context, *app.Env) (map[string]Spare, error) { return map[string]Spare{}, nil }
-	t.Cleanup(func() { pickHost, spares = oldPick, oldSpares })
+	t.Cleanup(func() { pickHost = oldPick })
 	t.Setenv("ATRIUM_DATA", d.env.Paths.Data)
 	t.Setenv("ATRIUM_PORT", "")
 	gateModule := gates.Module()

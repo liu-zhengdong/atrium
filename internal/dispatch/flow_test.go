@@ -77,7 +77,7 @@ func setup(t *testing.T) (*app.Env, *dispatcher) {
 	}
 	// 不读开发者本机的额度与机器：只用本机、没有额度数据。
 	// 假的内置工具在 PATH 上：自动挑人时当用户的服务挑它们（换人重派要用）。
-	oldPick, oldSpares, oldIsolated := pickHost, spares, isolated
+	oldPick, oldIsolated := pickHost, isolated
 	pickHost = func(ctx context.Context, env *app.Env, need HostNeed, pinned string) (HostChoice, error) {
 		marks, err := workers.Marks(ctx, env.DB, store.Now())
 		if err != nil {
@@ -90,9 +90,8 @@ func setup(t *testing.T) (*app.Env, *dispatcher) {
 		clis["fake"] = hosts.CLI{Installed: true}
 		return hosts.Choose([]hosts.Candidate{{ID: LocalHost, Kind: "local", CLIs: clis, Marks: marks}}, need, pinned), nil
 	}
-	spares = func(context.Context, *app.Env) (map[string]Spare, error) { return map[string]Spare{}, nil }
 	isolated = func(*app.Env) bool { return false }
-	t.Cleanup(func() { pickHost, spares, isolated = oldPick, oldSpares, oldIsolated })
+	t.Cleanup(func() { pickHost, isolated = oldPick, oldIsolated })
 	d := get(env)
 	t.Cleanup(func() {
 		d.mu.Lock()

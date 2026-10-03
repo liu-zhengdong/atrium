@@ -389,7 +389,6 @@ func Pick(ctx context.Context, env *app.Env, need Need, pinned string) (Choice, 
 	var cands []Candidate
 	for _, h := range list {
 		c := candidate(h, busy[h.ID], pause.Paused(active, pause.Scope{Host: h.ID}), theHub.isPolling(h.ID), now)
-		c.Marks = available.Marks
 		_, c.Unavailable = available.CheckResolved(w, h.ID)
 		cands = append(cands, c)
 	}

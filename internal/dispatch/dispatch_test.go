@@ -356,9 +356,6 @@ func TestViewIsolated(t *testing.T) {
 		t.Fatal(err)
 	}
 	testLocalHost(t, env)
-	oldSpares := spares
-	spares = func(context.Context, *app.Env) (map[string]Spare, error) { return map[string]Spare{}, nil }
-	t.Cleanup(func() { spares = oldSpares })
 	src := "---\nprotocol: cli\ncommand: go\nargs: [\"{prompt}\"]\n---\n"
 	if _, err := workers.SaveProfile(ctx, db, "harness/fake", workers.Edit{Source: &src}, "u1"); err != nil {
 		t.Fatal(err)

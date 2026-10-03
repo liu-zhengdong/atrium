@@ -39,7 +39,6 @@ var (
 	// waitRemote 保留远程退出码与 Lost；服务重启后照样能等。
 	waitRemote = hosts.WaitExit
 	stopRemote = hosts.Stop
-	spares     = quota.Spares
 	// isolated：隔离实例（数据目录不是缺省的那个）自动挑人不挑内置工具，测试、开发不会拉起本机真实执行者；写死 --worker 不拦。
 	isolated = func(env *app.Env) bool { return env.Paths.Isolated() }
 	// skillOf 是任务挂的技能：优先执行者、要的凭据。

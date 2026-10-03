@@ -67,9 +67,6 @@ func TestStartupProbeAutoDispatch(t *testing.T) {
 			if err := hosts.EnsureLocal(ctx, db, hosts.LocalInfo(dir)); err != nil {
 				t.Fatal(err)
 			}
-			oldSpares := spares
-			spares = func(context.Context, *app.Env) (map[string]Spare, error) { return map[string]Spare{}, nil }
-			defer func() { spares = oldSpares }()
 			tk, err := ledger.Add(ctx, db, ledger.NewTask{Title: name}, "u1")
 			if err != nil {
 				t.Fatal(err)

@@ -115,13 +115,9 @@ func (d *dispatcher) view(ctx context.Context, t ledger.Task, risk string, exclu
 			facts[i].Refusal = why
 		}
 	}
-	sp, err := spares(ctx, d.env)
-	if err != nil {
-		return PickView{}, app.Global(err)
-	}
 	busy, err := busyTools(ctx, db)
 	if err != nil {
 		return PickView{}, err
 	}
-	return Pick(PickInput{Risk: risk, Priority: t.Priority, Facts: facts, Spares: sp, Busy: busy, Exclude: exclude}), nil
+	return Pick(PickInput{Risk: risk, Priority: t.Priority, Facts: facts, Busy: busy, Exclude: exclude}), nil
 }

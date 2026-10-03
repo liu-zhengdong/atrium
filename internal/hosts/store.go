@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/liu-zhengdong/atrium/internal/api"
+	"github.com/liu-zhengdong/atrium/internal/quota"
 	"github.com/liu-zhengdong/atrium/internal/store"
 )
 
@@ -270,6 +271,9 @@ func Remove(ctx context.Context, db *store.DB, id string) error {
 			return api.Conflict("%s 上还有在跑的任务 %s；先停下或等它结束", id, task).WithNext("atrium task stop " + task)
 		}
 		if !store.IsNotFound(err) {
+			return err
+		}
+		if err := quota.DropHost(ctx, tx, id); err != nil {
 			return err
 		}
 		_, err = tx.ExecContext(ctx, `DELETE FROM hosts WHERE id = ?`, id)

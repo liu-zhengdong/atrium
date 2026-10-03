@@ -72,17 +72,21 @@ type Resolved struct {
 	Adapter  *Driver  `json:"-"`
 }
 
-// Account 是额度读取器的账号/provider 名，套餐范围由 QuotaAccount 唯一判定。
+// Account 是展示使用的来源类别，不是实际账号或共享套餐身份。
+// 执行组合与 provider 分开；显式 CLI provider 保持原名，不建立别名表。
 func (r Resolved) Account() string {
-	return QuotaAccount(r.quotaSpec())
-}
-
-func (r Resolved) quotaSpec() Spec {
-	s := r.Spec
-	if r.CLIModel != "" {
-		s.Model = r.CLIModel
+	if r.Spec.Tool == "pi" || r.Spec.Tool == "opencode" {
+		if provider, _, ok := strings.Cut(r.CLIModel, "/"); ok {
+			return provider
+		}
+		if provider, _, ok := strings.Cut(r.Spec.Model, "/"); ok {
+			return provider
+		}
 	}
-	return s
+	if r.Spec.Tool == "agy" {
+		return "antigravity"
+	}
+	return r.Spec.Tool
 }
 
 // Endpoint 是档案写的自定义端点；没写为 nil。

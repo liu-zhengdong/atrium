@@ -71,7 +71,7 @@ func recoveryCLI(mode string) int {
 // 实际隔离服务 HTTP task run → 账本 → 分派循环 → 假执行者进程 → 退出恢复。
 // 不装配 hosts/quota 后台循环，不读取真实登录/额度，不启负责人。
 func TestRecoveryServiceEntry(t *testing.T) {
-	for _, mode := range []string{"quota", "other-account", "silent", "silent-quota", "old-pr", "fresh-pr", "zero-action", "missing", "output", "stopped", "no-candidate", "bounded"} {
+	for _, mode := range []string{"quota", "unknown-other-host", "silent", "silent-quota", "old-pr", "fresh-pr", "zero-action", "missing", "output", "stopped", "no-candidate", "bounded"} {
 		t.Run(mode, func(t *testing.T) {
 			dir := t.TempDir()
 			t.Setenv("HOME", dir)
@@ -132,11 +132,8 @@ func TestRecoveryServiceEntry(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			// 同套餐另一个模型必须留在候选里，由共用套餐判定排除，不能再试一遍。
+			// 真实池关系未知，不能用 provider 映射伪造同套餐验收。
 			save("harness/pi", "---\nmodel: opencode-go/quota\n---\n")
-			if mode != "other-account" {
-				save("combos/pi+other", "---\nmodel: opencode-go/other\n---\n")
-			}
 			for _, name := range []string{"aaa-paid", "zzz-free"} {
 				charge := 10
 				if name == "zzz-free" {
@@ -148,17 +145,17 @@ func TestRecoveryServiceEntry(t *testing.T) {
 				}
 				quoted, _ := json.Marshal(filepath.Base(exe))
 				profile := fmt.Sprintf("---\nprotocol: cli\ncommand: %s\nargs: ['--recovery-fake-worker','%s','{prompt}']\ndone_match: '^DONE$'\nbilling: subscription\nprices: {currency: USD, input: %d, output: %d, cache_read: %d, cache_write: %d}\n", quoted, cliMode, charge, charge, charge, charge)
-				if mode == "no-candidate" || mode == "other-account" {
+				if mode == "no-candidate" || mode == "unknown-other-host" {
 					profile += "auto: false\n"
 				}
 				save("harness/"+name, profile+"---\n")
 			}
-			if mode == "no-candidate" || mode == "bounded" || mode == "silent" || mode == "old-pr" || mode == "fresh-pr" {
+			if mode == "no-candidate" || mode == "bounded" || mode == "silent" || mode == "silent-quota" || mode == "old-pr" || mode == "fresh-pr" {
 				save("harness/pi", "---\nmodel: opencode-go/quota\nauto: false\n---\n")
 			}
 			remoteHost := ""
-			if mode == "other-account" {
-				h, code, err := hosts.Add(ctx, db, hosts.AddInput{Name: "另一账号", Repos: []string{"*"}}, 4999)
+			if mode == "unknown-other-host" {
+				h, code, err := hosts.Add(ctx, db, hosts.AddInput{Name: "另一机器（身份未知）", Repos: []string{"*"}}, 4999)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -176,7 +173,7 @@ func TestRecoveryServiceEntry(t *testing.T) {
 					if host != remoteHost {
 						return 0, 0, "", fmt.Errorf("派错机器 %s", host)
 					}
-					log := `{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"另一账号交付完成"}]}}` + "\n" + `{"type":"agent_settled"}` + "\n"
+					log := `{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"另一机器（身份未知）交付完成"}]}}` + "\n" + `{"type":"agent_settled"}` + "\n"
 					return 1, 4242, filepath.Join(dir, "remote-work"), os.WriteFile(r.Log, []byte(log), 0600)
 				}
 				waitRemote = func(context.Context, *app.Env, string, int) (hosts.Exit, error) {
@@ -238,7 +235,7 @@ func TestRecoveryServiceEntry(t *testing.T) {
 				}
 			}
 			workerMode := mode
-			if mode == "no-candidate" || mode == "bounded" || mode == "other-account" {
+			if mode == "no-candidate" || mode == "bounded" || mode == "unknown-other-host" {
 				workerMode = "quota"
 			}
 			call("POST", "/api/tasks/"+tk.ID+"/run", map[string]string{"worker": "pi+opencode-go/" + workerMode}, nil)
@@ -284,7 +281,7 @@ func TestRecoveryServiceEntry(t *testing.T) {
 				t.Fatal(err)
 			}
 			wantRuns := 1
-			if mode == "quota" || mode == "silent" || mode == "silent-quota" || mode == "other-account" || mode == "old-pr" {
+			if mode == "quota" || mode == "silent" || mode == "silent-quota" || mode == "unknown-other-host" || mode == "old-pr" {
 				wantRuns = 2
 			}
 			if mode == "bounded" {
@@ -293,18 +290,18 @@ func TestRecoveryServiceEntry(t *testing.T) {
 			if len(runs) != wantRuns {
 				t.Fatalf("拉起次数 %d want %d：%+v", len(runs), wantRuns, runs)
 			}
-			if wantRuns == 2 && mode != "other-account" && (runs[1].Worker != "zzz-free" || runs[1].Why != workers.WhySwitch) {
-				t.Fatalf("应实际选择已声明免费，且不试同套餐模型：%+v", runs)
+			if wantRuns == 2 && mode != "unknown-other-host" && (runs[1].Worker != "zzz-free" || runs[1].Why != workers.WhySwitch) {
+				t.Fatalf("应实际选择已声明免费：%+v", runs)
 			}
-			if mode == "other-account" && (runs[1].Worker != runs[0].Worker || runs[1].Host != remoteHost || runs[1].Why != workers.WhySwitch) {
-				t.Fatalf("同组合应能切到另一账号：%+v", runs)
+			if mode == "unknown-other-host" && (runs[1].Worker != runs[0].Worker || runs[1].Host != remoteHost || runs[1].Why != workers.WhySwitch) {
+				t.Fatalf("同组合应能切到另一机器（身份未知）：%+v", runs)
 			}
-			if (mode == "silent" || mode == "old-pr") && (len(marks) != 1 || marks[0].Kind != workers.SignalNoStart) {
+			if (mode == "silent" || mode == "old-pr" || mode == "silent-quota") && (len(marks) != 1 || marks[0].Kind != workers.SignalNoStart) {
 				t.Fatalf("空转不能冒充 quota：%+v", marks)
 			}
-			if mode == "quota" || mode == "silent-quota" {
+			if mode == "quota" {
 				if len(marks) != 1 || marks[0].Kind != workers.SignalQuota {
-					t.Fatalf("应有独立额度证据：%+v", marks)
+					t.Fatalf("报文有独立额度失败证据：%+v", marks)
 				}
 			}
 			if mode == "zero-action" || mode == "missing" || mode == "output" || mode == "stopped" || mode == "fresh-pr" {

@@ -46,9 +46,6 @@ func TestRemoteCLISelection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	oldSpares := spares
-	spares = func(context.Context, *app.Env) (map[string]Spare, error) { return map[string]Spare{}, nil }
-	t.Cleanup(func() { spares = oldSpares })
 	d := &dispatcher{env: env}
 	for _, available := range []bool{true, false} {
 		clis := map[string]hosts.CLI{}

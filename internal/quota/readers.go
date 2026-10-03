@@ -26,7 +26,7 @@ type Window struct {
 	Period   int64   `json:"period"`    // 秒；0 为不知道或不按固定周期
 }
 
-// Reading 是一台机器对一个账号的一次读数。只含数字、套餐名与账号指纹，不含令牌。
+// Reading 是一台机器对一个账号的一次读数。只含数字、套餐名与来源指纹，不含令牌；Account 是 provider 类别。
 type Reading struct {
 	Account string   `json:"account"` // claude、codex、opencode
 	OK      bool     `json:"ok"`
@@ -34,7 +34,7 @@ type Reading struct {
 	Plan    string   `json:"plan,omitempty"`
 	Windows []Window `json:"windows,omitempty"`
 	ReadAt  int64    `json:"read_at"`
-	Finger  string   `json:"finger,omitempty"` // 账号指纹：sha256(<账号>:<id>) 前 16 位
+	Finger  string   `json:"finger,omitempty"` // 来源指纹；Go 输入为 key，不能证明账号或共享池
 	retryAt int64
 }
 
@@ -90,7 +90,7 @@ func ReadAccount(ctx context.Context, d Deps, account string) Reading {
 
 func fail(reason string) Reading { return Reading{Reason: reason} }
 
-// fingerprint：账号 id 的不可逆指纹；多台机器读到同一指纹算同一个账号。
+// fingerprint 是来源输入的不可逆指纹；不同读取器输入不同，不作共享池证据。
 func fingerprint(account, id string) string {
 	sum := sha256.Sum256([]byte(account + ":" + id))
 	return hex.EncodeToString(sum[:])[:16]

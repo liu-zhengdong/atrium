@@ -14,7 +14,7 @@ import (
 // 正文的 by 是引起它的身份（ledger 填操作人）。
 // notify 的处理是秘书转告用户，不要求回复或拍板；ask 是秘书把问题转告用户，用户回话经 task tell 送回任务。
 // 上报缺省「要处理」：上一层负责人按要处理的事件被唤醒，秘书的 events wait 也只取要处理的；
-// cross 的级别只由 leaders.EscalateLevel 定（不挂未完成任务的是知会），SecretaryAct 不再改它。
+// cross 的级别由 leaders.EscalateLevel 定（不挂未完成任务的是知会）；落到秘书的 cross 一律知会（SecretaryAct）。
 func LevelOf(kind string, body any) string {
 	switch kind {
 	case Overdue, OnlineFailed, LimitFull, TaskAssigned, LeaderEscalate:
@@ -32,13 +32,13 @@ func LevelOf(kind string, body any) string {
 
 // SecretaryAct 纯判定：落到秘书的事件能不能是要处理。秘书的要处理只收四类：等用户拍板（ask 上报、选项单、等用户验收）、
 // 卡住升级（stuck、beyond 上报，任务失败或受阻，执行者不可用、上限满、自升级失败、定时任务或远程机器出错）、
-// 超时未动（overdue）、需转告用户（notify 上报）。其余（如任务完成回执）对秘书只知会，Emit 落库时降级。
-// cross 上报放行：挂未完成任务的真实协作请求由 leaders 定为要处理，回执在那里已是知会。
+// 超时未动（overdue）、需转告用户（notify 上报）。其余（如任务完成回执、cross 协作上报）对秘书只知会：
+// Emit 落库时降级，Reclassify 把旧库里还没确认的同样降级。
 func SecretaryAct(kind string, body any) bool {
 	switch kind {
 	case LeaderEscalate:
 		switch field(body, "kind") {
-		case "ask", "notify", "stuck", "beyond", "cross":
+		case "ask", "notify", "stuck", "beyond":
 			return true
 		}
 	case TaskStatus:

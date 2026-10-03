@@ -447,7 +447,7 @@ func TestAsk(t *testing.T) {
 	}
 }
 
-// 协作回执不进秘书的要处理：cross 不挂任务或挂已完成的任务只记账；挂着未完成任务的 cross 照样叫醒上一层负责人；
+// 协作回执不进秘书的要处理：cross 不挂任务或挂已完成的任务只记账；挂着未完成任务的 cross 照样叫醒上一层负责人，落到秘书的 cross 一律知会；
 // ask、stuck、beyond、notify、overdue 仍是秘书的要处理，积压只数它们（overdue 本就不计积压）。
 func TestEscalateInbox(t *testing.T) {
 	env, h, srv := fixture(t)
@@ -500,9 +500,8 @@ func TestEscalateInbox(t *testing.T) {
 		t.Fatalf("协作回执应记在任务经历里：%+v", hist[len(hist)-1])
 	}
 	up(a1, EscalateIn{Kind: "cross", Note: "要 o3 配合改接口", Task: "t1"}, org.Secretary)
-	if act, _ := events.Pending(ctx, env.DB, org.Secretary, false, 50); len(act) != 1 || act[0].Level != events.Act ||
-		!strings.Contains(string(act[0].Body), "配合改接口") {
-		t.Fatalf("顶层负责人挂未完成任务的协作请求应进秘书的要处理：%+v", act)
+	if act, _ := events.Pending(ctx, env.DB, org.Secretary, false, 50); len(act) != 0 {
+		t.Fatalf("顶层负责人的协作请求不属秘书的四类，不进要处理：%+v", act)
 	}
 
 	up(a2, EscalateIn{Kind: "ask", Note: "挑几号？", Task: "t1"}, org.Secretary)
@@ -513,8 +512,8 @@ func TestEscalateInbox(t *testing.T) {
 		t.Fatal(err)
 	}
 	act, _ := events.Pending(ctx, env.DB, org.Secretary, false, 50)
-	if len(act) != 6 {
-		t.Fatalf("协作请求与 ask、notify、stuck、beyond、overdue 应都是秘书的要处理：%+v", act)
+	if len(act) != 5 {
+		t.Fatalf("ask、notify、stuck、beyond、overdue 应都是秘书的要处理：%+v", act)
 	}
 	bl, err := events.Backlogs(ctx, env.DB)
 	if err != nil {
@@ -524,8 +523,8 @@ func TestEscalateInbox(t *testing.T) {
 	for _, b := range bl {
 		got[b.Target] = b.Count
 	}
-	if got[org.Secretary] != 5 {
-		t.Fatalf("秘书积压应为 5（不含 overdue 与知会）：%+v", bl)
+	if got[org.Secretary] != 4 {
+		t.Fatalf("秘书积压应为 4（不含 overdue 与知会）：%+v", bl)
 	}
 }
 

@@ -1,7 +1,7 @@
 // Package events：待投递事件先落库，再由订阅者 events wait 取走（起 15 分钟租约）、events ack 确认。
 //
 // 分两级：act（要处理）与 info（知会）；wait 缺省只取要处理的，--all 连知会一起取。
-// 秘书的要处理只收四类（SecretaryAct），其余落到秘书的在 Emit 里降为知会；cross 上报的级别由 leaders 定，这里不改。
+// 秘书的要处理只收四类（SecretaryAct），其余落到秘书的在 Emit 里降为知会，旧库里还没确认的由 Reclassify 在启动时降级。
 // 投递对象（target）留空时调 org.Recipient：部门往上最近的负责人，没有投 secretary。
 // 任务事件经 EmitTask 只投要动手的那一位（Route）：等验收投验收人，负责人自己引起的结果投任务分派人，其他结果投处理人或部门负责人，过程不投。
 // 同一投递对象同一去重键、还没取走也没确认的事件合并成一条（count 加一，级别随最新一条），免得刷屏。
@@ -376,8 +376,64 @@ func Prune(ctx context.Context, q store.Querier, before int64) (int64, error) {
 	return res.RowsAffected()
 }
 
-// run 是清理循环：启动时清一次，之后每小时一次；全局暂停时不清。
+// Reclassify 把秘书名下还没确认、不属四类（SecretaryAct）的要处理事件降为知会：
+// Emit 已在落库时降级，这里收拾此前落库的旧记录，正文不动。返回降了几条。
+func Reclassify(ctx context.Context, db *store.DB) (int64, error) {
+	var n int64
+	err := db.Tx(ctx, func(tx *sql.Tx) error {
+		for last := int64(0); ; {
+			rows, err := tx.QueryContext(ctx, `SELECT id, kind, body FROM events WHERE target = ? AND acked_at IS NULL
+				AND level = 'act' AND id > ? ORDER BY id LIMIT ?`, Secretary, last, maxBatch)
+			if err != nil {
+				return err
+			}
+			var down []int64
+			seen := 0
+			for rows.Next() {
+				var kind, raw string
+				if err := rows.Scan(&last, &kind, &raw); err != nil {
+					rows.Close()
+					return err
+				}
+				seen++
+				var body any
+				if raw != "" {
+					if err := json.Unmarshal([]byte(raw), &body); err != nil {
+						rows.Close()
+						return fmt.Errorf("事件 %d 正文：%w", last, err)
+					}
+				}
+				if !SecretaryAct(kind, body) {
+					down = append(down, last)
+				}
+			}
+			rows.Close()
+			if err := rows.Err(); err != nil {
+				return err
+			}
+			for _, id := range down {
+				if _, err := tx.ExecContext(ctx, `UPDATE events SET level = ? WHERE id = ?`, Info, id); err != nil {
+					return err
+				}
+			}
+			n += int64(len(down))
+			if seen < maxBatch {
+				return nil
+			}
+		}
+	})
+	return n, err
+}
+
+// run 是清理循环：启动时先把旧的秘书普通回执降为知会（Reclassify），再清一次，之后每小时清一次；全局暂停时不清。
 func run(ctx context.Context, env *app.Env) error {
+	n, err := Reclassify(ctx, env.DB)
+	if err != nil {
+		return fmt.Errorf("事件重分类：%w", err)
+	}
+	if n > 0 {
+		env.Log.Info("秘书普通回执降为知会", "count", n)
+	}
 	t := time.NewTicker(time.Hour)
 	defer t.Stop()
 	for {

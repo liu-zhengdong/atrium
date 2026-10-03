@@ -216,7 +216,7 @@ func TestSecretaryAct(t *testing.T) {
 		{"知会用户", LeaderEscalate, esc("notify"), true},
 		{"卡住", LeaderEscalate, esc("stuck"), true},
 		{"越权", LeaderEscalate, esc("beyond"), true},
-		{"跨部门（级别由 leaders 定）", LeaderEscalate, esc("cross"), true},
+		{"跨部门协作", LeaderEscalate, esc("cross"), false},
 		{"旧的里程碑上报", LeaderEscalate, esc("shipped"), false},
 		{"选项单", ChoiceOpen, nil, true},
 		{"等用户验收", TaskStatus, map[string]any{"to": "running", "accept_by": "user"}, true},
@@ -247,6 +247,7 @@ func TestSecretaryInbox(t *testing.T) {
 		emit(t, db, Event{Kind: LeaderEscalate, Target: Secretary, Body: map[string]any{"kind": kind}})
 	}
 	emit(t, db, Event{Kind: LeaderEscalate, Target: Secretary, Level: Info, Body: map[string]any{"kind": "cross"}})
+	emit(t, db, Event{Kind: LeaderEscalate, Target: Secretary, Level: Act, Body: map[string]any{"kind": "cross"}})
 	emit(t, db, Event{Kind: Overdue, Target: Secretary})
 	emit(t, db, Event{Kind: TaskStatus, Target: Secretary, Body: map[string]any{"to": "done", "by": "a1"}})
 	emit(t, db, Event{Kind: TaskStatus, Target: "a1", Body: map[string]any{"to": "done", "by": "worker"}})
@@ -254,8 +255,8 @@ func TestSecretaryInbox(t *testing.T) {
 
 	act, _ := Pending(ctx, db, Secretary, false, 50)
 	all, _ := Pending(ctx, db, Secretary, true, 50)
-	if len(act) != 5 || len(all) != 7 {
-		t.Fatalf("秘书要处理应 5 条（ask、stuck、beyond、notify、overdue），连知会共 7 条：%d / %d", len(act), len(all))
+	if len(act) != 5 || len(all) != 8 {
+		t.Fatalf("秘书要处理应 5 条（ask、stuck、beyond、notify、overdue），连知会共 8 条：%d / %d", len(act), len(all))
 	}
 	for _, r := range act {
 		if r.Kind == TaskStatus || strings.Contains(string(r.Body), "cross") {
@@ -275,6 +276,60 @@ func TestSecretaryInbox(t *testing.T) {
 	}
 	if got[Secretary] != 4 || got["a1"] != 2 {
 		t.Fatalf("积压：秘书应 4（不含 overdue 与知会）、a1 应 2：%+v", bl)
+	}
+}
+
+// 旧库里按旧规则以要处理落给秘书的普通回执（cross、完成回执），Reclassify 后降为知会、正文不变；
+// 卡住升级、已确认的、负责人收的不动；积压与取走只剩真要处理的。
+func TestReclassify(t *testing.T) {
+	db, ctx := openDB(t), context.Background()
+	insert := func(kind, target, body string, acked bool) {
+		t.Helper()
+		var ack any
+		if acked {
+			ack = 1
+		}
+		exec(t, db, `INSERT INTO events (at, updated_at, kind, level, key, target, body, acked_at) VALUES (1, 1, ?, 'act', '', ?, ?, ?)`,
+			kind, target, body, ack)
+	}
+	insert(LeaderEscalate, Secretary, `{"kind":"cross","note":"t866确认工作已闭合，回交t862"}`, false)
+	insert(TaskStatus, Secretary, `{"from":"running","to":"done","by":"a5"}`, false)
+	insert(LeaderEscalate, Secretary, `{"kind":"stuck","note":"卡了三次"}`, false)
+	insert(TaskStatus, Secretary, `{"to":"blocked"}`, false)
+	insert(TaskStatus, Secretary, `{"to":"done"}`, true)
+	insert(LeaderEscalate, "a1", `{"kind":"cross","note":"要配合"}`, false)
+
+	if a, _ := Pending(ctx, db, Secretary, false, 50); len(a) != 4 {
+		t.Fatalf("前提：旧库秘书要处理 4 条：%+v", a)
+	}
+	n, err := Reclassify(ctx, db)
+	if err != nil || n != 2 {
+		t.Fatalf("应降 2 条：%d %v", n, err)
+	}
+	act, _ := Pending(ctx, db, Secretary, false, 50)
+	if len(act) != 2 || !strings.Contains(string(act[0].Body), "卡了三次") || !strings.Contains(string(act[1].Body), "blocked") {
+		t.Fatalf("秘书要处理只剩 stuck 与受阻：%+v", act)
+	}
+	all, _ := Pending(ctx, db, Secretary, true, 50)
+	if len(all) != 4 || !strings.Contains(string(all[0].Body), "回交t862") || all[0].Level != Info {
+		t.Fatalf("降级的回执仍在、正文不变：%+v", all)
+	}
+	if lead, _ := Pending(ctx, db, "a1", false, 50); len(lead) != 1 {
+		t.Fatalf("负责人收的协作请求不动：%+v", lead)
+	}
+	bl, _ := Backlogs(ctx, db)
+	got := map[string]int{}
+	for _, b := range bl {
+		got[b.Target] = b.Count
+	}
+	if got[Secretary] != 2 || got["a1"] != 1 {
+		t.Fatalf("积压：秘书 2、a1 1：%+v", bl)
+	}
+	if taken, _ := Take(ctx, db, Secretary, false); len(taken) != 2 {
+		t.Fatalf("取走只剩 2 条：%+v", taken)
+	}
+	if n, err := Reclassify(ctx, db); err != nil || n != 0 {
+		t.Fatalf("再跑一次不再降：%d %v", n, err)
 	}
 }
 

@@ -53,7 +53,7 @@ func deptTasks(ctx context.Context, q store.Querier, ix *orgIndex, id string) ([
 	kids := countKids(tasks) // 每件列出的任务都补了整棵子树，子任务数是全的
 	out := make([]Row, len(tasks))
 	for i, t := range tasks {
-		if out[i], err = rowOf(ctx, q, t, ix.parents, kids[t.ID]); err != nil {
+		if out[i], err = rowOf(ctx, q, t, ix, kids[t.ID]); err != nil {
 			return nil, err
 		}
 	}

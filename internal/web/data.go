@@ -27,14 +27,16 @@ import (
 
 // Row 是任务列表的一行。
 type Row struct {
-	ID    string `json:"id"`
-	Title string `json:"title"`
-	Dept  string `json:"dept,omitempty"`
-	Group string `json:"group,omitempty"` // 今天页「按部门」排序用的一级部门
-	State string `json:"state"`
-	Who   string `json:"who"`
-	At    int64  `json:"at"`             // 行尾时间：在做的是开始（最近变化）时间，完成的是结束时间
-	Kids  []Row  `json:"kids,omitempty"` // 子任务（按建立先后）；只有部门页排成树
+	ID         string `json:"id"`
+	Title      string `json:"title"`
+	Dept       string `json:"dept,omitempty"`
+	Group      string `json:"group,omitempty"` // 今天页「按部门」排序用的一级部门
+	State      string `json:"state"`
+	Who        string `json:"who"`
+	Owner      string `json:"owner,omitempty"` // PartiesOf 派生的当前处理人身份
+	OwnerLabel string `json:"owner_label,omitempty"`
+	At         int64  `json:"at"`             // 行尾时间：在做的是开始（最近变化）时间，完成的是结束时间
+	Kids       []Row  `json:"kids,omitempty"` // 子任务（按建立先后）；只有部门页排成树
 }
 
 // toRow 是一件任务的列表行；h 是它的等待对象（watch.HolderOf）。
@@ -50,8 +52,11 @@ func toRow(t ledger.Task, parents map[string]string, h watch.Holder) Row {
 }
 
 // rowOf 是 toRow 加上判定等待对象要的事实：待派、排队的查依赖；子任务数 kids 由调用方从已加载的任务里数。
-// 行尾不写负责人是谁，所以不取 Owner。
-func rowOf(ctx context.Context, q store.Querier, t ledger.Task, parents map[string]string, kids kidCount) (Row, error) {
+func rowOf(ctx context.Context, q store.Querier, t ledger.Task, ix *orgIndex, kids kidCount) (Row, error) {
+	p, err := ledger.PartiesOf(ctx, q, t.ID)
+	if err != nil {
+		return Row{}, err
+	}
 	f := watch.Facts{Task: t, OpenChildren: kids.open, Children: kids.all}
 	if t.Status == ledger.Todo || t.Status == ledger.Queued {
 		var err error
@@ -59,11 +64,14 @@ func rowOf(ctx context.Context, q store.Querier, t ledger.Task, parents map[stri
 			return Row{}, err
 		}
 	}
-	return toRow(t, parents, watch.HolderOf(f)), nil
+	r := toRow(t, ix.parents, watch.HolderOf(f))
+	r.Owner = p.Owner
+	r.OwnerLabel = identityText(p.Owner, ix.names)
+	return r, nil
 }
 
 // looseRow 是零散加载的一件任务的行（抽屉里的上级与依赖、定时任务的各轮）：子任务没加载，待派的单独数一次。
-func looseRow(ctx context.Context, q store.Querier, t ledger.Task, parents map[string]string) (Row, error) {
+func looseRow(ctx context.Context, q store.Querier, t ledger.Task, ix *orgIndex) (Row, error) {
 	var kids kidCount
 	if t.Status == ledger.Todo {
 		var err error
@@ -71,7 +79,7 @@ func looseRow(ctx context.Context, q store.Querier, t ledger.Task, parents map[s
 			return Row{}, err
 		}
 	}
-	return rowOf(ctx, q, t, parents, kids)
+	return rowOf(ctx, q, t, ix, kids)
 }
 
 // kidCount 是一件任务的直接子任务数：没结束的与全部。
@@ -207,10 +215,12 @@ func (ix *orgIndex) subtree(id string) []string {
 
 // Nav 是侧栏：部门树与等你的件数；Names 是身份与机器的名字，页面上提到它们时查这张表。
 type Nav struct {
-	Depts     []DeptBrief       `json:"depts"`
-	Names     map[string]string `json:"names"`
-	Asks      int               `json:"asks"`
-	ShippedID int64             `json:"shipped_id"` // 最近 shipped 上报事件号；跨页面共用，不把任务结束算作上线
+	IdentityLinks  map[string]string `json:"identity_links"`
+	IdentityLabels map[string]string `json:"identity_labels"`
+	Depts          []DeptBrief       `json:"depts"`
+	Names          map[string]string `json:"names"`
+	Asks           int               `json:"asks"`
+	ShippedID      int64             `json:"shipped_id"` // 最近 shipped 上报事件号；跨页面共用，不把任务结束算作上线
 }
 
 func loadNav(ctx context.Context, q store.Querier) (Nav, error) {
@@ -227,7 +237,18 @@ func loadNav(ctx context.Context, q store.Querier) (Nav, error) {
 		WHERE kind = ? AND json_extract(body, '$.kind') = ?`, events.LeaderEscalate, "shipped").Scan(&shippedID); err != nil {
 		return Nav{}, err
 	}
-	return Nav{Depts: nonNil(ix.list), Names: ix.names, Asks: len(asks), ShippedID: shippedID}, nil
+	labels := identityLabels(ix.names)
+	leaders, err := org.LeaderMap(ctx, q)
+	if err != nil {
+		return Nav{}, err
+	}
+	links := map[string]string{}
+	for id := range labels {
+		if depts := org.Led(leaders, id); len(depts) > 0 {
+			links[id] = depts[0] + "/" + id
+		}
+	}
+	return Nav{Depts: nonNil(ix.list), Names: ix.names, IdentityLabels: labels, IdentityLinks: links, Asks: len(asks), ShippedID: shippedID}, nil
 }
 
 // Ask 是「等你」的一件：选项单等你挑，交付等你验收（部门的验收人是你），负责人在问你、等你回话的任务（回话后消失），
@@ -426,10 +447,18 @@ func loadToday(ctx context.Context, q store.Querier, now time.Time) (Today, erro
 	out := Today{Asks: nonNil(asks), Queued: queued, Drafts: drafts, Goals: goals, Running: []Row{}, Shipped: []Row{}, ShippedMore: doneAll - len(done), Paused: paused}
 	// 在做的、完成的不看依赖和子任务，等待对象只凭任务自己就判得出。
 	for _, t := range running {
-		out.Running = append(out.Running, toRow(t, ix.parents, watch.HolderOf(watch.Facts{Task: t})))
+		r, err := rowOf(ctx, q, t, ix, kidCount{})
+		if err != nil {
+			return Today{}, err
+		}
+		out.Running = append(out.Running, r)
 	}
 	for _, t := range done {
-		out.Shipped = append(out.Shipped, toRow(t, ix.parents, watch.HolderOf(watch.Facts{Task: t})))
+		r, err := rowOf(ctx, q, t, ix, kidCount{})
+		if err != nil {
+			return Today{}, err
+		}
+		out.Shipped = append(out.Shipped, r)
 	}
 	if out.Soon, err = loadSoon(ctx, q, ix, paused, now); err != nil {
 		return Today{}, err
@@ -517,7 +546,8 @@ type DeptPage struct {
 // Material 是部门页里的一条资料；Frame 是 html 正文沙箱页面的地址前缀（/ui/frame/mN-<键>/，见 material.go）。
 type Material struct {
 	org.Material
-	Frame string `json:"frame"`
+	CreatedByLabel string `json:"created_by_label"`
+	Frame          string `json:"frame"`
 }
 
 // Leader 是部门负责人：自己没有就是往上最近一级的（Inherited），和事件投递同一个判定（org.Recipient）。
@@ -540,6 +570,7 @@ type Accept struct {
 
 // Rule 是一条要点（规矩）。
 type Rule struct {
+	ByLabel  string `json:"by_label"`
 	ID       string `json:"id"`
 	Text     string `json:"text"`
 	Why      string `json:"why,omitempty"`
@@ -604,13 +635,19 @@ func loadDept(ctx context.Context, q store.Querier, data, id string) (DeptPage, 
 	if page.Rules, err = ownRules(ctx, q, id, ix.name(id)); err != nil {
 		return DeptPage{}, err
 	}
+	for i := range page.Rules {
+		page.Rules[i].ByLabel = identityText(page.Rules[i].By, ix.names)
+	}
+	for i := range page.Inherited {
+		page.Inherited[i].ByLabel = identityText(page.Inherited[i].By, ix.names)
+	}
 	mats, err := org.Materials(ctx, q, data, org.MaterialFilter{Org: id})
 	if err != nil {
 		return DeptPage{}, err
 	}
 	page.Materials = make([]Material, len(mats))
 	for i, m := range mats {
-		page.Materials[i] = Material{Material: m}
+		page.Materials[i] = Material{Material: m, CreatedByLabel: identityText(m.CreatedBy, ix.names)}
 	}
 	scheds, err := agenda.Schedules(ctx, q, id)
 	if err != nil {
@@ -663,7 +700,7 @@ func toSched(ctx context.Context, q store.Querier, x agenda.Schedule, ix *orgInd
 		if err != nil {
 			return Sched{}, err
 		}
-		last, err := looseRow(ctx, q, t, ix.parents)
+		last, err := looseRow(ctx, q, t, ix)
 		if err != nil {
 			return Sched{}, err
 		}
@@ -674,6 +711,7 @@ func toSched(ctx context.Context, q store.Querier, x agenda.Schedule, ix *orgInd
 
 // SchedDetail 是定时任务抽屉：一行的内容加上详述、技能、谁建的、最近几轮。
 type SchedDetail struct {
+	ByLabel string `json:"by_label"`
 	Sched
 	Detail    string `json:"detail"`
 	Skill     string `json:"skill,omitempty"`
@@ -702,12 +740,13 @@ func loadSchedule(ctx context.Context, q store.Querier, id string) (SchedDetail,
 		return SchedDetail{}, err
 	}
 	out := SchedDetail{Sched: row, Detail: x.Detail, Skill: x.Skill, By: x.CreatedBy, CreatedAt: x.CreatedAt, Rounds: []Row{}}
+	out.ByLabel = identityText(x.CreatedBy, ix.names)
 	rounds, err := agenda.Rounds(ctx, q, id, recentRounds)
 	if err != nil {
 		return SchedDetail{}, err
 	}
 	for _, t := range rounds {
-		r, err := looseRow(ctx, q, t, ix.parents)
+		r, err := looseRow(ctx, q, t, ix)
 		if err != nil {
 			return SchedDetail{}, err
 		}
@@ -825,202 +864,9 @@ func runningByHost(ctx context.Context, q store.Querier) (map[string]int, error)
 	return out, rows.Err()
 }
 
-// TaskDetail 是任务抽屉。
-type TaskDetail struct {
-	UsageText string         `json:"usage_text,omitempty"`
-	Task      ledger.Task    `json:"task"`
-	DeptName  string         `json:"dept_name"`
-	Steps     []string       `json:"steps"`
-	Step      int            `json:"step"`
-	State     string         `json:"state"`
-	Holder    string         `json:"holder"`
-	Trace     *workers.Trace `json:"trace"`   // 最近一次拉起的经过（与 task log 同一份解析）；还没拉起过为空
-	Live      bool           `json:"live"`    // 执行者正在干（执行这一步）
-	RunAt     int64          `json:"run_at"`  // 最近一次拉起的时刻
-	Parent    *Row           `json:"parent"`  // 挂在谁下面；没有为空
-	Kids      []Row          `json:"kids"`    // 直接的子任务（按建立先后）
-	Waits     []Row          `json:"waits"`   // 它要等的（依赖，含已结束的）
-	Waiters   []Row          `json:"waiters"` // 在等它的
-	// 由哪条定时任务生成（sN），它交出的或它选自的选项单（cN）；没有为空。
-	Schedule string `json:"schedule,omitempty"`
-	Choice   string `json:"choice,omitempty"`
-	// 带来源的：任务分派人（记录人）的名字，是负责人时给他的负责人抽屉地址「oN/aN」（负责的第一个部门/身份）。
-	ByName string `json:"by_name,omitempty"`
-	ByLead string `json:"by_lead,omitempty"`
-}
-
-func loadTask(ctx context.Context, q store.Querier, id string) (TaskDetail, error) {
-	t, err := ledger.Get(ctx, q, id)
-	if err != nil {
-		return TaskDetail{}, err
-	}
-	h, err := holderOf(ctx, q, t)
-	if err != nil {
-		return TaskDetail{}, err
-	}
-	names, err := loadNames(ctx, q)
-	if err != nil {
-		return TaskDetail{}, err
-	}
-	out := TaskDetail{Task: t, Steps: stepsOf(t), Step: step(t), State: state(t, h), Holder: holderText(t, h, names)}
-	if err := relations(ctx, q, &out); err != nil {
-		return out, err
-	}
-	if out.Schedule, err = agenda.ScheduleOf(ctx, q, id); err != nil {
-		return out, err
-	}
-	if out.Choice, err = agenda.ChoiceOf(ctx, q, id); err != nil {
-		return out, err
-	}
-	if t.Source != "" {
-		if err := recorder(ctx, q, &out, names); err != nil {
-			return out, err
-		}
-	}
-	if t.Org != "" {
-		if err := q.QueryRowContext(ctx, `SELECT name FROM departments WHERE id = ?`, t.Org).Scan(&out.DeptName); err != nil {
-			return out, err
-		}
-	}
-	if out.State == "bad" {
-		reason, err := lastReason(ctx, q, id)
-		if err != nil {
-			return out, err
-		}
-		if reason != "" {
-			out.Holder = reason
-		}
-	}
-	run, err := workers.LastRun(ctx, q, id)
-	if err != nil || run == nil {
-		return out, err
-	}
-	tr, err := workers.ReadTrace(run.Worker, run.Log)
-	if err != nil {
-		return out, err
-	}
-	out.Trace, out.RunAt, out.Live = &tr, run.At, t.Status == ledger.Running && t.Stage == ledger.StageNone
-	err = taskUsage(ctx, q, id, *run, &out)
-	return out, err
-}
-
-// recorder 填来源一行的记录人：任务分派人的名字（loadNames），负责人另给他的负责人抽屉地址。
-func recorder(ctx context.Context, q store.Querier, d *TaskDetail, names map[string]string) error {
-	p, err := ledger.PartiesOf(ctx, q, d.Task.ID)
-	if err != nil || p.By == "" {
-		return err
-	}
-	d.ByName = identityText(p.By, names)
-	leaders, err := org.LeaderMap(ctx, q)
-	if err != nil {
-		return err
-	}
-	if led := org.Led(leaders, p.By); len(led) > 0 {
-		d.ByLead = led[0] + "/" + p.By
-	}
-	return nil
-}
-
-// relations 填任务抽屉里的上级、子任务、它要等的、在等它的。
-func relations(ctx context.Context, q store.Querier, d *TaskDetail) error {
-	t := d.Task
-	row := func(id string) (Row, error) {
-		x, err := ledger.Get(ctx, q, id)
-		if err != nil {
-			return Row{}, err
-		}
-		return looseRow(ctx, q, x, nil)
-	}
-	if t.Parent != "" {
-		p, err := row(t.Parent)
-		if err != nil {
-			return err
-		}
-		d.Parent = &p
-	}
-	sub, err := ledger.Subtree(ctx, q, t.ID)
-	if err != nil {
-		return err
-	}
-	d.Kids = []Row{}
-	kids := countKids(sub)
-	for _, k := range sub[1:] {
-		if k.Parent != t.ID {
-			continue
-		}
-		r, err := rowOf(ctx, q, k, nil, kids[k.ID])
-		if err != nil {
-			return err
-		}
-		d.Kids = append(d.Kids, r)
-	}
-	deps, err := ledger.Deps(ctx, q, t.ID)
-	if err != nil {
-		return err
-	}
-	d.Waits = []Row{}
-	for _, dep := range deps {
-		r, err := row(dep.ID)
-		if err != nil {
-			return err
-		}
-		d.Waits = append(d.Waits, r)
-	}
-	// 反向依赖 ledger 还没有读函数，先在这里查（只读、有界）。
-	rows, err := q.QueryContext(ctx, `SELECT d.task FROM task_deps d JOIN tasks t ON t.id = d.task
-		WHERE d.depends_on = ? ORDER BY t.created_at LIMIT 50`, t.ID)
-	if err != nil {
-		return err
-	}
-	ids, err := scanIDs(rows)
-	if err != nil {
-		return err
-	}
-	d.Waiters = []Row{}
-	for _, id := range ids {
-		r, err := row(id)
-		if err != nil {
-			return err
-		}
-		d.Waiters = append(d.Waiters, r)
-	}
-	return nil
-}
-
-// holderOf 是任务详情的等待对象：取齐事实交给 watch.HolderOf（与 top、statusline 同一份判定）。
-func holderOf(ctx context.Context, q store.Querier, t ledger.Task) (watch.Holder, error) {
-	f := watch.Facts{Task: t}
-	var err error
-	if f.Owner, err = org.Recipient(ctx, q, t.Org); err != nil {
-		return watch.Holder{}, err
-	}
-	if f.Deps, err = ledger.Deps(ctx, q, t.ID); err != nil {
-		return watch.Holder{}, err
-	}
-	if f.OpenChildren, f.Children, err = ledger.Children(ctx, q, t.ID); err != nil {
-		return watch.Holder{}, err
-	}
-	return watch.HolderOf(f), nil
-}
-
-// holderText 是「现在在等谁」：没结束的按等待对象说，结束了的按结果说。
-// 要负责人、秘书动手的写上是谁（names 里的名字）；执行者是谁、在哪台机器，抽屉下面「执行者」一行写着，这里不重复；
-// 等你的、等运行时的，话里已说明。
-func holderText(t ledger.Task, h watch.Holder, names map[string]string) string {
-	if t.Status.Finished() && t.Status != ledger.Failed {
-		return finishedText(t)
-	}
-	switch h.Kind {
-	case "leader", "secretary":
-		return identityText(h.Who, names) + "：" + h.Text
-	case "worker":
-		return "执行者在做"
-	}
-	return h.Text
-}
-
 // ChoiceDetail 是选项单抽屉：agenda 的选项单加上部门名。
 type ChoiceDetail struct {
+	CreatedByLabel string `json:"created_by_label"`
 	agenda.Choice
 	DeptName string `json:"dept_name"`
 }
@@ -1031,6 +877,11 @@ func loadChoice(ctx context.Context, q store.Querier, id string) (ChoiceDetail, 
 		return ChoiceDetail{}, err
 	}
 	out := ChoiceDetail{Choice: c}
+	names, err := loadNames(ctx, q)
+	if err != nil {
+		return out, err
+	}
+	out.CreatedByLabel = identityText(c.CreatedBy, names)
 	if c.Options == nil {
 		out.Options = []agenda.Option{}
 	}

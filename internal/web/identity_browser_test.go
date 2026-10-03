@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+
 	"encoding/json"
 	"github.com/liu-zhengdong/atrium/internal/api"
 	"github.com/liu-zhengdong/atrium/internal/app"
@@ -66,9 +67,28 @@ func TestIdentityBrowser(t *testing.T) {
 	must(err)
 	task, err := ledger.Add(ctx, db, ledger.NewTask{Title: "等待负责人处理", Org: dept.ID, Owner: a10.ID, Detail: "a1 历史原文不能被改名"}, a1.ID)
 	must(err)
+	must(ledger.Record(ctx, db, task.ID, "escalated", a1.ID, "a1 历史正文<&保持"))
+	running, err := ledger.Add(ctx, db, ledger.NewTask{Title: "今天的处理人", Org: dept.ID, Owner: a10.ID}, a1.ID)
+	must(err)
+	_, err = ledger.Apply(ctx, db, running.ID, ledger.Event{Kind: ledger.Enqueue}, "runtime", "")
+	must(err)
+	_, err = ledger.Apply(ctx, db, running.ID, ledger.Event{Kind: ledger.Start}, "worker", "")
+	must(err)
 	draft, err := ledger.Add(ctx, db, ledger.NewTask{Title: "来源记录人", Org: dept.ID, Draft: true, Source: ledger.SourceOrg}, a1.ID)
 	must(err)
 	unknown, err := ledger.Add(ctx, db, ledger.NewTask{Title: "未登记来源", Org: dept.ID, Draft: true, Source: ledger.SourceOrg}, "a99")
+	must(err)
+	oldDept, err := org.Add(ctx, db, org.NewDept{Name: "原负责人部门", Parent: root.ID, Leader: "a2"})
+	must(err)
+	deleted, err := ledger.Add(ctx, db, ledger.NewTask{Title: "已删除处理人", Org: oldDept.ID, Owner: "a2"}, "a1")
+	must(err)
+	retiring, err := events.Wait(ctx, db, events.WaitOpts{Target: "a2"})
+	must(err)
+	for _, e := range retiring {
+		_, err = events.Ack(ctx, db, []int64{e.ID}, "a2", "a2")
+		must(err)
+	}
+	_, err = org.Edit(ctx, db, oldDept.ID, org.DeptPatch{Leader: &a10.ID}, "a1")
 	must(err)
 	c, err := agenda.AddChoice(ctx, db, agenda.ChoiceInput{Org: dept.ID, Title: "选项作者", Recommend: []int{1}, Reason: "固定隔离样本", Options: []agenda.OptionInput{
 		{Title: "方案一", Gain: "识别", WhyNow: "需要", Cost: "小", IfNot: "难辨认", Evidence: "隔离样本"},
@@ -83,11 +103,15 @@ func TestIdentityBrowser(t *testing.T) {
 	must(events.Emit(ctx, db, events.Event{Kind: events.LeaderEscalate, Task: task.ID, Dept: dept.ID, Target: org.Secretary, Body: map[string]any{"from": a1.ID, "label": "无法解决", "note": "上报卡身份"}}))
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	router := api.NewRouter(logger)
+	router.AddAuth(func(token string) (api.Actor, bool) {
+		return api.Actor{ID: "u1", Kind: "user"}, token == "isolated-test"
+	})
 	srv := httptest.NewServer(router)
 	defer srv.Close()
 	port, _ := strconv.Atoi(srv.URL[strings.LastIndex(srv.URL, ":")+1:])
 	Module().Routes(router, &app.Env{DB: db, Paths: config.Paths{Data: data}, Port: port, Log: logger})
-	ready, _ := json.Marshal(map[string]string{"base": srv.URL, "root": root.ID, "dept": dept.ID, "task": task.ID, "draft": draft.ID, "unknown": unknown.ID, "choice": c.ID, "schedule": sched.ID, "material": mat.ID})
+	ledger.Module().Routes(router, &app.Env{DB: db, Paths: config.Paths{Data: data}, Port: port, Log: logger})
+	ready, _ := json.Marshal(map[string]string{"base": srv.URL, "root": root.ID, "dept": dept.ID, "running": running.ID, "task": task.ID, "draft": draft.ID, "deleted": deleted.ID, "unknown": unknown.ID, "choice": c.ID, "schedule": sched.ID, "material": mat.ID})
 	must(os.WriteFile(filepath.Join(out, "ready.json"), ready, 0600))
 	deadline := time.After(4 * time.Minute)
 	ticker := time.NewTicker(100 * time.Millisecond)

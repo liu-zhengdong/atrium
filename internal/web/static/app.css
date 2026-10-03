@@ -410,3 +410,23 @@ details.full .result{margin-top:8px;font-size:13px;color:var(--ink2)}
 
 [data-atrium-logo]{display:inline-flex;align-items:center;gap:10px;flex:none}
 .logo-status{font-size:12px;font-weight:400;color:var(--ink2)}
+
+/* 当前处理人独立一列；窄屏保留身份，时间让位。 */
+.row:has(.owner){grid-template-columns:16px minmax(0,1fr) auto minmax(0,180px) auto}
+.row .owner{font-size:13px;color:var(--ink2);overflow-wrap:anywhere;min-width:0}
+.identity-id{white-space:nowrap;display:inline-block}
+.history{margin:20px 0;font-size:13px}.history summary{cursor:pointer;color:var(--ink2)}
+.history-event{margin-top:16px;overflow-wrap:anywhere}.history-event pre{white-space:pre-wrap;font:inherit;margin:6px 0}
+.facts dd{min-width:0;overflow-wrap:anywhere}
+.today{grid-template-columns:16px minmax(0,1fr) minmax(84px,auto) minmax(96px,auto) minmax(0,180px) minmax(76px,auto)}
+@media(max-width:700px){
+ .row:has(.owner){grid-template-columns:16px minmax(0,1fr) minmax(0,120px)}
+ .row:has(.owner) .who,.row:has(.owner) .time{display:none}
+ .today{grid-template-columns:16px minmax(0,1fr) minmax(0,120px)}
+ .today .row:has(.owner) .time{display:none}
+}
+.history summary{list-style:none;display:flex;align-items:center;gap:4px}.history summary::-webkit-details-marker{display:none}
+.history[open] summary .chev{transform:rotate(90deg)}
+.owner a,.history a{text-decoration:underline;text-underline-offset:3px}
+.today .row:has(.owner){grid-template-columns:subgrid}
+.today .row .time{grid-column:-2/-1}

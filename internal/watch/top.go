@@ -47,6 +47,7 @@ type SecretaryView struct {
 // View 是 top 与 statusline 共用的全景。
 type View struct {
 	Names     map[string]string `json:"-"` // 人读呈现名册；不进入机器输出
+	Owners    map[string]string `json:"-"` // 仅 top 人读父任务行加载；不替代等待对象
 	At        int64             `json:"at"`
 	Tasks     []TaskRow         `json:"tasks"`
 	Choices   int               `json:"choices"` // 等你拍板的选项单
@@ -179,7 +180,7 @@ func Commands(t *cli.Table) {
 				if c.JSON {
 					err = c.Call("GET", "/api/top", nil, &v)
 				} else {
-					v, err = ReadHumanView(c)
+					v, err = readTopView(c)
 				}
 				if err != nil {
 					return err
@@ -241,7 +242,14 @@ func Render(v View) string {
 			if t.Overdue > 0 {
 				mark = "  已到期"
 			}
-			fmt.Fprintf(&b, "  %s  %s  %s：%s%s%s\n", t.ID, clip(t.Title, 30), v.HolderWho(t.Holder), t.Holder.Text,
+			h := t.Holder
+			if owner, ok := v.Owners[t.ID]; h.Kind == "children" && ok {
+				h.Who = owner
+				if h.Who == "" {
+					h.Who = "未记录处理人"
+				}
+			}
+			fmt.Fprintf(&b, "  %s  %s  %s：%s%s%s\n", t.ID, clip(t.Title, 30), v.HolderWho(h), t.Holder.Text,
 				heldSuffix(t.Holder, v.At), mark)
 		}
 	}

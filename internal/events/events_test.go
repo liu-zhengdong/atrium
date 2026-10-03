@@ -354,6 +354,58 @@ func TestReclassify(t *testing.T) {
 	}
 }
 
+// 转交只重定这次转交的事件：秘书名下别的 act 事件（含正文坏的）不受影响；全量重分类不在转交里做。
+func TestRetargetScoped(t *testing.T) {
+	db, ctx := openDB(t), context.Background()
+	insert := func(kind, target, body string) int64 {
+		t.Helper()
+		res, err := db.Exec(`INSERT INTO events (at, updated_at, kind, level, key, target, body) VALUES (1, 1, ?, 'act', '', ?, ?)`, kind, target, body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		id, _ := res.LastInsertId()
+		return id
+	}
+	// 秘书名下原本就有：一条卡住升级（四类之一），一条 cross（旧实现会被全量重分类降级），一条正文坏的。
+	stuck := insert(LeaderEscalate, Secretary, `{"kind":"stuck"}`)
+	unrelatedCross := insert(LeaderEscalate, Secretary, `{"kind":"cross"}`)
+	unrelatedBad := insert(TaskStatus, Secretary, `{"to":"done"`)
+	// a2 手上要转给秘书的两条：接不住的任务（要处理）与完成回执（知会）。
+	assigned := insert(TaskAssigned, "a2", `{"title":"拆这件"}`)
+	receipt := insert(TaskStatus, "a2", `{"to":"done","by":"worker"}`)
+
+	n, err := Retarget(ctx, db, []int64{assigned, receipt}, "a2", Secretary)
+	if err != nil {
+		t.Fatalf("秘书名下无关的坏正文不该挡住这次转交：%v", err)
+	}
+	if n != 2 {
+		t.Fatalf("应只转这次的两条：%d", n)
+	}
+	level := func(id int64) string {
+		t.Helper()
+		var lv string
+		if err := db.QueryRow(`SELECT level FROM events WHERE id = ?`, id).Scan(&lv); err != nil {
+			t.Fatal(err)
+		}
+		return lv
+	}
+	if level(assigned) != Act {
+		t.Fatalf("接不住的任务转给秘书后仍要处理：%s", level(assigned))
+	}
+	if level(receipt) != Info {
+		t.Fatalf("完成回执转给秘书后只知会：%s", level(receipt))
+	}
+	if level(stuck) != Act {
+		t.Fatalf("秘书名下无关的卡住升级不该被这次转交改动：%s", level(stuck))
+	}
+	if level(unrelatedCross) != Act {
+		t.Fatalf("局部转交不该承担全量重分类，无关的 cross 应保持原级：%s", level(unrelatedCross))
+	}
+	if level(unrelatedBad) != Act {
+		t.Fatalf("秘书名下无关的坏正文事件不该被这次转交改动：%s", level(unrelatedBad))
+	}
+}
+
 func TestLegacyShippedEvent(t *testing.T) {
 	db, ctx := openDB(t), context.Background()
 	// 模拟已有事件：级别和标签已经存下，读取不重新按 kind 分类。

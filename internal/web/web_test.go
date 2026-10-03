@@ -446,6 +446,17 @@ func TestRoutes(t *testing.T) {
 		today.Asks[0].Sub != "运行时负责人（"+a.ID+"） 上报：无法解决" {
 		t.Errorf("上报应进等你：%+v", today.Asks)
 	}
+	// 降为知会的无任务协作回执（cross）：不进「等你」，在今天页折起的次级入口可查。
+	events.Emit(ctx, db, events.Event{Kind: events.LeaderEscalate, Target: org.Secretary,
+		Body: map[string]any{"from": a.ID, "kind": "cross", "label": "需要别的部门配合", "note": "t866确认工作已闭合，回交t862"}})
+	read("today", &today)
+	if len(today.Asks) != 1 || today.Asks[0].Kind != "escalate" {
+		t.Errorf("协作回执不该进等你：%+v", today.Asks)
+	}
+	if len(today.Receipts) != 1 || today.Receipts[0].Note != "t866确认工作已闭合，回交t862" ||
+		today.Receipts[0].Label != "需要别的部门配合" || today.Receipts[0].FromName != "运行时负责人（"+a.ID+"）" {
+		t.Errorf("无任务回执应在次级入口可见：%+v", today.Receipts)
+	}
 	// 页面上提到身份、机器都写名字：侧栏带着名字表，抽屉里等负责人时写负责人的名字。
 	names, err := loadNav(ctx, db)
 	if err != nil || names.Names["u1"] != "你" || names.Names[a.ID] != "运行时负责人" || names.Names["h1"] != "本机" {

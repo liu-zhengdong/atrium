@@ -366,6 +366,50 @@ func escalations(ctx context.Context, q store.Querier, ix *orgIndex) ([]Ask, err
 	return out, rows.Err()
 }
 
+// Receipt 是一条对秘书只知会的上报（cross 收尾确认、协作回执等）：不进「等你」，在今天页折起的次级入口可查。
+type Receipt struct {
+	ID       int64  `json:"id"`
+	Kind     string `json:"kind"`
+	Label    string `json:"label"`
+	Note     string `json:"note"`
+	From     string `json:"from"`
+	FromName string `json:"from_name"`
+	Task     string `json:"task,omitempty"`
+	Dept     string `json:"dept,omitempty"`
+	DeptName string `json:"dept_name,omitempty"`
+	At       int64  `json:"at"`
+}
+
+// receipts 是落到秘书这层只知会的上报：不进「等你」，在次级入口按新的在前可查（至多 20 条）。
+func receipts(ctx context.Context, q store.Querier, ix *orgIndex) ([]Receipt, error) {
+	rows, err := q.QueryContext(ctx, `SELECT id, COALESCE(task, ''), COALESCE(department, ''), body, updated_at FROM events
+		WHERE kind = ? AND target = ? AND level = ? AND acked_at IS NULL ORDER BY id DESC LIMIT 20`,
+		events.LeaderEscalate, org.Secretary, events.Info)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Receipt
+	for rows.Next() {
+		var r Receipt
+		var raw string
+		if err := rows.Scan(&r.ID, &r.Task, &r.Dept, &raw, &r.At); err != nil {
+			return nil, err
+		}
+		if raw != "" {
+			var b struct{ From, Kind, Label, Note string }
+			if err := json.Unmarshal([]byte(raw), &b); err != nil {
+				return nil, fmt.Errorf("上报回执的内容坏了：%w", err)
+			}
+			r.From, r.Kind, r.Label, r.Note = b.From, b.Kind, b.Label, b.Note
+		}
+		r.FromName = identityText(r.From, ix.names)
+		r.DeptName = ix.name(r.Dept)
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
 // lastReason 取任务最近一次状态变化或备注里写的原因。
 func lastReason(ctx context.Context, q store.Querier, id string) (string, error) {
 	hist, err := ledger.History(ctx, q, id, 5)
@@ -383,6 +427,7 @@ func lastReason(ctx context.Context, q store.Querier, id string) (string, error)
 // Today 是今天页。
 type Today struct {
 	Asks        []Ask        `json:"asks"`
+	Receipts    []Receipt    `json:"receipts"` // 对秘书只知会的上报回执：不进「等你」，折起的次级入口
 	Running     []Row        `json:"running"`
 	Queued      int          `json:"queued"`
 	Drafts      int          `json:"drafts"` // 草稿只给数，点开到根部门的任务页
@@ -416,6 +461,10 @@ func loadToday(ctx context.Context, q store.Querier, now time.Time) (Today, erro
 	if err != nil {
 		return Today{}, err
 	}
+	recs, err := receipts(ctx, q, ix)
+	if err != nil {
+		return Today{}, err
+	}
 	running, err := ledger.List(ctx, q, ledger.Filter{Status: []ledger.Status{ledger.Running}, Limit: 200})
 	if err != nil {
 		return Today{}, err
@@ -444,7 +493,7 @@ func loadToday(ctx context.Context, q store.Querier, now time.Time) (Today, erro
 	if err != nil {
 		return Today{}, err
 	}
-	out := Today{Asks: nonNil(asks), Queued: queued, Drafts: drafts, Goals: goals, Running: []Row{}, Shipped: []Row{}, ShippedMore: doneAll - len(done), Paused: paused}
+	out := Today{Asks: nonNil(asks), Receipts: nonNil(recs), Queued: queued, Drafts: drafts, Goals: goals, Running: []Row{}, Shipped: []Row{}, ShippedMore: doneAll - len(done), Paused: paused}
 	// 在做的、完成的不看依赖和子任务，等待对象只凭任务自己就判得出。
 	for _, t := range running {
 		r, err := rowOf(ctx, q, t, ix, kidCount{})

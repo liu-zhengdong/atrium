@@ -33,7 +33,7 @@ func LevelOf(kind string, body any) string {
 // SecretaryAct 纯判定：落到秘书的事件能不能是要处理。秘书的要处理只收四类：等用户拍板（ask 上报、选项单、等用户验收）、
 // 卡住升级（stuck、beyond 上报，任务失败或受阻，执行者不可用、上限满、自升级失败、定时任务或远程机器出错，
 // 负责人接不住转来的 task.assigned——它只经 Retarget 落到秘书）、超时未动（overdue）、需转告用户（notify 上报）。
-// 其余（如任务完成回执、cross 协作上报）对秘书只知会：Emit 落库时降级，Retarget 转给秘书时与旧库里还没确认的由 Reclassify 降级。
+// 其余（如任务完成回执、cross 协作上报）对秘书只知会：Emit 落库时降级，Retarget 转给秘书时只降这次转的，旧库里还没确认的由 Reclassify 全量收拾。
 func SecretaryAct(kind string, body any) bool {
 	switch kind {
 	case LeaderEscalate:

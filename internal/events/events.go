@@ -1,7 +1,7 @@
 // Package events：待投递事件先落库，再由订阅者 events wait 取走（起 15 分钟租约）、events ack 确认。
 //
 // 分两级：act（要处理）与 info（知会）；wait 缺省只取要处理的，--all 连知会一起取。
-// 秘书的要处理只收四类（SecretaryAct），其余落到秘书的在 Emit 里降为知会，旧库里还没确认的由 Reclassify 在启动时降级。
+// 秘书的要处理只收四类（SecretaryAct）：其余落到秘书的在 Emit 里降为知会，Retarget 转入的当场按同一判定降级，旧库里还没确认的由 Reclassify 在启动时全量收拾。
 // 投递对象（target）留空时调 org.Recipient：部门往上最近的负责人，没有投 secretary。
 // 任务事件经 EmitTask 只投要动手的那一位（Route）：等验收投验收人，负责人自己引起的结果投任务分派人，其他结果投处理人或部门负责人，过程不投。
 // 同一投递对象同一去重键、还没取走也没确认的事件合并成一条（count 加一，级别随最新一条），免得刷屏。
@@ -376,8 +376,20 @@ func Prune(ctx context.Context, q store.Querier, before int64) (int64, error) {
 	return res.RowsAffected()
 }
 
+// secretaryAct 解码一条落到秘书的事件的正文，问 SecretaryAct：全量重分类（Reclassify）与本次转交（Retarget）共用这一条判定。
+// 正文不是 JSON 时返回错误，由调用方带上事件号停下。
+func secretaryAct(kind, raw string) (bool, error) {
+	var body any
+	if raw != "" {
+		if err := json.Unmarshal([]byte(raw), &body); err != nil {
+			return false, err
+		}
+	}
+	return SecretaryAct(kind, body), nil
+}
+
 // Reclassify 把秘书名下还没确认、不属四类（SecretaryAct）的要处理事件降为知会，正文不动；返回降了几条。
-// 不经 Emit 落到秘书的（Retarget 转来的、此前按旧规则落库的）由它收拾。
+// 不经 Emit 落到秘书的旧事件由它收拾——这是服务启动时跑一次的全量迁移，局部转交（Retarget）不调它。
 func Reclassify(ctx context.Context, q store.Querier) (int64, error) {
 	var n int64
 	for last := int64(0); ; {
@@ -395,14 +407,12 @@ func Reclassify(ctx context.Context, q store.Querier) (int64, error) {
 				return n, err
 			}
 			seen++
-			var body any
-			if raw != "" {
-				if err := json.Unmarshal([]byte(raw), &body); err != nil {
-					rows.Close()
-					return n, fmt.Errorf("事件 %d 正文：%w", last, err)
-				}
+			act, err := secretaryAct(kind, raw)
+			if err != nil {
+				rows.Close()
+				return n, fmt.Errorf("事件 %d 正文：%w", last, err)
 			}
-			if !SecretaryAct(kind, body) {
+			if !act {
 				down = append(down, last)
 			}
 		}

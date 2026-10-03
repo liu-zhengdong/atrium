@@ -430,3 +430,12 @@ details.full .result{margin-top:8px;font-size:13px;color:var(--ink2)}
 .owner a,.history a{text-decoration:underline;text-underline-offset:3px}
 .today .row:has(.owner){grid-template-columns:subgrid}
 .today .row .time{grid-column:-2/-1}
+
+/* 今天页底部的上报回执：对秘书只知会的上报（cross 收尾确认等），不进「等你」，折起按需展开 */
+.today>.receipts{grid-column:1/-1}
+.receipts summary .n{font-size:13px;font-weight:400}
+.receipts-list{display:flex;flex-direction:column;margin-top:6px}
+.receipt{padding:9px 0;border-top:1px solid var(--line)}
+.receipt:first-child{padding-top:0;border-top:0}
+.receipt .m{color:var(--ink3);font-size:12px;margin-top:2px;overflow-wrap:anywhere}
+.receipt .m a{text-decoration:underline;text-underline-offset:3px}

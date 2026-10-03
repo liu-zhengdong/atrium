@@ -212,7 +212,18 @@ function renderToday(d) {
         <button data-soon-tab="done" class="${soonTab === "done" ? "on" : ""}">今天完成${count(d.shipped.length + d.shipped_more)}</button>
         <button data-soon-tab="soon" class="${soonTab === "soon" ? "on" : ""}">接下来 7 天${count(d.soon.rows.length)}</button></div>
       ${soonTab === "soon" ? soonHTML(d.soon) : d.shipped.length ? `<div class="rows">${shippedRows(d.shipped, d.shipped_more)}</div>` : `<div class="empty">今天还没有完成的</div>`}</section>
+    ${receiptsHTML(d.receipts)}
     </div>`;
+}
+
+/* 上报回执：对秘书只知会的上报（cross 收尾确认等），不等待办，折在页面底部按需展开；有任务的点进那件任务 */
+function receiptsHTML(rows) {
+  if (!rows || !rows.length) return "";
+  return `<details class="full receipts"><summary>${icon.chev}上报回执<span class="n num">${rows.length}</span></summary>
+    <div class="receipts-list">${rows.map(r => `<div class="receipt">
+      <div class="t">${esc(r.note)}</div>
+      <div class="m">${esc(r.from_name)} · ${esc(r.label || r.kind)}${r.task ? ` · <a href="#today/${esc(r.task)}">${esc(r.task)}</a>` : ""} · ${esc(ago(r.at))}前</div>
+    </div>`).join("")}</div></details>`;
 }
 
 /* 今天完成（含完成未上线的）：对勾已说明做完，行尾不写状态字；more 是接口列表上限以外的件数 */

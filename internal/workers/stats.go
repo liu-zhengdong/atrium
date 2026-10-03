@@ -6,10 +6,12 @@ import (
 	"fmt"
 	"sort"
 
+	"github.com/liu-zhengdong/atrium/internal/api"
 	"github.com/liu-zhengdong/atrium/internal/store"
 )
 
-// 按拉起统计：每次拉起（任务经历 launch）一个结果，按「工具+模型」归（强度不单列）。
+// 按拉起统计：每次拉起（任务经历 launch）一个结果，按「工具+模型」归（强度不单列）；
+// 统计键规范成目录组合名——只写工具名的拉起经 Resolve 补上缺省模型（claude 归进 claude+opus），同一执行者不因记账时的写法拆开。
 // 结果由 dispatch 在执行者退出时记（经历 kind "exit"，正文 Exit）；之后被交回的改记「被交回」。
 
 // ExitKind 是这次拉起结果在任务经历里的 kind。
@@ -282,20 +284,72 @@ func StatsIssues(ctx context.Context, q store.Querier) (map[string][]Attempt, ma
 		}
 		all = append(all, ls...)
 	}
-	return Recent(all, StatWindow), issues, nil
+	keys, err := statKeys(ctx, q, attemptWorkers(all))
+	if err != nil {
+		return nil, nil, err
+	}
+	return Recent(all, StatWindow, statKeyOf(keys)), issues, nil
 }
 
-// Recent 按「工具+模型」分组，各取最近 n 次有结果的拉起，新的在前（纯函数）。
-func Recent(ls []Attempt, n int) map[string][]Attempt {
+// Recent 按「工具+模型」分组，各取最近 n 次有结果的拉起，新的在前（纯函数）；
+// key 把当时的执行者标识规范成统计键（statKeys 的产物）。
+func Recent(ls []Attempt, n int, key func(string) string) map[string][]Attempt {
 	sorted := append([]Attempt(nil), ls...)
 	sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].At > sorted[j].At })
 	out := map[string][]Attempt{}
 	for _, l := range sorted {
-		k := Combo(l.Worker)
+		k := key(l.Worker)
 		if l.Outcome == "" || len(out[k]) >= n {
 			continue
 		}
 		out[k] = append(out[k], l)
+	}
+	return out
+}
+
+// statKeys 把要分组的执行者标识规范成统计键（目录组合名）：写明模型的组合名不变；
+// 只写工具名的经 Resolve 补上缺省模型，与目录同名（未知工具、写错的标识解析不了，原样返回，落「不在目录里」）。
+func statKeys(ctx context.Context, q store.Querier, ids []string) (map[string]string, error) {
+	out := make(map[string]string, len(ids))
+	for _, id := range ids {
+		s, err := ParseWorker(id)
+		if err != nil || s.Model != "" {
+			out[id] = Combo(id)
+			continue
+		}
+		r, err := Resolve(ctx, q, id)
+		if err != nil {
+			var ae *api.Error
+			if !asAPI(err, &ae) {
+				return nil, err
+			}
+			out[id] = Combo(id)
+			continue
+		}
+		out[id] = Combo(r.ID)
+	}
+	return out, nil
+}
+
+// statKeyOf 把查好的键表包成分组函数；没查过的标识按老规矩只归「工具+模型」。
+func statKeyOf(keys map[string]string) func(string) string {
+	return func(w string) string {
+		if k, ok := keys[w]; ok {
+			return k
+		}
+		return Combo(w)
+	}
+}
+
+// attemptWorkers 去重列出拉起里用到的执行者标识。
+func attemptWorkers(ls []Attempt) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, a := range ls {
+		if !seen[a.Worker] {
+			seen[a.Worker] = true
+			out = append(out, a.Worker)
+		}
 	}
 	return out
 }

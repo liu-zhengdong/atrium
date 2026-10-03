@@ -21,19 +21,21 @@ type Quality struct {
 	CostPerDeliveryUSD *float64       `json:"cost_per_delivery_usd"`
 }
 
-// Qualities 纯聚合任务拉起与负责人唤醒（各自按组合分组，任务在前）；与 Recent 一样排除没有结果的拉起、合并强度。
-func Qualities(tasks, wakes []Attempt) []Quality {
-	t, l := qualities(tasks, false), qualities(wakes, true)
+// Qualities 纯聚合任务拉起与负责人唤醒（各自按组合分组，任务在前）；与 Recent 一样排除没有结果的拉起、合并强度；
+// key 把当时的执行者标识规范成统计键（statKeys 的产物）。
+func Qualities(tasks, wakes []Attempt, key func(string) string) []Quality {
+	t, l := qualities(tasks, false, key), qualities(wakes, true, key)
 	sortQualities(t)
 	sortQualities(l)
 	return append(t, l...)
 }
 
-func qualities(attempts []Attempt, leader bool) []Quality {
+func qualities(attempts []Attempt, leader bool, key func(string) string) []Quality {
 	groups := map[string][]Attempt{}
 	for _, a := range attempts {
 		if a.Outcome != "" {
-			groups[Combo(a.Worker)] = append(groups[Combo(a.Worker)], a)
+			k := key(a.Worker)
+			groups[k] = append(groups[k], a)
 		}
 	}
 	out := []Quality{}

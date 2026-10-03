@@ -450,9 +450,9 @@ func TestLeaderSelfDoneReturnsToAssigner(t *testing.T) {
 	if _, err := Apply(ctx, db, task.ID, Event{Kind: Set, To: Done}, "a1", ""); err != nil {
 		t.Fatal(err)
 	}
-	got, err := events.Pending(ctx, db, events.Secretary, false, 10)
-	if err != nil || len(got) != 1 || got[0].Kind != events.TaskStatus || got[0].Level != events.Act || got[0].Task != task.ID {
-		t.Fatalf("秘书应收到一条要处理的完成结果：%+v %v", got, err)
+	got, err := events.Pending(ctx, db, events.Secretary, true, 10)
+	if err != nil || len(got) != 1 || got[0].Kind != events.TaskStatus || got[0].Level != events.Info || got[0].Task != task.ID {
+		t.Fatalf("秘书应收到一条知会级的完成结果（完成回执不进秘书的要处理）：%+v %v", got, err)
 	}
 }
 

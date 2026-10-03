@@ -440,7 +440,7 @@ func TestRoutes(t *testing.T) {
 	}
 	// 负责人上报到秘书这层、还没确认的，进「等你」。
 	events.Emit(ctx, db, events.Event{Kind: events.LeaderEscalate, Task: task.ID, Dept: sub.ID, Target: org.Secretary,
-		Body: map[string]any{"from": a.ID, "label": "无法解决", "note": "证书要你签"}})
+		Body: map[string]any{"from": a.ID, "kind": "stuck", "label": "无法解决", "note": "证书要你签"}})
 	read("today", &today)
 	if len(today.Asks) != 1 || today.Asks[0].Kind != "escalate" || today.Asks[0].Title != "证书要你签" || today.Asks[0].ID != task.ID ||
 		today.Asks[0].Sub != "运行时负责人（"+a.ID+"） 上报：无法解决" {

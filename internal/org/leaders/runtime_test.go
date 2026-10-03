@@ -447,6 +447,83 @@ func TestAsk(t *testing.T) {
 	}
 }
 
+// 协作回执不进秘书的要处理：cross 不挂任务或挂已完成的任务只记账；挂着未完成任务的 cross 照样叫醒上一层负责人；
+// ask、stuck、beyond、notify、overdue 仍是秘书的要处理，积压只数它们（overdue 本就不计积压）。
+func TestEscalateInbox(t *testing.T) {
+	env, h, srv := fixture(t)
+	ctx := context.Background()
+	tok2, _ := h.issue("a2")
+	tok1, _ := h.issue("a1")
+	a2 := &api.Client{Base: srv.URL, Token: tok2}
+	a1 := &api.Client{Base: srv.URL, Token: tok1}
+	up := func(cl *api.Client, in EscalateIn, to string) {
+		t.Helper()
+		var out Escalation
+		if err := cl.Do(ctx, "POST", "/api/escalations", in, &out); err != nil || out.To != to {
+			t.Fatalf("%+v 应投 %s：%+v %v", in, to, out, err)
+		}
+	}
+	level := func() (target, lv string) {
+		t.Helper()
+		if err := env.DB.QueryRowContext(ctx, `SELECT target, level FROM events WHERE kind = ? ORDER BY id DESC LIMIT 1`,
+			events.LeaderEscalate).Scan(&target, &lv); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+
+	up(a2, EscalateIn{Kind: "cross", Note: "要 o3 配合改接口", Task: "t1"}, "a1")
+	if target, lv := level(); target != "a1" || lv != events.Act {
+		t.Fatalf("挂未完成任务的协作请求应要处理地投 a1：%s %s", target, lv)
+	}
+
+	if _, err := ledger.Add(ctx, env.DB, ledger.NewTask{Title: "已闭合", Org: "o2"}, "u1"); err != nil { // t3
+		t.Fatal(err)
+	}
+	if _, err := ledger.Apply(ctx, env.DB, "t3", ledger.Event{Kind: ledger.Set, To: ledger.Done}, "u1", ""); err != nil {
+		t.Fatal(err)
+	}
+	up(a2, EscalateIn{Kind: "cross", Note: "t3 确认工作已闭合，回交", Task: "t3"}, "a1")
+	if target, lv := level(); target != "a1" || lv != events.Info {
+		t.Fatalf("挂已完成任务的协作回执投负责人也只知会：%s %s", target, lv)
+	}
+	up(a1, EscalateIn{Kind: "cross", Note: "t3 确认工作已闭合，回交", Task: "t3"}, org.Secretary)
+	up(a1, EscalateIn{Kind: "cross", Note: "收尾确认，没挂任务"}, org.Secretary)
+	if act, _ := events.Pending(ctx, env.DB, org.Secretary, false, 50); len(act) != 0 {
+		t.Fatalf("协作回执不该进秘书的要处理：%+v", act)
+	}
+	if all, _ := events.Pending(ctx, env.DB, org.Secretary, true, 50); len(all) != 2 || all[0].Level != events.Info {
+		t.Fatalf("协作回执应以知会落库：%+v", all)
+	}
+	hist, _ := ledger.History(ctx, env.DB, "t3", 100)
+	if hist[len(hist)-1].Kind != "escalated" || !strings.Contains(hist[len(hist)-1].Body, "回交") {
+		t.Fatalf("协作回执应记在任务经历里：%+v", hist[len(hist)-1])
+	}
+
+	up(a2, EscalateIn{Kind: "ask", Note: "挑几号？", Task: "t1"}, org.Secretary)
+	up(a2, EscalateIn{Kind: "notify", Note: "将改测试应用配置"}, org.Secretary)
+	up(a1, EscalateIn{Kind: "stuck", Note: "卡了三次", Task: "t1"}, org.Secretary)
+	up(a1, EscalateIn{Kind: "beyond", Note: "要建新部门"}, org.Secretary)
+	if err := events.Emit(ctx, env.DB, events.Event{Kind: events.Overdue, Task: "t1", Target: org.Secretary}); err != nil {
+		t.Fatal(err)
+	}
+	act, _ := events.Pending(ctx, env.DB, org.Secretary, false, 50)
+	if len(act) != 5 {
+		t.Fatalf("ask、notify、stuck、beyond、overdue 应都是秘书的要处理：%+v", act)
+	}
+	bl, err := events.Backlogs(ctx, env.DB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]int{}
+	for _, b := range bl {
+		got[b.Target] = b.Count
+	}
+	if got[org.Secretary] != 4 {
+		t.Fatalf("秘书积压应为 4（不含 overdue 与知会）：%+v", bl)
+	}
+}
+
 // fakeLauncher 记下每次唤醒；ack 为真时模拟负责人确认了这批事件。
 type fakeLauncher struct {
 	h     *hub

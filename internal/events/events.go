@@ -1,6 +1,7 @@
 // Package events：待投递事件先落库，再由订阅者 events wait 取走（起 15 分钟租约）、events ack 确认。
 //
 // 分两级：act（要处理）与 info（知会）；wait 缺省只取要处理的，--all 连知会一起取。
+// 秘书的要处理只收四类（SecretaryAct），其余落到秘书的在 Emit 里降为知会。
 // 投递对象（target）留空时调 org.Recipient：部门往上最近的负责人，没有投 secretary。
 // 任务事件经 EmitTask 只投要动手的那一位（Route）：等验收投验收人，负责人自己引起的结果投任务分派人，其他结果投处理人或部门负责人，过程不投。
 // 同一投递对象同一去重键、还没取走也没确认的事件合并成一条（count 加一，级别随最新一条），免得刷屏。
@@ -27,13 +28,15 @@ import (
 
 // 事件种类。新增种类在这里加常量，别处不写字符串字面量。
 const (
-	TaskStatus   = "task.status"   // 任务状态变化（含转入已合入）；Body: {"from","to","stage","title","note"?}
-	TaskAssigned = "task.assigned" // 交给负责人去拆（建任务、改处理人、草稿转待派时 ledger 发，要处理；交出去之后的补充说明、改说明也经它送到）；Body: {"title","tell"?}
-	Overdue      = "overdue"       // 当前等待对象到期（watch 包发）；Body: {"holder","held_ms","next",…}
-	ChoiceOpen   = "choice.open"   // 有选项单等用户拍板（org/agenda 发，投秘书）；Body: {"choice","title"}
-	OnlineFailed = "online.failed" // 自升级失败（服务的由 release 发，远程代理的由 hosts 发并带 "host"；投秘书；同一版本本进程只发一次）；Body: {"from","to","error"}
-	LimitFull    = "limit.full"    // 刚到或超了上限（watch 巡检发）；Body: {"key","what","used","max","unit","fix","next","text"}
-	WorkerDown   = "worker.down"   // 新出现一条等人处理的执行者不可用标记（workers 发，投秘书，要处理，去重键按「工具[+模型]@机器」）；Body: {"target","reason","next"}
+	TaskStatus   = "task.status"        // 任务状态变化（含转入已合入）；Body: {"from","to","stage","title","note"?}
+	TaskAssigned = "task.assigned"      // 交给负责人去拆（建任务、改处理人、草稿转待派时 ledger 发，要处理；交出去之后的补充说明、改说明也经它送到）；Body: {"title","tell"?}
+	Overdue      = "overdue"            // 当前等待对象到期（watch 包发）；Body: {"holder","held_ms","next",…}
+	ChoiceOpen   = "choice.open"        // 有选项单等用户拍板（org/agenda 发，投秘书）；Body: {"choice","title"}
+	OnlineFailed = "online.failed"      // 自升级失败（服务的由 release 发，远程代理的由 hosts 发并带 "host"；投秘书；同一版本本进程只发一次）；Body: {"from","to","error"}
+	LimitFull    = "limit.full"         // 刚到或超了上限（watch 巡检发）；Body: {"key","what","used","max","unit","fix","next","text"}
+	WorkerDown   = "worker.down"        // 新出现一条等人处理的执行者不可用标记（workers 发，投秘书，要处理，去重键按「工具[+模型]@机器」）；Body: {"target","reason","next"}
+	ScheduleFail = "schedule.failed"    // 定时任务建任务失败（org/agenda 发，要处理）；Body: {"schedule","note"}
+	HostRecord   = "host.record_failed" // 远程机器记录失败（hosts 发，投秘书，要处理）；Body: {"host","note"}
 )
 
 // 级别。
@@ -101,6 +104,9 @@ func Emit(ctx context.Context, q store.Querier, e Event) error {
 			return err
 		}
 		e.Target = t
+	}
+	if e.Target == Secretary && e.Level == Act && !SecretaryAct(e.Kind, e.Body) {
+		e.Level = Info
 	}
 	if e.Target == e.By {
 		return nil

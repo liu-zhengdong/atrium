@@ -70,7 +70,7 @@ func TestLevelAndKey(t *testing.T) {
 		{"等待到期", Overdue, nil, Act},
 		{"上限满了", LimitFull, map[string]any{"key": "points"}, Act},
 		{"负责人上报·卡住", LeaderEscalate, map[string]any{"kind": "stuck"}, Act},
-		{"负责人上报·跨部门", LeaderEscalate, map[string]any{"kind": "cross"}, Act},
+		{"负责人上报·跨部门（级别由 leaders 按任务另定）", LeaderEscalate, map[string]any{"kind": "cross"}, Act},
 		{"负责人上报·越权", LeaderEscalate, map[string]any{"kind": "beyond"}, Act},
 		{"交给负责人去拆", TaskAssigned, map[string]any{"title": "任务"}, Act},
 		{"未知种类", "other", map[string]any{"to": "failed"}, Info},
@@ -197,10 +197,83 @@ func TestEmitTask(t *testing.T) {
 	if n, _ := Pending(ctx, db, Secretary, true, 10); len(n) != 0 {
 		t.Fatalf("秘书不该收到：%+v", n)
 	}
-	// 负责人自己完成秘书派的活，事件应实际落库给秘书。
+	// 负责人自己完成秘书派的活，事件落库给秘书，但完成回执对秘书只知会。
 	emitTask("a1", Secretary, "done", "a1")
-	if n, _ := Pending(ctx, db, Secretary, true, 10); len(n) != 1 || n[0].Level != Act {
-		t.Fatalf("秘书应收到负责人自己完成的结果：%+v", n)
+	if n, _ := Pending(ctx, db, Secretary, true, 10); len(n) != 1 || n[0].Level != Info {
+		t.Fatalf("秘书应收到知会级的完成回执：%+v", n)
+	}
+}
+
+func TestSecretaryAct(t *testing.T) {
+	esc := func(kind string) map[string]any { return map[string]any{"kind": kind} }
+	cases := []struct {
+		name string
+		kind string
+		body any
+		want bool
+	}{
+		{"问用户", LeaderEscalate, esc("ask"), true},
+		{"知会用户", LeaderEscalate, esc("notify"), true},
+		{"卡住", LeaderEscalate, esc("stuck"), true},
+		{"越权", LeaderEscalate, esc("beyond"), true},
+		{"跨部门", LeaderEscalate, esc("cross"), false},
+		{"旧的里程碑上报", LeaderEscalate, esc("shipped"), false},
+		{"选项单", ChoiceOpen, nil, true},
+		{"等用户验收", TaskStatus, map[string]any{"to": "running", "accept_by": "user"}, true},
+		{"任务失败", TaskStatus, map[string]any{"to": "failed"}, true},
+		{"任务受阻", TaskStatus, map[string]any{"to": "blocked"}, true},
+		{"完成回执", TaskStatus, map[string]any{"to": "done", "by": "a1"}, false},
+		{"已上线回执", TaskStatus, map[string]any{"to": "done", "stage": "released", "event": "land"}, false},
+		{"到期", Overdue, nil, true},
+		{"执行者不可用", WorkerDown, nil, true},
+		{"上限满了", LimitFull, nil, true},
+		{"自升级失败", OnlineFailed, nil, true},
+		{"定时任务失败", ScheduleFail, nil, true},
+		{"远程机器记录失败", HostRecord, nil, true},
+		{"交给负责人去拆", TaskAssigned, nil, false},
+		{"未知种类", "other", nil, false},
+	}
+	for _, c := range cases {
+		if got := SecretaryAct(c.kind, c.body); got != c.want {
+			t.Errorf("%s：SecretaryAct(%s, %v) = %v，应为 %v", c.name, c.kind, c.body, got, c.want)
+		}
+	}
+}
+
+// 秘书的要处理只收四类：其余落到秘书的降为知会（仍落库可查），负责人收的不降；积压只数四类（overdue 本就不计积压）。
+func TestSecretaryInbox(t *testing.T) {
+	db, ctx := openDB(t), context.Background()
+	for _, kind := range []string{"ask", "stuck", "beyond", "notify", "cross"} {
+		emit(t, db, Event{Kind: LeaderEscalate, Target: Secretary, Body: map[string]any{"kind": kind}})
+	}
+	emit(t, db, Event{Kind: Overdue, Target: Secretary})
+	emit(t, db, Event{Kind: TaskStatus, Target: Secretary, Body: map[string]any{"to": "done", "by": "a1"}})
+	emit(t, db, Event{Kind: TaskStatus, Target: "a1", Body: map[string]any{"to": "done", "by": "worker"}})
+	emit(t, db, Event{Kind: LeaderEscalate, Target: "a1", Body: map[string]any{"kind": "cross"}})
+
+	act, _ := Pending(ctx, db, Secretary, false, 50)
+	all, _ := Pending(ctx, db, Secretary, true, 50)
+	if len(act) != 5 || len(all) != 7 {
+		t.Fatalf("秘书要处理应 5 条（ask、stuck、beyond、notify、overdue），连知会共 7 条：%d / %d", len(act), len(all))
+	}
+	for _, r := range act {
+		if r.Kind == TaskStatus || strings.Contains(string(r.Body), "cross") {
+			t.Fatalf("完成回执、cross 不该进秘书的要处理：%+v", r)
+		}
+	}
+	if lead, _ := Pending(ctx, db, "a1", false, 50); len(lead) != 2 {
+		t.Fatalf("负责人收的完成回执与协作请求应仍要处理：%+v", lead)
+	}
+	bl, err := Backlogs(ctx, db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]int{}
+	for _, b := range bl {
+		got[b.Target] = b.Count
+	}
+	if got[Secretary] != 4 || got["a1"] != 2 {
+		t.Fatalf("积压：秘书应 4（不含 overdue 与知会）、a1 应 2：%+v", bl)
 	}
 }
 

@@ -34,7 +34,7 @@ func usableHosts(ctx context.Context, env *app.Env) ([]Host, error) {
 		setTunnel(row.host.ID, note)
 		env.Log.Warn("机器登记出错", "host", row.host.ID, "err", cause)
 		return env.DB.Tx(ctx, func(tx *sql.Tx) error {
-			return events.Emit(ctx, tx, events.Event{Kind: "host.record_failed", Target: org.Secretary, Key: key, Level: events.Act, Body: map[string]any{"host": row.host.ID, "note": note}})
+			return events.Emit(ctx, tx, events.Event{Kind: events.HostRecord, Target: org.Secretary, Key: key, Level: events.Act, Body: map[string]any{"host": row.host.ID, "note": note}})
 		})
 	})
 	return out, app.Global(err)

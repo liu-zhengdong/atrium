@@ -39,7 +39,7 @@ func TestEventDisplayInstance(t *testing.T) {
 		t.Fatal(err)
 	}
 	rows := []events.Event{
-		{Kind: events.LeaderEscalate, Task: "t1", Target: events.Secretary, Body: map[string]any{"from": "a1", "kind": "cross", "label": "需要跨部门配合", "note": "正文 a1/a10 原样"}},
+		{Kind: events.LeaderEscalate, Task: "t1", Target: events.Secretary, Body: map[string]any{"from": "a1", "kind": "stuck", "label": "无法解决", "note": "正文 a1/a10 原样"}},
 		{Kind: events.Overdue, Task: "t1", Target: "a10", Body: map[string]any{"holder": "a10", "text": "待分派", "held_ms": 31 * 60000}},
 		{Kind: events.WorkerDown, Target: events.Secretary, Level: events.Act, Body: map[string]any{"target": "a1+kimi@h3", "reason": "没登录", "next": "atrium workers edit --clear a1+kimi@h3"}},
 	}

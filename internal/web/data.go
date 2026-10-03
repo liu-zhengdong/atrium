@@ -404,8 +404,8 @@ func loadToday(ctx context.Context, q store.Querier, now time.Time) (Today, erro
 	if err := q.QueryRowContext(ctx, `SELECT count(*) FROM tasks WHERE status = 'queued'`).Scan(&queued); err != nil {
 		return Today{}, err
 	}
-	var drafts int
-	if err := q.QueryRowContext(ctx, `SELECT count(*) FROM tasks WHERE status = 'draft'`).Scan(&drafts); err != nil {
+	drafts, err := loadDraftCount(ctx, q, ix)
+	if err != nil {
 		return Today{}, err
 	}
 	done, err := finishedSince(ctx, q, startOfDay(now))

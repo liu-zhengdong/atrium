@@ -127,6 +127,8 @@ func collect(ctx context.Context, db *store.DB, rule Rule, q *api.Req, body map[
 		err = lookup("要点", "points")
 	case RuleMaterialRef:
 		err = lookup("资料", "materials")
+	case RuleChoiceRef:
+		err = lookup("选项单", "choices")
 	case RuleScheduleRef:
 		err = lookup("定时任务", "schedules")
 	case RuleBodyDept:

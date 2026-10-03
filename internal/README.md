@@ -212,6 +212,6 @@ ledger   ─→ events.Emit
 
 - `task add` 的回执已给出下一步 `atrium task run tN`，`task show`/`task tree` 也会指向它：dispatch 必须提供 `task run`。
 - 状态变化只能经 `ledger.Apply`；需要新的事件种类就在 PR 里提，由 ledger 加进 `Transition` 与表驱动测试，不要直接 `UPDATE tasks SET status`。
-- 命令总数规格上限 60，`cmd/atrium/main_test.go` 会数；`Hidden` 的（serve、agent、agent install、import、statusline）不计数，由帮助末尾一行点名。
+- 命令总数上限 61（选项单增加独立的作废动作，不能用用户拍板代替，t856 将原上限增加一条），`cmd/atrium/main_test.go` 会数；`Hidden` 的（serve、agent、agent install、import、statusline）不计数，由帮助末尾一行点名。
 - 负责人令牌的权限表按路由模式判（`leaders.RuleFor`）；`cmd/atrium/routes_test.go` 装上全部模块的真实路由逐条核对，新加写接口要在那张表里写明负责人能不能调；同一处核对执行者令牌的写接口只有加资料。
 - 命令组名已占用：`task`、`org`、`point`、`auth`。其余按规格：`leader`、`memo`、`choice`、`skill`、`material`、`schedule`、`secret`（org）、`events`（events）、`host`、`agent`（hosts）、`workers`（workers）、`quota`（quota）、`secretary`（secretary）。单词命令：`top`（watch）、`statusline`（secretary）、`map`、`update`。

@@ -264,6 +264,7 @@ func Prompt(in PromptInput) string {
 	w("- 记草稿：%s", ledger.DraftHowTo)
 	w("- 资料：material ls 按部门列全部资料，material ls mN 取正文、mN/<相对路径> 取这条资料里的其他文件（二进制加 --out 文件），material add oN 新建一条资料（一个目录是一条，同名也是新的）、material add mN 给已有资料加一版；跨部门的事先查别的部门已有的资料再调研，不直接搜数据目录")
 	w("- 给执行者的输入（样本、设计稿、参考文件）先 material add，任务说明里写 mN、不写本机路径：执行者可能派到别的机器，资料在哪台都取得到。执行者做的给人看的成品，由它自己交进任务所在部门的资料")
+	w("- 选项单：choice add 递给用户；依据中的 mN/相对路径须在资料中存在。choice void cN --reason 原因 作废管辖内的选项单，不能替用户拍板。")
 	w("- 定时任务：schedule add/ls/rm/run")
 	w("- 备忘：memo edit 文本（覆盖写；只放跨任务、下次醒来先要知道的提示，任务进展写进 task note；超过 %d 字会被拒，先精简）", org.MaxMemo)
 	w("")
@@ -305,6 +306,7 @@ const (
 	RuleLeaderCreate              // 登记负责人：一步绑定的部门在下属区域
 	RulePointRef                  // 路径 {id} 是要点
 	RuleMaterialRef               // 路径 {id} 是资料
+	RuleChoiceRef                 // 路径 {id} 是选项单
 	RuleScheduleRef               // 路径 {id} 是定时任务
 	RuleBodyDept                  // 建资料、定时任务：请求体里的 org／department 必须给且在管辖内
 	RuleMemo                      // 自己的备忘（由 memo 路由按身份判）
@@ -346,6 +348,8 @@ func RuleFor(pattern string) Rule {
 		return RuleScheduleRef
 	case seg[0] == "schedules" && len(seg) == 1:
 		return RuleBodyDept
+	case path == "/api/choices/{id}/void" && method == "POST":
+		return RuleChoiceRef
 	case path == "/api/choices" && method == "POST": // 负责人给用户递选项单（拍板只有用户）
 		return RuleBodyDept
 	case path == "/api/memo" && method == "PUT":

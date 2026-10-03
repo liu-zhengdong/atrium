@@ -53,6 +53,7 @@ func Routes(r *api.Router, env *app.Env) {
 		}
 		return AddChoice(q.Context(), db, in, "", q.Actor.ID)
 	})
+	r.Handle("POST /api/choices/{id}/void", voidRoute(env))
 	r.Handle("POST /api/choices/{id}/decide", func(q *api.Req) (any, error) {
 		if err := org.CheckUser(q.Actor, "拍板"); err != nil {
 			return nil, err
@@ -127,19 +128,23 @@ func choiceText(c Choice) string {
 		}
 		if o.Task != "" {
 			fmt.Fprintf(&b, "   已建任务：%s\n", o.Task)
-		} else if c.Status != "open" {
+		} else if c.Status == "picked" || c.Status == "passed" {
 			b.WriteString("   这轮没选\n")
 		}
 	}
 	fmt.Fprintf(&b, "\n推荐 %s：%s\n", strings.Trim(strings.ReplaceAll(fmt.Sprint(c.Recommend), " ", "、"), "[]"), c.Reason)
 	if c.Note != "" {
-		fmt.Fprintf(&b, "用户说明：%s\n", c.Note)
+		label := "用户说明"
+		if c.Status == "void" {
+			label = "已作废"
+		}
+		fmt.Fprintf(&b, "%s：%s\n", label, c.Note)
 	}
 	return b.String()
 }
 
 func statusText(s string) string {
-	return map[string]string{"open": "等你拍板", "picked": "已选", "passed": "这轮不做"}[s]
+	return map[string]string{"open": "等你拍板", "picked": "已选", "passed": "这轮不做", "void": "已作废"}[s]
 }
 
 func containsInt(v []int, n int) bool {
@@ -179,6 +184,7 @@ func scheduleLine(x Schedule) string {
 
 func Commands(t *cli.Table) {
 	t.Group("choice", "选项单")
+	t.Add(cli.Command{Path: "choice void", Args: "<cN>", Summary: "作废管辖内的选项单（负责人或秘书）", Flags: []cli.Flag{{Name: "reason", Value: "文字", Help: "作废原因，必填"}}, Run: choiceVoid})
 	t.Add(cli.Command{Path: "choice ls", Args: "[cN]", Summary: "列等拍板的选项单；给 cN 看全文",
 		Flags: []cli.Flag{
 			{Name: "node", Value: "oN", Help: "只看这个部门的"},

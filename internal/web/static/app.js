@@ -463,7 +463,7 @@ const openOpts = new Set();
 let drawerChoice = null;
 function renderChoice(c) {
   drawerChoice = c;
-  const status = c.status === "open" ? "" : c.status === "picked" ? "已拍板" : "这轮都不做";
+  const status = c.status === "open" ? "" : c.status === "picked" ? "已拍板" : c.status === "void" ? "已作废" : "这轮都不做";
   const rec = new Set(c.recommend || []);
   drawer(c.id, c.dept_name, `<h3>${esc(c.title)}</h3><p class="sub-t">${c.task ? "出自 " + esc(c.task) + " · " : ""}${esc(ago(c.created_at))}前${status ? " · " + status : ""}</p>
       ${c.reason ? `<p class="status-line">${esc(c.reason)}</p>` : ""}
@@ -477,7 +477,7 @@ function renderChoice(c) {
           ${open ? `<dl class="why"><dt>为什么现在</dt><dd>${esc(o.why_now)}</dd>${o.if_not ? `<dt>不做</dt><dd>${esc(o.if_not)}</dd>` : ""}</dl>` : ""}</div>
           <span class="opt-more">${icon.chev}</span></button>`;
       }).join("")}</div>
-      ${c.note ? `<p class="status-line">${esc(c.note)}</p>` : ""}
+      ${c.note ? `<p class="status-line">${c.status === "void" ? "已作废：" : ""}${esc(c.note)}</p>` : ""}
       ${c.status === "open" ? `<p class="status-line">选哪几个，在终端里告诉秘书。</p>` : ""}`);
 }
 /* 定时任务抽屉：下一轮的完整时刻、每轮做什么、最近几轮（点开是那件任务）、最近一笔记录，详述折起；一次性的没有「最近几轮」（生成后这条就删了） */

@@ -198,7 +198,7 @@ CREATE TABLE IF NOT EXISTS choices (
   title      TEXT NOT NULL,
   recommend  TEXT NOT NULL,
   reason     TEXT NOT NULL,
-  status     TEXT NOT NULL CHECK (status IN ('open', 'picked', 'passed')),
+  status     TEXT NOT NULL CHECK (status IN ('open', 'picked', 'passed', 'void')),
   note       TEXT NOT NULL DEFAULT '',
   created_by TEXT NOT NULL,
   created_at INTEGER NOT NULL,

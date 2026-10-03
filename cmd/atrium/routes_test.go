@@ -50,6 +50,7 @@ func TestLeaderRulesCoverRealRoutes(t *testing.T) {
 		"POST /api/schedules":                 leaders.RuleBodyDept,
 		"POST /api/schedules/{id}/run":        leaders.RuleScheduleRef,
 		"DELETE /api/schedules/{id}":          leaders.RuleScheduleRef,
+		"POST /api/choices/{id}/void":         leaders.RuleChoiceRef,
 		"POST /api/choices":                   leaders.RuleBodyDept,
 		"PUT /api/memo":                       leaders.RuleMemo,
 		"POST /api/events/ack":                leaders.RuleEventsAck,

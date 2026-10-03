@@ -42,7 +42,7 @@ var jobs = struct {
 }{byID: map[int]windows.Handle{}}
 
 // adopt 把挂起着拉起的 Detached 进程放进新 Job，再恢复它的主线程。
-func adopt(pid int) error {
+func adopt(pid int, managed bool) error {
 	jobs.once.Do(func() {
 		jobs.port, jobs.err = windows.CreateIoCompletionPort(windows.InvalidHandle, 0, 0, 1)
 		if jobs.err == nil {
@@ -65,7 +65,7 @@ func adopt(pid int) error {
 		windows.CloseHandle(job)
 		return fmt.Errorf("Job 接完成端口：%w", err)
 	}
-	h, err := windows.OpenProcess(windows.PROCESS_SET_QUOTA|windows.PROCESS_TERMINATE|windows.PROCESS_SUSPEND_RESUME, false, uint32(pid))
+	h, err := windows.OpenProcess(windows.PROCESS_SET_QUOTA|windows.PROCESS_TERMINATE|windows.PROCESS_SUSPEND_RESUME|windows.PROCESS_DUP_HANDLE, false, uint32(pid))
 	if err != nil {
 		windows.CloseHandle(job)
 		return fmt.Errorf("打开进程 %d：%w", pid, err)
@@ -74,6 +74,22 @@ func adopt(pid int) error {
 	if err := windows.AssignProcessToJobObject(job, h); err != nil {
 		windows.CloseHandle(job)
 		return fmt.Errorf("进程 %d 放进 Job：%w", pid, err)
+	}
+	if managed {
+		limits := windows.JOBOBJECT_EXTENDED_LIMIT_INFORMATION{}
+		limits.BasicLimitInformation.LimitFlags = windows.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+		if _, err := windows.SetInformationJobObject(job, windows.JobObjectExtendedLimitInformation,
+			uintptr(unsafe.Pointer(&limits)), uint32(unsafe.Sizeof(limits))); err != nil {
+			windows.CloseHandle(job)
+			return fmt.Errorf("Job 设置 kill-on-close：%w", err)
+		}
+		// 主体持有不继承的副本：服务/代理退出时任务继续；主体随后退出，最后一个句柄关闭，子孙被回收。
+		// 当前服务仍在时由 EndSession 显式终止；完成端口随整棵树退出释放服务的句柄。
+		var held windows.Handle
+		if err := windows.DuplicateHandle(windows.CurrentProcess(), job, h, &held, 0, false, windows.DUPLICATE_SAME_ACCESS); err != nil {
+			windows.CloseHandle(job)
+			return fmt.Errorf("主体持有 Job：%w", err)
+		}
 	}
 	// 进程还挂起着，Job 不会在记下之前变空。
 	jobs.Lock()

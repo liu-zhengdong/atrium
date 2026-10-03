@@ -179,8 +179,8 @@ type Module struct {
 
 ### 子进程（`internal/platform`）
 
-- 子进程只经 `platform.Start(platform.Spec{Path, Args, Dir, Env, Stdout, Stderr, Detached})` 拉起；`Env` 必填。任务执行者用 `platform.WorkerEnv(runtime.GOOS, platform.EnvMap(os.Environ()), tempDir)`，`tempDir` 是会话临时目录（本机或代理任务目录下的 `tmp`；负责人是 `leaders/<身份>/tmp`，每次唤醒先清空），统一覆盖 `TMPDIR`、`TMP`、`TEMP`；自检不传临时目录。执行者环境带 `ATRIUM_WORKER=1`，不继承其他 `ATRIUM_*` 与凭据；任务声明的凭据在其后逐个注入，再加 `ATRIUM_SERVER`、`ATRIUM_WORKER_TOKEN`，并经 `platform.SelfOnPath` 把服务（远程是代理）这个二进制排进 PATH 最前。服务与执行者保留环境中的 `GOFLAGS`；`WorkerEnv` 统一追加 `-trimpath`，让本机、远程执行者与合入检查的 Go 编译跨工作树复用缓存。
-- 执行者一律 `Detached: true`：服务重启不影响它；结束用 `platform.KillTree(pid)`。拉起后必须 `Wait`（Unix 不 Wait 会留僵尸，`Alive` 会一直报活）。执行者、负责人用 `platform.WaitSession(cmd, tempDir)` 等：主体退出后结束命令行或环境引用会话临时目录的残留进程（含另开进程组、会话的）；重启后只按 pid 跟进的路径在看到退出后调 `platform.EndSession(pid, tempDir)`。
+- 子进程只经 `platform.Start(platform.Spec{Path, Args, Dir, Env, Stdout, Stderr, Detached, ManagedTree})` 拉起；`Env` 必填。任务执行者用 `platform.WorkerEnv(runtime.GOOS, platform.EnvMap(os.Environ()), tempDir)`，`tempDir` 是会话临时目录（本机或代理任务目录下的 `tmp`；负责人是 `leaders/<身份>/tmp`，每次唤醒先清空），统一覆盖 `TMPDIR`、`TMP`、`TEMP`；自检不传临时目录。执行者环境带 `ATRIUM_WORKER=1`，不继承其他 `ATRIUM_*` 与凭据；任务声明的凭据在其后逐个注入，再加 `ATRIUM_SERVER`、`ATRIUM_WORKER_TOKEN`，并经 `platform.SelfOnPath` 把服务（远程是代理）这个二进制排进 PATH 最前。服务与执行者保留环境中的 `GOFLAGS`；`WorkerEnv` 统一追加 `-trimpath`，让本机、远程执行者与合入检查的 Go 编译跨工作树复用缓存。
+- 执行者、负责人和自检一律 `ManagedTree: true, Detached: true`：Windows Job 使用 kill-on-close，主体持有不继承的 Job 句柄；服务重启不影响它；结束用 `platform.KillTree(pid)`。拉起后必须 `Wait`（Unix 不 Wait 会留僵尸，`Alive` 会一直报活）。执行者、负责人和自检用 `platform.WaitSession(cmd, tempDir)` 等（自检目录为空）：主体退出后结束原进程组／Job，再结束命令行或环境引用会话临时目录的残留进程（含另开进程组、会话的）；重启后只按 pid 跟进的路径在看到退出后调 `platform.EndSession(pid, tempDir)`。
 - 找程序用 `platform.LookPath(name, env)`（按子进程环境的 PATH/PATHEXT；`platform.EnvMap` 在 Windows 上把变量名落成大写）；shell 用 `platform.Shell(cmd)`。Windows 上找到的 `.cmd`/`.bat`（npm 装的 claude.cmd 等）由 `Start` 经 `cmd.exe /d /s /c` 拉起，参数带换行会报错。
 - 凭据类文件（用户令牌、`agent.json` 与代理运行记录、部门凭据）只经 `platform.WritePrivateFile` 写：临时文件先收紧成只有本人可读（Windows 为受保护的 DACL，只留本人、SYSTEM、管理员），再改名替换；所在目录用 `platform.PrivateDir`。
 

@@ -22,6 +22,8 @@ type Spec struct {
 	Stderr io.Writer
 	// Detached：放进独立会话/进程组，父进程退出或重启不影响它，结束时按整棵树结束。
 	Detached bool
+	// ManagedTree：会话进程树的 Windows Job 使用 kill-on-close；主体持有一份句柄，允许服务重启后继续运行。必须同时 Detached。
+	ManagedTree bool
 }
 
 // EnvMap 把 os.Environ() 形式转成 map（Windows 上变量名按大写）。
@@ -42,6 +44,9 @@ func Start(s Spec) (*exec.Cmd, error) {
 	if s.Env == nil {
 		return nil, errors.New("platform.Start：必须显式给 Env（白名单环境）")
 	}
+	if s.ManagedTree && !s.Detached {
+		return nil, errors.New("platform.Start：ManagedTree 必须同时 Detached")
+	}
 	cmd, cmdLine := exec.Command(s.Path, s.Args...), ""
 	if IsBatch(runtime.GOOS, s.Path) {
 		comspec := s.Env[EnvKey(runtime.GOOS, "COMSPEC")]
@@ -59,7 +64,8 @@ func Start(s Spec) (*exec.Cmd, error) {
 		return nil, err
 	}
 	if s.Detached {
-		if err := adopt(cmd.Process.Pid); err != nil {
+		if err := adopt(cmd.Process.Pid, s.ManagedTree); err != nil {
+			KillTree(cmd.Process.Pid)
 			cmd.Process.Kill()
 			cmd.Wait()
 			return nil, err

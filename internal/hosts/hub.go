@@ -348,7 +348,7 @@ func WaitExit(ctx context.Context, env *app.Env, task string, run int) (Exit, er
 }
 
 // Pick 给 dispatch 挑机器：pinned 是 --host 指定的（只看那台）；暂停的机器不选（问 pause 的机器范围）；
-// 这件活的「工具+模型」在那台上标了不可用的不选。
+// 这件活的「工具+模型」在那台上标了不可用的不选，都标了就排队等标记到期或解除。
 func Pick(ctx context.Context, env *app.Env, need Need, pinned string) (Choice, error) {
 	list, err := usableHosts(ctx, env)
 	if err != nil {

@@ -274,8 +274,8 @@ func TestFlowQuotaRequeue(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, c := range v.Candidates {
-		if c.ID == "codex" && (c.Eligible || !strings.Contains(strings.Join(c.Refusals, "、"), "额度用尽")) {
-			t.Errorf("挑执行者应避开额度用尽的组合：%+v", c)
+		if c.ID == "codex" && (v.Recommended == "codex" || !strings.Contains(c.Waiting, "额度用尽")) {
+			t.Errorf("挑执行者应避开额度用尽的组合、写明在等它恢复：%+v", c)
 		}
 	}
 	if err := d.pump(ctx); err != nil {
@@ -366,8 +366,8 @@ func TestFlowLoginRequeue(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, c := range v.Candidates {
-		if strings.HasPrefix(c.ID, "grok") && (c.Eligible || !strings.Contains(strings.Join(c.Refusals, "、"), "没登录")) {
-			t.Errorf("挑执行者应避开没登录的 grok：%+v", c)
+		if strings.HasPrefix(c.ID, "grok") && (v.Recommended == c.ID || !strings.Contains(c.Waiting, "没登录")) {
+			t.Errorf("挑执行者应避开没登录的 grok、写明在等它恢复：%+v", c)
 		}
 	}
 	if err := d.pump(ctx); err != nil {
@@ -689,11 +689,13 @@ func TestHostNeedLocalOnly(t *testing.T) {
 	}
 }
 
-// 换人时给新执行者挑机器：上一轮那台接得了就留下，接不了（没装、没登录、标了不可用）另挑，都接不了报冲突。
+// 换人时给新执行者挑机器：上一轮那台接得了就留下，接不了（没装、没登录）另挑；这会儿都接不了（标了不可用、满）等，
+// 都永远接不了报冲突。
 func TestSwitchHost(t *testing.T) {
 	_, d := setup(t)
 	ctx := context.Background()
 	refuse := map[string]string{} // 机器 → 接不了的原因
+	later := map[string]bool{}    // 机器 → 这会儿接不了
 	var needs []HostNeed
 	pickHost = func(_ context.Context, _ *app.Env, n HostNeed, pinned string) (HostChoice, error) {
 		needs = append(needs, n)
@@ -702,27 +704,34 @@ func TestSwitchHost(t *testing.T) {
 				return HostChoice{Kind: "run", Host: h}, nil
 			}
 		}
-		return HostChoice{Kind: "refuse", Reason: refuse[cmp.Or(pinned, "h3")]}, nil
+		h := cmp.Or(pinned, "h3")
+		if later[h] {
+			return HostChoice{Kind: "queue", Reason: refuse[h]}, nil
+		}
+		return HostChoice{Kind: "refuse", Reason: refuse[h]}, nil
 	}
 	w := workers.Spec{Tool: "agy", Model: "gemini-3.8-flash-high"}
 	cases := []struct {
 		name, prev string
 		refuse     map[string]string
+		later      map[string]bool
 		want       string
-		err        bool
+		wait, err  bool
 	}{
-		{"上一轮那台接得了", "h3", nil, "h3", false},
-		{"上一轮那台没登录就另挑", "h3", map[string]string{"h3": "h3 上的 agy 没登录"}, "h1", false},
-		{"都接不了", "h1", map[string]string{"h1": "h1 上没装 agy", "h3": "h3 上的 agy+gemini-3.8-flash-high 不可用"}, "", true},
+		{"上一轮那台接得了", "h3", nil, nil, "h3", false, false},
+		{"上一轮那台没登录就另挑", "h3", map[string]string{"h3": "h3 上的 agy 没登录"}, nil, "h1", false, false},
+		{"都永远接不了", "h1", map[string]string{"h1": "h1 上没装 agy", "h3": "h3 上没装 agy"}, nil, "", false, true},
+		{"别的接不了、那台标了不可用就等", "h1", map[string]string{"h1": "h1 上的 agy+gemini-3.8-flash-high 不可用", "h3": "h3 上没装 agy"},
+			map[string]bool{"h1": true}, "", true, false},
 	}
 	for _, c := range cases {
-		refuse, needs = c.refuse, nil
+		refuse, later, needs = c.refuse, c.later, nil
 		if refuse == nil {
 			refuse = map[string]string{}
 		}
-		host, err := d.switchHost(ctx, ledger.Task{}, w, c.prev)
-		if host != c.want || (err != nil) != c.err || needs[0].Tool != "agy" || needs[0].Model != w.Model {
-			t.Errorf("%s：%q %v %+v", c.name, host, err, needs)
+		host, wait, err := d.switchHost(ctx, ledger.Task{}, w, c.prev)
+		if host != c.want || wait != c.wait || (err != nil) != c.err || needs[0].Tool != "agy" || needs[0].Model != w.Model {
+			t.Errorf("%s：%q %v %v %+v", c.name, host, wait, err, needs)
 		}
 	}
 }

@@ -66,7 +66,7 @@ func (d *dispatcher) view(ctx context.Context, t ledger.Task, o Options, exclude
 			MaxRisk: r.Rules.EffectiveMaxRisk(), Refusal: r.Rules.Refusal(risk, true),
 			Exclusive: r.Adapter.Exclusive, Stat: workers.Count(stats[workers.Combo(r.ID)]), Fails: workers.Fails(stats[workers.Combo(r.ID)], ShakyWindow)}
 		f.Cost = r.Rules
-		if available.QuotaMarked(r.Spec) {
+		if available.Marked(r.Spec) {
 			delete(exclude, r.ID)
 		}
 		if _, builtin := workers.Builtin(r.Spec.Tool); iso && builtin {
@@ -90,7 +90,7 @@ func (d *dispatcher) view(ctx context.Context, t ledger.Task, o Options, exclude
 				sp, why := available.CheckResolved(r, choice.Host, tokens)
 				f.Quota = &sp
 				if why != "" {
-					f.Unavailable = why
+					f.Waiting = why // 不可用标记会到期或被解除，等它
 				}
 			}
 			if choice.Kind == "queue" {

@@ -399,6 +399,9 @@ func TestClassify(t *testing.T) {
 		{"继续跟进、没有报错收尾不判", ExitUnknown, "Error: fetch failed\n", SignalNone, time.Time{}},
 		{"继续跟进、报错收尾照判", ExitUnknown, `{"type":"turn.failed","error":{"message":"stream disconnected before completion"}}`, SignalTransient, time.Time{}},
 		{"继续跟进、报错收尾是额度", ExitUnknown, `{"type":"turn.failed","error":{"message":"You've hit your usage limit. Try again in ~5 min."}}`, SignalQuota, now.Add(5 * time.Minute)},
+		// t865 现场原文：周额度写的是具体日期，不能按缺省 4 小时恢复。
+		{"codex 周额度写日期", 1, `{"type":"turn.failed","error":{"message":"You’ve hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at Oct 10th, 2026 9:14 AM."}}`, SignalQuota, time.Date(2026, 10, 10, 9, 14, 0, 0, time.UTC)},
+		{"codex 额度只写钟点", 1, "ERROR: You've hit your usage limit. Try again at 3:05 PM.\n", SignalQuota, time.Date(2026, 9, 29, 15, 5, 0, 0, time.UTC)},
 		{"之后正常收尾", 1, "Error: fetch failed\n" + `{"type":"result","is_error":false,"stop_reason":"end_turn"}`, SignalNone, time.Time{}},
 		{"思考耗尽", 0, `{"type":"step_finish","part":{"reason":"length","tokens":{"reasoning":32000,"output":0}}}`, SignalThinking, time.Time{}},
 		{"长度用尽但有正文", 0, `{"type":"step_finish","part":{"reason":"length","tokens":{"reasoning":100,"output":900}}}`, SignalNone, time.Time{}},
@@ -581,6 +584,28 @@ func TestEnded(t *testing.T) {
 	}
 	if r := pi.LastReply(`{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"审阅结论：通过"}]}}` + "\n" + `{"type":"agent_settled"}`); r != "审阅结论：通过" {
 		t.Errorf("pi 最后回复：%q", r)
+	}
+}
+
+// 「try again at」读出的恢复时刻：过去的、不存在的日期读不出（交给 MarkOf 按 Hold 算），不编一个时刻。
+func TestResetAtTryAgainAt(t *testing.T) {
+	now := time.Date(2026, 10, 3, 19, 0, 0, 0, time.UTC)
+	cases := []struct {
+		name, text string
+		want       time.Time
+	}{
+		{"日期加钟点", "try again at Oct 10th, 2026 9:14 AM.", time.Date(2026, 10, 10, 9, 14, 0, 0, time.UTC)},
+		{"月份全拼、下午", "Try again at October 1st, 2027 12:30 PM", time.Date(2027, 10, 1, 12, 30, 0, 0, time.UTC)},
+		{"只写钟点、今天已过算明天", "try again at 9:14 AM", time.Date(2026, 10, 4, 9, 14, 0, 0, time.UTC)},
+		{"日期已过", "try again at Oct 1st, 2026 9:14 AM", time.Time{}},
+		{"日期不存在", "try again at Feb 30th, 2027 9:14 AM", time.Time{}},
+		{"月份认不出", "try again at Foo 10th, 2026 9:14 AM", time.Time{}},
+	}
+	for _, c := range cases {
+		got, ok := resetAt(c.text, now)
+		if ok != !c.want.IsZero() || (ok && !got.Equal(c.want)) {
+			t.Errorf("%s：%v %v，应为 %v", c.name, got, ok, c.want)
+		}
 	}
 }
 

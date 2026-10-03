@@ -123,7 +123,7 @@ func TestAgentCLIProbe(t *testing.T) {
 	}
 }
 
-// 代理报上来的自检结果：不过的记成「工具@机器」不可用、挑机器跳过、workers 看得到原因；再报跑通就解除；不认识的工具名丢掉。
+// 代理报上来的自检结果：不过的记成「工具@机器」不可用、挑机器排队等、workers 看得到原因；再报跑通就解除、照派；不认识的工具名丢掉。
 func TestAgentProbeRoute(t *testing.T) {
 	g := newRig(t)
 	a, stop, _ := g.agent(t.TempDir())
@@ -147,7 +147,7 @@ func TestAgentProbeRoute(t *testing.T) {
 		marks[0].Evidence != "No active Node.js version." {
 		t.Fatalf("%+v %v", marks, err)
 	}
-	if c, err := Pick(ctx, g.env, Need{Tool: "codex"}, host); err != nil || c.Kind != "refuse" ||
+	if c, err := Pick(ctx, g.env, Need{Tool: "codex"}, host); err != nil || c.Kind != "queue" ||
 		!strings.Contains(c.Reason, "自检 codex --version 退出码 1，修好后自检跑通自动解除") {
 		t.Fatalf("%+v %v", c, err)
 	}

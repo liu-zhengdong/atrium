@@ -3,7 +3,6 @@ package dispatch
 import (
 	"cmp"
 	"context"
-	"github.com/liu-zhengdong/atrium/internal/api"
 	"github.com/liu-zhengdong/atrium/internal/gates"
 	"github.com/liu-zhengdong/atrium/internal/ledger"
 	"github.com/liu-zhengdong/atrium/internal/workers"
@@ -128,14 +127,15 @@ func (d *dispatcher) exited(ctx context.Context, p *proc, code int) error {
 			}
 		}
 	case "switch":
-		var wait bool
-		o.W, wait, err = d.choose(ctx, t, Options{Risk: p.run.Risk, Tokens: p.run.Tokens}, tried)
-		if err == nil && wait {
-			err = api.Conflict("能换的执行者都正忙")
-		}
+		var why string
+		o.W, why, err = d.choose(ctx, t, Options{Risk: p.run.Risk, Tokens: p.run.Tokens}, tried)
 		o.Why = workers.WhySwitch
-		if err == nil {
-			o.Host, err = d.switchHost(ctx, t, o.W.Spec, cmp.Or(p.run.Host, LocalHost))
+		wait := why != ""
+		if err == nil && !wait {
+			o.Host, wait, err = d.switchHost(ctx, t, o.W.Spec, cmp.Or(p.run.Host, LocalHost))
+		}
+		if err == nil && wait {
+			return d.requeue(ctx, p, tried, note)
 		}
 	}
 	if err == nil {
@@ -148,4 +148,19 @@ func (d *dispatcher) exited(ctx context.Context, p *proc, code int) error {
 		return apply(ledger.Block, note+"；重新拉起受阻："+err.Error())
 	}
 	return ledger.Note(ctx, db, p.task, actor, "执行者退出："+note+"；已重新拉起（"+o.Why+"，"+o.W.ID+"）")
+}
+
+// requeue 是换人时能换的此刻都接不了（被不可用标记挡着、正忙、机器满）：放回队列等，不转受阻——
+// 标记到期或解除、执行者空下来后分派任务循环照常派出；换人次数接着这一轮数，满了仍转受阻。
+func (d *dispatcher) requeue(ctx context.Context, p *proc, tried map[string]bool, note string) error {
+	available, err := workers.LoadAvailability(ctx, d.env)
+	if err != nil {
+		return err
+	}
+	o := retryOpts(&p.run, tried, available.Marked)
+	_, err = putRow(ctx, d.env.DB, p.task, o, ledger.Requeue, actor, note+"；能换的执行者此刻都接不了，放回队列等")
+	if err != nil && isAPI(err) {
+		return nil // 别人先收了尾（conflict）
+	}
+	return err
 }

@@ -404,8 +404,8 @@ func loadToday(ctx context.Context, q store.Querier, now time.Time) (Today, erro
 	if err := q.QueryRowContext(ctx, `SELECT count(*) FROM tasks WHERE status = 'queued'`).Scan(&queued); err != nil {
 		return Today{}, err
 	}
-	var drafts int
-	if err := q.QueryRowContext(ctx, `SELECT count(*) FROM tasks WHERE status = 'draft'`).Scan(&drafts); err != nil {
+	drafts, err := loadDraftCount(ctx, q, ix)
+	if err != nil {
 		return Today{}, err
 	}
 	done, err := finishedSince(ctx, q, startOfDay(now))
@@ -727,57 +727,6 @@ func ownRules(ctx context.Context, q store.Querier, id, name string) ([]Rule, er
 		out = append(out, Rule{ID: p.ID, Text: p.Text, Why: p.Why, By: p.By, Dept: id, DeptName: name})
 	}
 	return out, nil
-}
-
-// deptTasks 是部门整棵子树里没结束的任务（含草稿），加上 3 天内结束的（最多 100 件；没结束的在前，各自最近的在前），
-// 再补上它们的全部子孙（不论部门、不论多久前结束），排成树：一个目标拆成了哪几件都在它下面。
-func deptTasks(ctx context.Context, q store.Querier, ix *orgIndex, id string) ([]Row, error) {
-	ids := ix.subtree(id)
-	marks := strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",")
-	args := make([]any, 0, len(ids)+1)
-	for _, d := range ids {
-		args = append(args, d)
-	}
-	args = append(args, time.Now().Add(-72*time.Hour).UnixMilli())
-	rows, err := q.QueryContext(ctx, `SELECT id FROM tasks WHERE department IN (`+marks+`)
-		AND (finished_at IS NULL OR finished_at > ?) ORDER BY finished_at IS NOT NULL, updated_at DESC LIMIT 100`, args...)
-	if err != nil {
-		return nil, err
-	}
-	tids, err := scanIDs(rows)
-	if err != nil {
-		return nil, err
-	}
-	listed, err := getTasks(ctx, q, tids)
-	if err != nil {
-		return nil, err
-	}
-	seen := map[string]bool{}
-	var tasks []ledger.Task
-	for _, t := range listed {
-		if !seen[t.ID] {
-			seen[t.ID] = true
-			tasks = append(tasks, t)
-		}
-		sub, err := ledger.Subtree(ctx, q, t.ID)
-		if err != nil {
-			return nil, err
-		}
-		for _, s := range sub[1:] {
-			if !seen[s.ID] {
-				seen[s.ID] = true
-				tasks = append(tasks, s)
-			}
-		}
-	}
-	kids := countKids(tasks) // 每件列出的任务都补了整棵子树，子任务数是全的
-	out := make([]Row, len(tasks))
-	for i, t := range tasks {
-		if out[i], err = rowOf(ctx, q, t, ix.parents, kids[t.ID]); err != nil {
-			return nil, err
-		}
-	}
-	return nest(tasks, out), nil
 }
 
 // Legion 是执行者页：额度（后台存下的读数）、机器、执行者目录。

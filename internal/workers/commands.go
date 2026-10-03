@@ -3,12 +3,10 @@ package workers
 import (
 	"context"
 	"fmt"
-	"net/url"
 	"os"
 	"runtime"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/liu-zhengdong/atrium/internal/api"
 	"github.com/liu-zhengdong/atrium/internal/app"
@@ -43,6 +41,7 @@ type Detail struct {
 	Resolved *Resolved `json:"resolved,omitempty"`
 	Profile  *Profile  `json:"profile,omitempty"`
 	Stat     *Stat     `json:"stat,omitempty"`
+	Quality  *Quality  `json:"quality,omitempty"`  // 全量质量，与近期统计同口径
 	Attempts []Attempt `json:"attempts,omitempty"` // 近 StatWindow 次有结果的拉起，新的在前
 	Marks    []Mark    `json:"marks,omitempty"`
 	Layers   []Profile `json:"layers"`
@@ -170,6 +169,17 @@ func Show(ctx context.Context, q store.Querier, name string) (Detail, error) {
 	}
 	ls := stats[Combo(r.ID)]
 	st := Count(ls)
+	qualities, err := ReadQuality(ctx, q)
+	if err != nil {
+		return Detail{}, err
+	}
+	quality := Quality{Combo: Combo(r.ID), BounceReasons: map[string]int{}}
+	for _, v := range qualities {
+		if v.Combo == quality.Combo {
+			quality = v
+			break
+		}
+	}
 	layers := []Profile{}
 	for _, name := range r.Layers {
 		p, err := GetProfile(ctx, q, name)
@@ -181,7 +191,7 @@ func Show(ctx context.Context, q store.Querier, name string) (Detail, error) {
 		}
 		layers = append(layers, *p)
 	}
-	return Detail{Timing: st.Timing(), Trust: r.Rules.EffectiveTrust(), MaxRisk: r.Rules.EffectiveMaxRisk(), Resolved: &r, Stat: &st, Attempts: ls, Marks: marksOf(marks, r.Spec), Layers: layers}, nil
+	return Detail{Timing: st.Timing(), Trust: r.Rules.EffectiveTrust(), MaxRisk: r.Rules.EffectiveMaxRisk(), Resolved: &r, Stat: &st, Quality: &quality, Attempts: ls, Marks: marksOf(marks, r.Spec), Layers: layers}, nil
 }
 
 func asAPI(err error, target **api.Error) bool {
@@ -195,6 +205,9 @@ func asAPI(err error, target **api.Error) bool {
 // Routes 注册执行者接口。
 func Routes(r *api.Router, env *app.Env) {
 	hook(env)
+	r.Handle("GET /api/workers/quality", func(q *api.Req) (any, error) {
+		return ReadQuality(q.Context(), env.DB)
+	})
 	r.Handle("GET /api/workers", func(q *api.Req) (any, error) {
 		if name := q.URL.Query().Get("name"); name != "" {
 			return showWithQuota(q.Context(), env, name)
@@ -251,8 +264,13 @@ func Commands(t *cli.Table) {
 		Summary: "执行者 Chrome MCP 入口", Args: "[-- MCP 参数]",
 		Run: func(c *cli.Ctx) error { return runChromeMCP(c.Args, os.Stdin, c.Env.Stdout, c.Env.Stderr) }})
 	t.Add(cli.Command{Path: "workers", Args: "[执行者或 层/名]",
-		Summary: "列执行者（组合、信任、近 20 次拉起的结果、哪台上不可用）；给名字看叠加后的档案与每次拉起的明细，或一层原文",
+		Summary: "列执行者；--quality 看全量质量；给名字看档案、质量与近 20 次明细",
+		Detail:  qualityHelp,
+		Flags:   []cli.Flag{{Name: "quality", Bool: true, Help: "按组合列全量质量汇总（不带名字），按交付率、花费、用时排序"}},
 		Run: func(c *cli.Ctx) error {
+			if c.Bool("quality") {
+				return qualityCmd(c)
+			}
 			if err := c.MaxArgs(1); err != nil {
 				return err
 			}
@@ -379,54 +397,6 @@ func editCmd(c *cli.Ctx) error {
 	return c.Done(out, "已存档案 "+name, "atrium workers "+name)
 }
 
-func showCmd(c *cli.Ctx, name string) error {
-	var d Detail
-	if err := c.Call("GET", "/api/workers?"+url.Values{"name": {name}}.Encode(), nil, &d); err != nil {
-		return err
-	}
-	if d.Profile != nil {
-		return c.Done(d, strings.TrimRight(d.Profile.Source, "\n")+fmt.Sprintf("\n\n（%s 改于 %s）", d.Profile.UpdatedBy,
-			fmtTime(d.Profile.UpdatedAt)), "atrium workers edit "+name+" --set 键=值")
-	}
-	r := d.Resolved
-	var b strings.Builder
-	fmt.Fprintf(&b, "%s  trust=%s  max_risk=%s\n", r.ID, r.Rules.EffectiveTrust(), r.Rules.EffectiveMaxRisk())
-	fmt.Fprintf(&b, "额度：%s\n", quotaText(*d.Quota))
-	writeMarks(&b, d.Marks)
-	if r.CLIModel != "" {
-		fmt.Fprintf(&b, "交给工具的模型：%s\n", r.CLIModel)
-	} else {
-		b.WriteString("交给工具的模型：不传，跟随工具自带的缺省（工具在日志里报了实际模型的，写在下面各次的括号里）\n")
-	}
-	if r.Rules.Checks != nil {
-		fmt.Fprintf(&b, "checks：%s\n", strings.Join(r.Rules.Checks, "、"))
-	}
-	if r.Rules.Endpoint != "" {
-		fmt.Fprintf(&b, "端点：%s（%s）\n", r.Rules.Endpoint, r.Rules.EndpointAPI)
-	}
-	layers := "（没有档案，全用缺省）"
-	if len(r.Layers) > 0 {
-		layers = strings.Join(r.Layers, " ← ")
-	}
-	fmt.Fprintf(&b, "档案层：%s\n%s（按 %s 统计，强度不单列）\n", layers, *d.Stat, Combo(r.ID))
-	for _, a := range d.Attempts {
-		fmt.Fprintf(&b, "  %s  %s 第 %d 次  %s@%s", time.UnixMilli(a.At).Local().Format("01-02 15:04"), a.Task, a.N, a.Worker, a.Host)
-		if a.Model != "" {
-			fmt.Fprintf(&b, "（%s）", a.Model)
-		}
-		fmt.Fprintf(&b, "  %s · 用时 %s · %s", OutText(a.Outcome), DurationText(a.DurationMS), a.Usage.String())
-		if a.Reason != "" && a.Outcome != OutOK {
-			fmt.Fprintf(&b, "：%s", clipRunes(oneLine(a.Reason), 80))
-		}
-		b.WriteString("\n")
-	}
-	if r.Body != "" {
-		fmt.Fprintf(&b, "\n%s\n", r.Body)
-	}
-	next := "atrium task run <tN> --worker " + r.ID
-	return c.Done(d, b.String(), next)
-}
-
 // writeMarks 在执行者下面一台一行写不可用标记。
 func writeMarks(b *strings.Builder, marks []Mark) {
 	for _, m := range marks {
@@ -437,5 +407,3 @@ func writeMarks(b *strings.Builder, marks []Mark) {
 		b.WriteString("\n")
 	}
 }
-
-func fmtTime(ms int64) string { return time.UnixMilli(ms).Format("2006-01-02 15:04") }

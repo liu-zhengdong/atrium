@@ -48,11 +48,11 @@ func (a Availability) CheckResolved(r Resolved, host string, tokens ...int64) (q
 	return a.checkBinding(r, host, need)
 }
 
-// QuotaMarked 允许额度失败组合由具体机器的 mark 判定，而非全局 tried
-// 连坐别的机器。另一机器的账号/套餐关系仍未知，恢复次数仍有界。
-func (a Availability) QuotaMarked(s Spec) bool {
+// Marked：这个组合此刻在某台机器上有不可用标记。被标记的组合由标记管退避（到期或解除后再试），
+// 不再按「这一轮已试过」排除，也不连坐别的机器；另一机器的账号/套餐关系仍未知，换人次数仍有界。
+func (a Availability) Marked(s Spec) bool {
 	for _, m := range a.Marks {
-		if m.Kind == SignalQuota && (m.Until == 0 || m.Until > a.Now) && m.Covers(s) {
+		if (m.Until == 0 || m.Until > a.Now) && m.Covers(s) {
 			return true
 		}
 	}

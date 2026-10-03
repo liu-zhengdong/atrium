@@ -3,6 +3,7 @@ package dispatch
 import (
 	"cmp"
 	"context"
+	"slices"
 	"time"
 
 	"github.com/liu-zhengdong/atrium/internal/store"
@@ -25,6 +26,29 @@ func tries(runs []workers.Run) (same, switches int, tried map[string]bool) {
 		}
 	}
 	return
+}
+
+// retryOpts 是换人放回队列的选项：沿用上一轮拉起的风险、凭据与 token 需求；Switch 让换人次数接着这一轮数。
+func retryOpts(run *workers.Run, tried map[string]bool, marked func(workers.Spec) bool) Options {
+	o := Options{Risk: "low", Switch: true, Avoid: avoidOf(tried, marked)}
+	if run != nil {
+		o.Risk, o.Secrets, o.Tokens = run.Risk, run.Secrets, run.Tokens
+	}
+	return o
+}
+
+// avoidOf 是放回队列后要避开的执行者（纯函数）：这一轮试过、此刻没被不可用标记挡着的。被标记的由标记管退避，
+// 到期或解除后可以再试；一直避开的话，标记到期时它已被排除，任务只剩「没有能接的执行者」转受阻。
+func avoidOf(tried map[string]bool, marked func(workers.Spec) bool) []string {
+	var out []string
+	for w := range tried {
+		if s, err := workers.ParseWorker(w); err == nil && marked(s) {
+			continue
+		}
+		out = append(out, w)
+	}
+	slices.Sort(out)
+	return out
 }
 
 // markUnavailable 按退出信号把这一轮的「工具+模型@机器」标成不可用，返回写进任务备注的一句；不是可用性信号返回空。

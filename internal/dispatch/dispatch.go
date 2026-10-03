@@ -145,12 +145,15 @@ func (d *dispatcher) tryOnce(ctx context.Context, it item) error {
 	if p, err := d.paused(ctx, t, ""); err != nil || p {
 		return err
 	}
-	w, wait, err := d.choose(ctx, t, it.Opts, nil)
-	if err != nil || wait {
-		if err != nil && isAPI(err) {
+	w, why, err := d.choose(ctx, t, it.Opts, nil)
+	if err != nil {
+		if isAPI(err) {
 			return d.block(ctx, t.ID, err.Error())
 		}
 		return err
+	}
+	if why != "" {
+		return noteWait(ctx, d.env.DB, t.ID, why)
 	}
 	need, err := hostNeed(ctx, d.env.DB, w.Spec, t)
 	if err != nil {
@@ -162,7 +165,7 @@ func (d *dispatcher) tryOnce(ctx context.Context, it item) error {
 	}
 	switch choice.Kind {
 	case "queue":
-		return nil
+		return noteWait(ctx, d.env.DB, t.ID, choice.Reason)
 	case "refuse":
 		return d.block(ctx, t.ID, "没有机器能接："+choice.Reason)
 	}
@@ -170,7 +173,7 @@ func (d *dispatcher) tryOnce(ctx context.Context, it item) error {
 		return err
 	}
 	o := launchOpts{Tokens: it.Opts.Tokens, W: w, Host: choice.Host, Risk: it.Opts.Risk, Secrets: it.Opts.Secrets, Why: workers.WhyFirst}
-	if len(it.Opts.Avoid) > 0 {
+	if len(it.Opts.Avoid) > 0 || it.Opts.Switch {
 		o.Why = workers.WhySwitch
 	}
 	if !it.Row { // 没有队列行的 queued 是交回的
@@ -222,21 +225,25 @@ func lastBounce(ctx context.Context, q store.Querier, task string) (stage, note 
 	return string(b.From.Stage), b.Note, true, nil
 }
 
-// choose 定执行者：写死的核对能接；自动的按 Pick。wait 为真表示能接的都正忙，留在队列里等。
-func (d *dispatcher) choose(ctx context.Context, t ledger.Task, o Options, exclude map[string]bool) (w workers.Resolved, wait bool, err error) {
+// choose 定执行者：写死的核对能接；自动的按 Pick。wait 非空表示能接的此刻都接不了（正忙、机器没就绪、
+// 标了不可用），留在队列里等，wait 是在等什么。
+func (d *dispatcher) choose(ctx context.Context, t ledger.Task, o Options, exclude map[string]bool) (w workers.Resolved, wait string, err error) {
 	if o.Worker != "" && exclude == nil {
 		w, err := workers.Resolve(ctx, d.env.DB, o.Worker)
 		if err != nil {
-			return w, false, err
+			return w, "", err
 		}
 		if why := w.Rules.Refusal(o.Risk, false); why != "" {
-			return w, false, api.Conflict("%s 接不了：%s", w.ID, why)
+			return w, "", api.Conflict("%s 接不了：%s", w.ID, why)
 		}
 		busy, err := busyTools(ctx, d.env.DB)
 		if err != nil {
-			return w, false, err
+			return w, "", err
 		}
-		return w, w.Adapter.Exclusive && busy[w.Spec.Tool], nil
+		if w.Adapter.Exclusive && busy[w.Spec.Tool] {
+			return w, w.ID + " 正忙（独占工具在跑），空下来就派", nil
+		}
+		return w, "", nil
 	}
 	if exclude == nil {
 		exclude = map[string]bool{}
@@ -246,16 +253,31 @@ func (d *dispatcher) choose(ctx context.Context, t ledger.Task, o Options, exclu
 	}
 	v, err := d.view(ctx, t, o, exclude)
 	if err != nil {
-		return w, false, err
+		return w, "", err
 	}
 	if v.Recommended == "" {
 		if v.Waiting {
-			return w, true, nil
+			return w, v.Reason, nil
 		}
-		return w, false, api.Conflict("%s", v.Reason).WithNext("atrium workers")
+		return w, "", api.Conflict("%s", v.Reason).WithNext("atrium workers")
 	}
 	w, err = workers.Resolve(ctx, d.env.DB, v.Recommended)
-	return w, false, err
+	return w, "", err
+}
+
+// noteWait 把排队任务此刻在等什么记进经历（task show 看得到），和这次入队后上次记的一样就不再记。
+func noteWait(ctx context.Context, db *store.DB, id, why string) error {
+	var last string
+	err := db.QueryRowContext(ctx, `SELECT body FROM task_events WHERE task = ? AND kind = 'waiting'
+		AND id > (SELECT COALESCE(max(id), 0) FROM task_events WHERE task = ? AND kind IN ('enqueue', 'requeue', 'bounce', 'start'))
+		ORDER BY id DESC LIMIT 1`, id, id).Scan(&last)
+	if err != nil && !store.IsNotFound(err) {
+		return err
+	}
+	if last == why {
+		return nil
+	}
+	return ledger.Record(ctx, db, id, "waiting", actor, why)
 }
 
 // busyTools 是在跑的执行者用到的工具。
@@ -486,21 +508,25 @@ func noteUnknown(ctx context.Context, db *store.DB, task string, run workers.Run
 	return err
 }
 
-// switchHost 给换上的执行者挑机器：上一轮那台能接就留在那台（工作目录在那里），否则另挑；都接不了报冲突。
-func (d *dispatcher) switchHost(ctx context.Context, t ledger.Task, w workers.Spec, prev string) (string, error) {
+// switchHost 给换上的执行者挑机器：上一轮那台能接就留在那台（工作目录在那里），否则另挑；
+// 这会儿都接不了（满、离线、标了不可用）wait 为真；都永远接不了报冲突。
+func (d *dispatcher) switchHost(ctx context.Context, t ledger.Task, w workers.Spec, prev string) (host string, wait bool, err error) {
 	need, err := hostNeed(ctx, d.env.DB, w, t)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
-	c, err := pickHost(ctx, d.env, need, prev)
+	first, err := pickHost(ctx, d.env, need, prev)
+	if err != nil || first.Kind == "run" {
+		return first.Host, false, err
+	}
+	c, err := pickHost(ctx, d.env, need, "")
 	if err != nil || c.Kind == "run" {
-		return c.Host, err
+		return c.Host, false, err
 	}
-	why := c.Reason
-	if c, err = pickHost(ctx, d.env, need, ""); err != nil || c.Kind == "run" {
-		return c.Host, err
+	if first.Kind == "queue" || c.Kind == "queue" {
+		return "", true, nil
 	}
-	return "", api.Conflict("没有机器能接 %s：%s；%s", w, why, c.Reason)
+	return "", false, api.Conflict("没有机器能接 %s：%s；%s", w, first.Reason, c.Reason)
 }
 
 func readHead(path string, n int) (string, error) {

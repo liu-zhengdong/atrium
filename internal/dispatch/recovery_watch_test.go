@@ -80,7 +80,8 @@ func TestRecoveryWatchBoundAndStop(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if got.Status != ledger.Queued || len(items) != 1 || len(items[0].Opts.Avoid) != 1 {
+				// 额度用尽的组合由标记管退避，不进 Avoid（否则标记到期时它已被排除，只剩转受阻）。
+				if got.Status != ledger.Queued || len(items) != 1 || !items[0].Opts.Switch || len(items[0].Opts.Avoid) != 0 {
 					t.Fatalf("首次巡检恢复应保留这轮计数：%+v %+v", got, items)
 				}
 			} else if got.Status != ledger.Blocked {

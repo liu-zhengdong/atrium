@@ -19,6 +19,7 @@ func TestTransition(t *testing.T) {
 		{"拉起", st(Queued, ""), Event{Kind: Start}, st(Running, "")},
 		{"交付进入交付检查", st(Running, ""), Event{Kind: ExitOK}, st(Running, StageGate)},
 		{"执行者失败", st(Running, ""), Event{Kind: ExitFail}, st(Failed, "")},
+		{"换人时能换的都被标记挡着，放回队列", st(Running, ""), Event{Kind: Requeue}, st(Queued, "")},
 		{"交付检查通过后进入应用", st(Running, StageGate), Event{Kind: GatePass, Land: StageMerge}, st(Running, StageMerge)},
 		{"交付检查通过后先审阅", st(Running, StageGate), Event{Kind: GatePass, NeedReview: true}, st(Running, StageReview)},
 		{"交付检查通过后没有应用步骤直接完成", st(Running, StageGate), Event{Kind: GatePass}, st(Done, StageGate)},
@@ -65,6 +66,8 @@ func TestTransition(t *testing.T) {
 		ev   Event
 	}{
 		{"在跑的不能再派", st(Running, ""), Event{Kind: Enqueue}},
+		{"交付中不能放回队列", st(Running, StageGate), Event{Kind: Requeue}},
+		{"受阻的放回队列要经 task run", st(Blocked, ""), Event{Kind: Requeue}},
 		{"完成的不能再派", st(Done, ""), Event{Kind: Enqueue}},
 		{"todo 不能直接拉起", st(Todo, ""), Event{Kind: Start}},
 		{"交付中不接执行者退出", st(Running, StageGate), Event{Kind: ExitOK}},

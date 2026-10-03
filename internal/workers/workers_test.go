@@ -758,6 +758,27 @@ func TestEnded(t *testing.T) {
 	}
 }
 
+// 「try again at」读出的恢复时刻：过去的、不存在的日期读不出（标记按恢复时间未知处理），不编一个时刻。
+func TestResetAtTryAgainAt(t *testing.T) {
+	now := time.Date(2026, 10, 3, 19, 0, 0, 0, time.UTC)
+	cases := []struct {
+		name, text string
+		want       time.Time
+	}{
+		{"日期加钟点", "try again at Oct 10th, 2026 9:14 AM.", time.Date(2026, 10, 10, 9, 14, 0, 0, time.UTC)},
+		{"月份全拼、下午", "Try again at October 1st, 2027 12:30 PM", time.Date(2027, 10, 1, 12, 30, 0, 0, time.UTC)},
+		{"日期已过", "try again at Oct 1st, 2026 9:14 AM", time.Time{}},
+		{"日期不存在", "try again at Feb 30th, 2027 9:14 AM", time.Time{}},
+		{"月份认不出", "try again at Foo 10th, 2026 9:14 AM", time.Time{}},
+	}
+	for _, c := range cases {
+		got, ok := resetAt(c.text, now)
+		if ok != !c.want.IsZero() || (ok && !got.Equal(c.want)) {
+			t.Errorf("%s：%v %v，应为 %v", c.name, got, ok, c.want)
+		}
+	}
+}
+
 func TestMarkOf(t *testing.T) {
 	now := time.Date(2026, 9, 29, 10, 0, 0, 0, time.UTC)
 	agy := Spec{Tool: "agy", Model: "claude-opus-4-6-thinking", Effort: "high"}

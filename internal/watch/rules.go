@@ -32,7 +32,7 @@ type Rule struct {
 
 // Rules 是等待对象与处理时限的唯一一张表（对应规格中的任务处理时限）。
 var Rules = []Rule{
-	{RoleWorkerStart, "执行者（启动）", 3 * time.Minute, "结束、重试一次，再卡转失败"},
+	{RoleWorkerStart, "执行者（启动）", 3 * time.Minute, "结束、换执行者重试一次，再卡转失败"},
 	{RoleWorker, "执行者", 20 * time.Minute, "结束，转受阻交负责人"},
 	{RoleCheck, "检查", 10 * time.Minute, "结束；有失败用例交回，没有按没跑成重跑一次（合入队列判）"},
 	{RoleRelease, "发版", 30 * time.Minute, "告诉负责人"},

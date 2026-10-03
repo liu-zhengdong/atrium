@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/liu-zhengdong/atrium/internal/app"
@@ -17,7 +18,11 @@ import (
 )
 
 func TestExitRecordsCurrentReply(t *testing.T) {
+	piEnd := "{\"type\":\"message_end\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"缺陷\\n审阅结论：打回\"}]}}\n" +
+		"{\"type\":\"agent_end\",\"messages\":[{\"role\":\"user\",\"content\":\"" + strings.Repeat("x", 200*1024) + "\"}]}\n" +
+		"{\"type\":\"agent_settled\"}\n"
 	for _, c := range []struct{ name, tool, log, want string }{
+		{"Pi收尾大于日志尾巴", "pi", piEnd, "缺陷\n审阅结论：打回"},
 		{"Kimi正文", "kimi", "{\"role\":\"assistant\",\"content\":\"审阅结论：打回\"}\n{\"role\":\"meta\",\"type\":\"session.resume_hint\"}\n", "审阅结论：打回"},
 		{"Kimi空回复", "kimi", "{\"role\":\"tool\",\"content\":\"审阅结论：通过\"}\n", ""},
 		{"Codex正文", "codex", "{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"审阅结论：打回\"}}\n", "审阅结论：打回"},

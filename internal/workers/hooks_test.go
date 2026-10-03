@@ -39,6 +39,7 @@ func TestWatchSignal(t *testing.T) {
 		{"claude 报错收尾：之前的额度字样不算", claude,
 			"x rate limit exceeded: " + "\n" + `{"type":"result","is_error":true}`, watch.SigError},
 		{"codex 临时错误收尾只算 error，重试由拉起者判", codex, `{"type":"turn.failed","error":{"message":"stream disconnected before completion"}}`, watch.SigError},
+		{"command-code 权限被拒收尾：subtype 假装 success 也算 error", claude, `{"type":"result","subtype":"success","stopReason":"permission_denied","finalText":"I'll read the task file first."}`, watch.SigError},
 	}
 	for _, c := range cases {
 		if got := WatchSignal(c.a, c.tail); got != c.want {

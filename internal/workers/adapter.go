@@ -403,12 +403,14 @@ func grokAdapter() *Driver {
 	return a
 }
 
-// command-code --print --output-format json：整场只出收尾一行 type=result，正文在 finalText（老字段 result 兼容），
-// 没有过程流；认证用用户已有的订阅登录，不额外传凭据。沙箱与审批：首件真活发现卡审批再补。
+// command-code --print --output-format json：逐行 JSON，过程事件包在 {"type":"event","event":{…}} 里（引擎同 pi），
+// 收尾一行 type=result 带 usage 与最终正文；认证用用户已有的订阅登录，不额外传凭据。
+// 权限用 --permission-mode yolo 全放行：--print 下问不到人，默认模式拒掉工具调用后以 success 收尾（t1022 首件真活的样本），
+// 被拒收尾的 stopReason=permission_denied 在 eventEnding 里当报错。
 func commandCodeAdapter() *Driver {
 	a := &Driver{Tool: "command-code", Exe: "command-code", Tell: TellRestart, JSON: true, read: readCommandCode}
 	a.build = func(in Request) (Launch, error) {
-		args := []string{"--print", "--output-format", "json", "请先完整读取任务说明文件 " + in.PromptFile + "，然后按文件内容执行。"}
+		args := []string{"--print", "--output-format", "json", "--permission-mode", "yolo", "请先完整读取任务说明文件 " + in.PromptFile + "，然后按文件内容执行。"}
 		if in.Model != "" {
 			args = append(args, "--model", in.Model)
 		}

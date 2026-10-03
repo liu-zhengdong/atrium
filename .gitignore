@@ -2,4 +2,5 @@
 .atrium*/
 .env*
 *.log
+!**/testdata/**/*.log
 .DS_Store

@@ -14,6 +14,7 @@ type ghPR struct {
 	Number      int    `json:"number"`
 	URL         string `json:"url"`
 	State       string `json:"state"`
+	IsDraft     bool   `json:"isDraft"`
 	HeadRefName string `json:"headRefName"`
 	HeadRefOid  string `json:"headRefOid"`
 	BaseRefName string `json:"baseRefName"`
@@ -24,11 +25,11 @@ type ghPR struct {
 }
 
 func (p ghPR) pr() PR {
-	return PR{Number: p.Number, URL: p.URL, State: p.State, Head: p.HeadRefName, HeadID: p.HeadRefOid, Body: p.Body}
+	return PR{Number: p.Number, URL: p.URL, State: p.State, Draft: p.IsDraft, Head: p.HeadRefName, HeadID: p.HeadRefOid, Body: p.Body}
 }
 
-// PRFields 是 gh --json 要的字段。
-const PRFields = "number,url,state,headRefName,headRefOid,baseRefName,body,mergeCommit"
+// PRFields 是 gh --json 要的字段。isDraft 与 state 分开：草稿的 state 仍是 OPEN。
+const PRFields = "number,url,state,isDraft,headRefName,headRefOid,baseRefName,body,mergeCommit"
 
 // ParseSlug 把任务的仓库写法换成 gh 认的 owner/name（纯函数）：owner/name 原样；
 // https://github.com/o/r(.git)、git@github.com:o/r(.git)、ssh://git@github.com/o/r 取出 o/r。认不出返回 false。

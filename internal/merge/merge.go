@@ -102,8 +102,8 @@ func Routes(r *api.Router, env *app.Env) {
 	})
 }
 
-// Deliver 把任务放进合入队列：登记 PR（给了的话）、核对 PR 开着、Apply(Deliver)。
-// 放行的人判不了这个部门的验收（负责人碰上验收人是用户的部门）时，先停在等验收。
+// Deliver 把任务放进合入队列：登记 PR（给了的话）、核对 PR 开着、按 gates.QueueBlock 重查草稿和这一轮交付结论、Apply(Deliver)。
+// 不读上次的交付检查记录。放行的人判不了这个部门的验收（负责人碰上验收人是用户的部门）时，先停在等验收。
 func Deliver(ctx context.Context, db *store.DB, r gates.Runner, id string, in Body, actor string) (ledger.Task, error) {
 	t, err := ledger.Get(ctx, db, id)
 	if err != nil {
@@ -150,6 +150,11 @@ func Deliver(ctx context.Context, db *store.DB, r gates.Runner, id string, in Bo
 	}
 	if pr.State != "OPEN" {
 		return t, api.Conflict("PR #%d 状态是 %s，不是开着的", pr.Number, pr.State)
+	}
+	if block, err := gates.QueueBlock(ctx, db, &pr.PR, id); err != nil {
+		return t, err
+	} else if block != "" {
+		return t, api.Conflict("%s", block).WithNext("按原因改完后再 atrium task merge " + id)
 	}
 	if repo != own {
 		if _, err := ledger.Edit(ctx, db, id, ledger.Patch{Repo: &repo}, actor); err != nil {

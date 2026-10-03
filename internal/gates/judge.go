@@ -45,8 +45,9 @@ type PR struct {
 	Number int    `json:"number"`
 	URL    string `json:"url"`
 	State  string `json:"state"`
-	Head   string `json:"head"`     // 分支名
-	HeadID string `json:"head_oid"` // 头提交
+	Draft  bool   `json:"draft,omitempty"` // GitHub 草稿（gh 的 isDraft）；开着的草稿 state 仍是 OPEN
+	Head   string `json:"head"`            // 分支名
+	HeadID string `json:"head_oid"`        // 头提交
 	Body   string `json:"-"`
 }
 
@@ -286,7 +287,8 @@ func (r Requirement) Refusal(p Profile) string {
 
 var (
 	verdictLine = regexp.MustCompile(`审阅结论\s*[:：]\s*\**\s*(通过|打回)`)
-	endingLine  = regexp.MustCompile(`交付结论\s*[:：]\s*\**\s*(完成|没做成)`)
+	// 未完成放在完成前面，避免更长的词被截短。读不出不猜。
+	endingLine = regexp.MustCompile(`交付结论\s*[:：]\s*\**\s*(未完成|没做成|受阻|完成)`)
 )
 
 // lastLine 按最后一行非空文字读结论：last 匹配 re 时返回第一个分组，之前的文字留末尾 n 个字作说明；匹配不上 ok=false，不猜。
@@ -309,11 +311,17 @@ func ParseReview(text string) (pass bool, notes string, ok bool) {
 	return got == "通过", notes, ok
 }
 
-// ParseEnding 从执行者最后的回复读交付结论：最后一行必须是「交付结论：完成/没做成」，之前的文字留末尾作原因。
+// Ending 从执行者最后的回复读交付结论那一个词：最后一行必须是「交付结论：完成 / 没做成 / 未完成 / 受阻」。
+// 读不出 ok=false，不猜。之前的文字留末尾作原因。
+func Ending(text string) (word, why string, ok bool) {
+	return lastLine(text, endingLine, 300)
+}
+
+// ParseEnding 从执行者最后的回复读交付结论。完成才算做成。
 // 没有改动可查的交付（message、dir）只凭这一行判：执行者自称没做成是安全的一侧，照信；读不出不猜。
 func ParseEnding(text string) (done bool, why string, ok bool) {
-	got, why, ok := lastLine(text, endingLine, 300)
-	return got == "完成", why, ok
+	word, why, ok := Ending(text)
+	return word == "完成", why, ok
 }
 
 // ReviewBrief 是派给审阅者的任务详述：只读、按清单审、最后一行给结论。dir 是本机工作树；原工作树在远程机器上时为空，只看 PR。

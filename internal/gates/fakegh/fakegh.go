@@ -20,6 +20,7 @@ type PR struct {
 	Number      int
 	Head, Base  string
 	State       string
+	Draft       bool
 	Body        string
 	MergeCommit string
 }
@@ -133,7 +134,7 @@ func (g *GH) head(branch string) string {
 }
 
 func (g *GH) json(p *PR) map[string]any {
-	m := map[string]any{"number": p.Number, "url": g.url(p.Number), "state": p.State, "headRefName": p.Head,
+	m := map[string]any{"number": p.Number, "url": g.url(p.Number), "state": p.State, "isDraft": p.Draft, "headRefName": p.Head,
 		"headRefOid": g.head(p.Head), "baseRefName": p.Base, "body": p.Body, "mergeCommit": nil}
 	if p.MergeCommit != "" {
 		m["mergeCommit"] = map[string]string{"oid": p.MergeCommit}
@@ -196,7 +197,7 @@ func (g *GH) Run(ctx context.Context, dir, name string, args ...string) (string,
 		return out(g.json(p))
 	case "pr merge":
 		p := g.find(args[2])
-		if p == nil || p.State != "OPEN" {
+		if p == nil || p.State != "OPEN" || p.Draft {
 			return "", fmt.Errorf("假 gh：PR %s 不能合", args[2])
 		}
 		if want := flag("--match-head-commit"); want != g.head(p.Head) {

@@ -147,6 +147,8 @@ func TestParseEnding(t *testing.T) {
 		{"调研结论……\n交付结论：完成\n", true, "调研结论……", true},
 		{"h3 上读不到设计稿，没改代码\n\n**交付结论：没做成**", false, "h3 上读不到设计稿，没改代码", true},
 		{"方案 A、B 等负责人定\n交付结论: 没做成", false, "方案 A、B 等负责人定", true},
+		{"差一步\n交付结论：未完成", false, "差一步", true},
+		{"等设计稿\n交付结论：受阻", false, "等设计稿", true},
 		{"交付结论：完成\n补一句", false, "", false},   // 结论不在最后一行
 		{"没做成，没改代码也没开 PR", false, "", false}, // 自然语言不猜
 		{"", false, "", false},

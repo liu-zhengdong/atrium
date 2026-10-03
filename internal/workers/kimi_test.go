@@ -1,9 +1,26 @@
 package workers
 
 import (
+	"os"
 	"strings"
 	"testing"
 )
+
+func TestKimiMeasuredReply(t *testing.T) {
+	b, err := os.ReadFile("testdata/kimi-t649-stdout.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, _ := Builtin("kimi")
+	if got := d.LastReply(string(b)); got != "OK" {
+		t.Fatalf("reply=%q", got)
+	}
+	p := NewParser("kimi")
+	p.Feed(string(b))
+	if got := p.Trace(); got.Unknown != 0 || got.Result != "OK" || got.Session != "redacted" {
+		t.Fatalf("trace=%+v", got)
+	}
+}
 
 func TestKimiTrace(t *testing.T) {
 	p := NewParser("kimi+k2")

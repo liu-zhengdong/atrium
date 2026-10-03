@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/liu-zhengdong/atrium/internal/config"
 	"github.com/liu-zhengdong/atrium/internal/platform"
@@ -175,6 +176,12 @@ func TestNoteDelivery(t *testing.T) {
 	if r.Failure == "" || r.FailedAt == 0 || r.Socket != "/tmp/x.sock" {
 		t.Fatalf("失败应记原因与时刻、不动其他字段：%+v", r)
 	}
+	first := r.FailedAt
+	time.Sleep(5 * time.Millisecond)
+	b.noteDelivery(errors.New("会话没收下：unauthorized；重读口令失败：登记里已没有"))
+	if r, _ = readRecord(b.p); r.FailedAt <= first {
+		t.Fatalf("同样的错误再失败一次，时刻应更新到这一次：%d → %d", first, r.FailedAt)
+	}
 	b.noteDelivery(nil)
 	if r, _ = readRecord(b.p); r.Failure != "" || r.FailedAt != 0 {
 		t.Fatalf("送成功后应清掉失败：%+v", r)
@@ -185,5 +192,23 @@ func TestNoteDelivery(t *testing.T) {
 	b.noteDelivery(errors.New("x"))
 	if r, _ = readRecord(b.p); r.Failure != "" {
 		t.Fatalf("登记已换人时不应改它：%+v", r)
+	}
+}
+
+func TestReleaseKeepsRecordAfterFailure(t *testing.T) {
+	b, _ := piBridge(t, "/tmp/x.sock", "tok")
+	if err := writeRecord(b.p, Record{PID: b.me, Socket: "/tmp/x.sock", Kind: kindPi}); err != nil {
+		t.Fatal(err)
+	}
+	b.noteDelivery(errors.New("会话没收下：unauthorized；重读口令后重送：会话没收下：unauthorized"))
+	b.release()
+	r, _ := readRecord(b.p)
+	if r == nil || r.Failure == "" {
+		t.Fatalf("带着失败退出应留下登记给 --status 看：%+v", r)
+	}
+	b.noteDelivery(nil)
+	b.release()
+	if r, _ = readRecord(b.p); r != nil {
+		t.Fatalf("最近一次送成功，退出时应删登记：%+v", r)
 	}
 }

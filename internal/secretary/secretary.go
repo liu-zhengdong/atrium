@@ -5,7 +5,8 @@
 // 送过 30 分钟没确认再提醒一次；每 30 秒向服务报「秘书在听」；会话关了就退出（判定见 Liveness：
 // 收件地址不在了立即退出，地址还在但连不上要连续 2 分钟；没送进去的留着下一轮重送）。
 // Pi 会话连得上但拒收（重载换了口令）不算连不上：按收件地址重读一次口令重送，仍拒收就退出。
-// 最近一次投递失败的原因与时刻记在登记里，--status 先报它，送成功后清掉。
+// 最近一次投递失败的原因与时刻记在登记里（每次失败都更新时刻），--status 先报它、分在重试与已退出，送成功后清掉；
+// 带着失败退出时登记留给 --status 看，下一个 bridge 起来时覆盖。
 // statusline 给 Claude Code 状态栏一行字；服务不在只显示「未运行」，不拉起。
 // --install-hook 同时在项目设置 env 里写 ATRIUM_AS=secretary：秘书会话发的命令署名秘书（权限同用户）。
 // --detach 起好后再输出根部门要点、此刻全景与秘书备忘（Brief）：hook 的输出进会话上下文，进展以账本为准，备忘不记进展。
@@ -226,23 +227,23 @@ func foreground(c *cli.Ctx, p config.Paths, in inbox, batch time.Duration) error
 	if cur != nil && cur.PID != os.Getpid() && Claim(cur, in.endpoint, platform.Alive) == "running" {
 		return api.Conflict("本会话的 bridge 已在跑（pid %d）", cur.PID).WithNext("atrium secretary bridge --status")
 	}
-	me := os.Getpid()
-	if err := writeRecord(p, Record{PID: me, Socket: in.endpoint, Kind: in.kind, StartedAt: store.Now()}); err != nil {
-		return err
-	}
-	defer releaseRecord(p, me)
-	ctx, stop := signal.NotifyContext(c.Context, os.Interrupt, syscall.SIGTERM)
-	defer stop()
-	c.Context = ctx // 收到结束信号时打断挂着的 events wait
-	lg := log.New(c.Env.Stderr, "", log.LstdFlags)
-	lg.Printf("bridge 开始（pid %d，%s 会话，收件地址 %s）", me, in.kind, in.endpoint)
 	var home string
 	if in.kind == kindPi {
 		if home, err = os.UserHomeDir(); err != nil {
 			return err
 		}
 	}
+	me := os.Getpid()
+	if err := writeRecord(p, Record{PID: me, Socket: in.endpoint, Kind: in.kind, StartedAt: store.Now()}); err != nil {
+		return err
+	}
+	lg := log.New(c.Env.Stderr, "", log.LstdFlags)
 	b := &bridge{c: c, p: p, in: in, home: home, me: me, log: lg, sent: Sent{}, batch: batch}
+	defer b.release()
+	ctx, stop := signal.NotifyContext(c.Context, os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	c.Context = ctx // 收到结束信号时打断挂着的 events wait
+	lg.Printf("bridge 开始（pid %d，%s 会话，收件地址 %s）", me, in.kind, in.endpoint)
 	reason := b.run(ctx)
 	lg.Printf("bridge 退出：%s", reason)
 	return c.Done(map[string]any{"reason": reason}, "bridge 已退出："+reason, "atrium secretary bridge --status")
@@ -392,13 +393,20 @@ func (b *bridge) send(text string) error {
 	return nil
 }
 
-// noteDelivery 把投递结果记进登记供 --status 看：失败记原因与时刻，成功清掉；和已记的一样不重写。登记已换人时不动。
+// release 退出时让出登记；最近一次投递失败时留着登记，--status 仍能报出失败原因与时刻（下一个 bridge 起来时覆盖）。
+func (b *bridge) release() {
+	if b.failure == "" {
+		releaseRecord(b.p, b.me)
+	}
+}
+
+// noteDelivery 把投递结果记进登记供 --status 看：每次失败都记原因与此刻，成功时清掉（本来没失败就不写）。登记已换人时不动。
 func (b *bridge) noteDelivery(err error) {
 	failure := ""
 	if err != nil {
 		failure = err.Error()
 	}
-	if failure == b.failure {
+	if failure == "" && b.failure == "" {
 		return
 	}
 	r, rerr := readRecord(b.p)
@@ -528,31 +536,42 @@ func status(c *cli.Ctx) error {
 	if err != nil {
 		return err
 	}
-	if cur != nil && !platform.Alive(cur.PID) {
-		cur = nil
-	}
+	alive := cur != nil && platform.Alive(cur.PID)
 	var out struct {
 		Listener *events.Listener `json:"listener"`
 	}
 	if err := c.Call("GET", "/api/events/listen?as=secretary", nil, &out); err != nil {
 		return err
 	}
-	res := map[string]any{"listener": out.Listener, "bridge": cur}
+	text, next := statusText(cur, alive, out.Listener, logPath(p))
+	if !alive && (cur == nil || cur.Failure == "") {
+		cur = nil
+	}
+	return c.Done(map[string]any{"listener": out.Listener, "bridge": cur, "running": alive}, text, next)
+}
+
+// statusText 判定 --status 说什么：最近一次投递失败优先（分 bridge 在重试与已退出），其次服务那边的「在听」，再次 bridge 进程在不在。
+func statusText(cur *Record, alive bool, l *events.Listener, logFile string) (text, next string) {
+	if cur != nil && cur.Failure != "" {
+		at := time.UnixMilli(cur.FailedAt).Format("01-02 15:04:05")
+		if alive {
+			return fmt.Sprintf("最近一次投递失败（%s）：%s；bridge pid %d（%s 会话）在重试，事件没进会话；看日志：%s",
+				at, cur.Failure, cur.PID, kindText(cur.Kind), logFile), "atrium secretary bridge --status"
+		}
+		return fmt.Sprintf("bridge 已退出（pid %d，%s 会话），退出前最近一次投递失败（%s）：%s；事件没进会话，在秘书会话里重新起 bridge（Pi：/secretary on）；看日志：%s",
+			cur.PID, kindText(cur.Kind), at, cur.Failure, logFile), "atrium events wait --timeout 0"
+	}
 	switch {
-	case cur != nil && cur.Failure != "":
-		text := fmt.Sprintf("最近一次投递失败（%s）：%s；bridge pid %d（%s 会话）在重试，事件没进会话；看日志：%s",
-			time.UnixMilli(cur.FailedAt).Format("01-02 15:04:05"), cur.Failure, cur.PID, kindText(cur.Kind), logPath(p))
-		return c.Done(res, text, "atrium secretary bridge --status")
-	case out.Listener != nil:
-		text := fmt.Sprintf("秘书在听（%s）", out.Listener.Via)
-		if cur != nil {
+	case l != nil:
+		text := fmt.Sprintf("秘书在听（%s）", l.Via)
+		if alive {
 			text += fmt.Sprintf(" · bridge pid %d（%s 会话）", cur.PID, kindText(cur.Kind))
 		}
-		return c.Done(res, text, "atrium events wait --timeout 0")
-	case cur != nil:
-		return c.Done(res, fmt.Sprintf("bridge 在跑（pid %d），但还没向服务报「在听」；看日志：%s", cur.PID, logPath(p)), "atrium secretary bridge --status")
+		return text, "atrium events wait --timeout 0"
+	case alive:
+		return fmt.Sprintf("bridge 在跑（pid %d），但还没向服务报「在听」；看日志：%s", cur.PID, logFile), "atrium secretary bridge --status"
 	}
-	return c.Done(res, "没有 bridge 在听：秘书会话收不到注入的事件", "atrium secretary bridge --install-hook")
+	return "没有 bridge 在听：秘书会话收不到注入的事件", "atrium secretary bridge --install-hook"
 }
 
 // kindText 把登记里的会话种类写成人看的话（早期登记没有这个字段，那时只有 Claude Code 一种）。

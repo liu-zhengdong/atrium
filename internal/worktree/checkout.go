@@ -9,7 +9,7 @@ import (
 )
 
 // Ensure 在把目录交给执行者（随后才会记成工作树）之前确认它是这次检出。
-// 目录不存在、为空，或没有自己的 .git 时，先调用 checkout；checkout 为空表示这里不该补检出。
+// 目录不存在、为空，或有文件但没有自己的 .git 时，先调用 checkout；checkout 为空表示这里不该补检出。
 // 然后要求 git rev-parse --show-toplevel 解析后等于 dir。对不上就返回错误，调用方不得标记、不得拉起。
 func Ensure(ctx context.Context, dir string, run Runner, checkout func() error) error {
 	absent, err := absent(dir)

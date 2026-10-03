@@ -34,8 +34,8 @@ func TestEnsureEmptyDirChecksOut(t *testing.T) {
 	assertParentUntouched(t, gh, parent, before)
 }
 
-// 有文件但没有 .git：不搬动文件、不做成检出，报明确错误。
-func TestEnsureFilesWithoutGitRefuses(t *testing.T) {
+// 有文件但没有 .git：原有文件留着，在原地补检出任务仓库。
+func TestEnsureFilesWithoutGitChecksOut(t *testing.T) {
 	gh, ctx, parent, dir := parentRepo(t, "task-t1")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
@@ -44,13 +44,50 @@ func TestEnsureFilesWithoutGitRefuses(t *testing.T) {
 		t.Fatal(err)
 	}
 	before := gh.Must(parent, "rev-parse", "HEAD")
+	if err := worktree.Ensure(ctx, dir, gh.Git.Run, func() error {
+		return worktree.Create(ctx, gh.Work, dir, "task-t1", "main", gh.Git.Run)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	assertOwnTop(t, gh, dir)
+	if branch := gh.Must(dir, "symbolic-ref", "--short", "HEAD"); branch != "task-t1" {
+		t.Fatalf("分支 %s", branch)
+	}
+	if body, err := os.ReadFile(filepath.Join(dir, "README.md")); err != nil || strings.TrimSpace(string(body)) != "hi" {
+		t.Fatalf("没有写出任务仓库的文件：%q %v", body, err)
+	}
+	if body, err := os.ReadFile(filepath.Join(dir, "keep.txt")); err != nil || string(body) != "keep" {
+		t.Fatalf("原有文件没留下：%q %v", body, err)
+	}
+	if status := gh.Must(dir, "status", "--porcelain"); status != "?? keep.txt" {
+		t.Fatalf("检出后状态 %q", status)
+	}
+	if _, err := os.Stat(dir + ".checkout"); !os.IsNotExist(err) {
+		t.Fatalf("旁边的临时目录没删：%v", err)
+	}
+	if list := gh.Must(gh.Work, "worktree", "list", "--porcelain"); strings.Count(list, "worktree ") != 2 {
+		t.Fatalf("工作树登记 %s", list)
+	}
+	assertParentUntouched(t, gh, parent, before)
+}
+
+// 已有文件与任务仓库的文件同名：报明确错误，目录和仓库都不动。
+func TestEnsureConflictingFilesRefuses(t *testing.T) {
+	gh, ctx, parent, dir := parentRepo(t, "task-t1")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("mine"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	before := gh.Must(parent, "rev-parse", "HEAD")
 	err := worktree.Ensure(ctx, dir, gh.Git.Run, func() error {
 		return worktree.Create(ctx, gh.Work, dir, "task-t1", "main", gh.Git.Run)
 	})
-	if err == nil || !strings.Contains(err.Error(), "不是检出") || !strings.Contains(err.Error(), "有文件但没有 .git") {
-		t.Fatalf("应拒绝并说明不是检出：%v", err)
+	if err == nil || !strings.Contains(err.Error(), "不是检出") || !strings.Contains(err.Error(), "README.md") {
+		t.Fatalf("应拒绝并说明冲突：%v", err)
 	}
-	if body, readErr := os.ReadFile(filepath.Join(dir, "keep.txt")); readErr != nil || string(body) != "keep" {
+	if body, readErr := os.ReadFile(filepath.Join(dir, "README.md")); readErr != nil || string(body) != "mine" {
 		t.Fatalf("拒绝时改了目录：%q %v", body, readErr)
 	}
 	if _, statErr := os.Stat(filepath.Join(dir, ".git")); !os.IsNotExist(statErr) {

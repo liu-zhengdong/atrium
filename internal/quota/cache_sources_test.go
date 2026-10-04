@@ -146,6 +146,12 @@ func TestMain(m *testing.M) {
 			fmt.Fprintln(os.Stderr, "synthetic corrupt row")
 		}
 		payload := string(sourceFixture)
+		if strings.Contains(filepath.Base(os.Args[0]), "zai") {
+			payload = strings.Replace(payload, `"providerId":"opencode"`, `"providerId":"zai"`, 1)
+		}
+		if strings.Contains(filepath.Base(os.Args[0]), "legacy") {
+			payload = string(legacyFixture)
+		}
 		if strings.Contains(filepath.Base(os.Args[0]), "damaged") {
 			payload = strings.Replace(payload, `"quotaCount":2`, `"quotaCount":1`, 1)
 		}
@@ -170,7 +176,7 @@ func TestOpenquotaMixedDamagedExitZero(t *testing.T) {
 		t.Fatal(err)
 	}
 	dir := t.TempDir()
-	for _, name := range []string{"clean", "mixed", "damaged", "empty"} {
+	for _, name := range []string{"clean", "zai", "mixed", "damaged", "empty", "legacy"} {
 		suffix := ""
 		if strings.HasSuffix(exe, ".exe") {
 			suffix = ".exe"
@@ -180,13 +186,19 @@ func TestOpenquotaMixedDamagedExitZero(t *testing.T) {
 			t.Fatal(err)
 		}
 		rows, err := readOpenquota(ctx, map[string]string{"HOME": dir, "USERPROFILE": dir, "ATRIUM_OPENQUOTA_BIN": bin})
-		if name != "clean" {
+		if name != "clean" && name != "zai" {
 			if err == nil || rows != nil {
 				t.Fatal("exit0+坏行警告不能标成功", rows, err)
+			}
+			if name == "legacy" && !strings.Contains(err.Error(), "缺 quotas/valueMetrics 数组") {
+				t.Fatal("旧版出口未写明缺失字段", err)
 			}
 		} else if err != nil || len(rows) != 1 {
 			t.Fatal("正常假来源被拒", rows, err)
 		}
-		t.Logf("%s：预期成功=%v，实际成功=%v，rows=%d", name, name == "clean", err == nil, len(rows))
+		if name == "zai" && rows[0].Account != "zai" {
+			t.Fatal("zai 来源未保留", rows)
+		}
+		t.Logf("%s：预期成功=%v，实际成功=%v，rows=%d，error=%v", name, name == "clean" || name == "zai", err == nil, len(rows), err)
 	}
 }

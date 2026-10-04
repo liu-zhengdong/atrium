@@ -337,7 +337,7 @@ func TestProfileEdit(t *testing.T) {
 		{"models/opus", Edit{Set: map[string]string{"protocol": "cli", "command": "x"}}, "只能写在 harness 层"},
 		{"harness/nope", Edit{Set: map[string]string{"trust": "low"}}, "不是内置工具"},
 		{"harness/claude", Edit{Set: map[string]string{"endpoint": "ftp://x", "endpoint_api": "openai"}}, "http(s)"},
-		{"combos/claude", Edit{Set: map[string]string{"trust": "low"}}, "只有 combos 层"},
+		{"combos/claude", Edit{Set: map[string]string{"trust": "low"}}, "档案名应为"},
 		{"skills/x", Edit{Set: map[string]string{"trust": "low"}}, "档案名应为"},
 		{"combos/claude+glm[1m", Edit{Set: map[string]string{"trust": "low"}}, "档案名应为"},
 		{"combos/claude+glm[1m][2m]", Edit{Set: map[string]string{"trust": "low"}}, "档案名应为"},
@@ -346,6 +346,46 @@ func TestProfileEdit(t *testing.T) {
 	for _, c := range bad {
 		if _, err := ApplyEdit(c.name, "", c.e); err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%s %+v：应报 %q，得到 %v", c.name, c.e, c.want, err)
+		}
+	}
+}
+
+func TestCheckName(t *testing.T) {
+	ok := []string{
+		"harness/claude",
+		"models/opus",
+		"models/GLM-5.3[1m]",
+		"combos/claude+opus",
+		"combos/claude+GLM-5.3[1m]",
+		"harness/my-tool.v2",
+	}
+	bad := []string{
+		"",
+		"harness",
+		"harness/",
+		"models/",
+		"combos/",
+		"harness/.claude",
+		"models/.glm",
+		"models/GLM-5.3[1m",
+		"models/GLM-5.3[1m][2m]",
+		"models/[1m]",
+		"models/zcode/GLM-5.3[1m]",
+		"models/claude+opus",
+		"harness/claude+opus",
+		"combos/claude",
+		"combos/claude+op+us",
+		"combos/claude+opus:high",
+		"skills/x",
+	}
+	for _, name := range ok {
+		if err := CheckName(name); err != nil {
+			t.Errorf("%q 应可建：%v", name, err)
+		}
+	}
+	for _, name := range bad {
+		if err := CheckName(name); err == nil {
+			t.Errorf("%q 应拒绝", name)
 		}
 	}
 }

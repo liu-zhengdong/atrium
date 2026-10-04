@@ -237,7 +237,9 @@ func spawnServe(p config.Paths, base map[string]string, replacing int) (pid int,
 	if err != nil {
 		return 0, nil, nil, err
 	}
-	cmd, err := platform.Start(platform.Spec{Path: exe, Args: []string{"serve"}, Env: env,
+	// cwd 钉在数据目录：上面 PrivateDir 刚建好它，服务存活期始终存在；
+	// 拉起者的目录可能已被删，继承过去会让子进程 getcwd 失败（10-03 自检全挂的根因）。
+	cmd, err := platform.Start(platform.Spec{Path: exe, Args: []string{"serve"}, Dir: p.Data, Env: env,
 		Stdout: logf, Stderr: logf, Detached: true})
 	if err != nil {
 		return 0, nil, nil, err

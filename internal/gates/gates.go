@@ -324,8 +324,11 @@ func lastID(ctx context.Context, q store.Querier, task, kind string) (int64, err
 	return id, err
 }
 
-// review 推进审阅阶段：这一轮还没有审阅任务就建一个交给分派任务；审阅任务结束后读结论。
-// 审阅阶段受阻的任务（多是审阅任务失败）只在审阅任务之后重跑出结论时接着按结论走。
+// reviewAttempts 是审阅轮拉起上限：连着这么多次读不出审阅结论，原任务转受阻等人。
+const reviewAttempts = 3
+
+// review 推进审阅阶段：这一轮还没拉起审阅轮就记下要求、请分派任务拉起；审阅轮退出后读结论。
+// 读不出结论交回同一审阅者重审（重审不占作者的重试预算），第 reviewAttempts 次原任务转受阻（blocked/review）。
 func (g *Gate) review(ctx context.Context, t ledger.Task) error {
 	passedAt, err := lastID(ctx, g.DB, t.ID, string(ledger.GatePass))
 	if err != nil {
@@ -337,55 +340,67 @@ func (g *Gate) review(ctx context.Context, t ledger.Task) error {
 	}
 	if pickedAt < passedAt {
 		if t.Status == ledger.Blocked {
-			return nil // 建审阅任务时出错受阻，等人处理
+			return nil // 拉起反复失败已转受阻，等人处理
 		}
 		return g.startReview(ctx, t)
 	}
-	ref, _, err := Last(ctx, g.DB, t.ID, KindReviewer)
+	rounds, err := reviewRounds(ctx, g.DB, t.ID)
 	if err != nil {
 		return err
 	}
-	rt, err := ledger.Get(ctx, g.DB, ref)
-	if err != nil {
-		return err
+	if len(rounds) == 0 {
+		return nil // 审阅轮还没记上（gates.Review 刚被调用），下一轮再看
 	}
-	if t.Status == ledger.Blocked && (rt.Status != ledger.Done || rt.FinishedAt == nil || *rt.FinishedAt <= t.UpdatedAt) {
-		return nil // 受阻之后审阅任务没再完成过：结论已经用过或还没有
+	last := rounds[len(rounds)-1]
+	if done, err := runExited(ctx, g.DB, t.ID, last.N); err != nil || !done {
+		return err // 审阅轮还在跑：没有新结论
 	}
-	switch rt.Status {
-	case ledger.Todo, ledger.Queued, ledger.Running:
-		return nil
-	case ledger.Done:
-	default:
-		_, err := Block(ctx, g.DB, t.ID, fmt.Sprintf("审阅任务 %s 状态 %s，没给出结论", rt.ID, rt.Status))
-		return err
-	}
-	result, _, err := Last(ctx, g.DB, rt.ID, KindResult)
+	result, err := roundResult(ctx, g.DB, t.ID)
 	if err != nil {
 		return err
 	}
 	pass, notes, ok := ParseReview(result)
 	if !ok {
-		_, err := Block(ctx, g.DB, t.ID, fmt.Sprintf("审阅任务 %s 的回复读不出「审阅结论：通过/打回」", rt.ID))
-		return err
+		// 读不出结论：交回同一审阅者重审，第 reviewAttempts 次转受阻。
+		if t.Status == ledger.Blocked {
+			return nil // 重审拉起反复失败已转受阻，等人处理
+		}
+		returnedAt, err := lastID(ctx, g.DB, t.ID, "review_return")
+		if err != nil {
+			return err
+		}
+		launchedAt, err := lastID(ctx, g.DB, t.ID, workers.RunKind)
+		if err != nil {
+			return err
+		}
+		if returnedAt < launchedAt {
+			if err := ledger.Record(ctx, g.DB, t.ID, "review_return", Actor, fmt.Sprintf("第 %d 次审阅读不出结论；最后一行必须写「审阅结论：通过」或「审阅结论：打回」", len(rounds))); err != nil {
+				return err
+			}
+		}
+		if len(rounds) >= reviewAttempts {
+			_, err := Block(ctx, g.DB, t.ID, fmt.Sprintf("审阅连着 %d 轮读不出「审阅结论：通过/打回」（atrium task log %s 看原始输出），等人处理", reviewAttempts, t.ID))
+			return err
+		}
+		return g.askReview(ctx, t, last.Worker)
 	}
-	reqBody, _, err := Last(ctx, g.DB, rt.ID, KindRequire)
+	reqBody, _, err := Last(ctx, g.DB, t.ID, KindRequire)
 	if err != nil {
 		return err
 	}
 	var req Requirement
 	if err := json.Unmarshal([]byte(reqBody), &req); err != nil {
-		return fmt.Errorf("审阅任务 %s 的执行者要求坏了：%w", rt.ID, err)
+		return err
 	}
-	reviewer, err := LoadProfile(ctx, g.DB, rt.Worker)
+	reviewer, err := LoadProfile(ctx, g.DB, last.Worker)
 	if err != nil {
 		return err
 	}
 	if why := req.Refusal(reviewer); why != "" {
-		_, err := Block(ctx, g.DB, t.ID, fmt.Sprintf("审阅任务 %s 的审阅者不合格：%s %s", rt.ID, reviewer.Name, why))
+		_, err := Block(ctx, g.DB, t.ID, "审阅者不合格："+last.Worker+" "+why)
 		return err
 	}
-	if err := record(ctx, g.DB, t.ID, KindReview, map[string]any{"reviewer": rt.ID, "worker": rt.Worker, "pass": pass, "notes": notes}); err != nil {
+	if err := record(ctx, g.DB, t.ID, KindReview, map[string]any{"reviewer": last.Worker, "worker": last.Worker, "pass": pass, "notes": notes}); err != nil {
 		return err
 	}
 	if pass {
@@ -393,75 +408,128 @@ func (g *Gate) review(ctx context.Context, t ledger.Task) error {
 		if err != nil {
 			return err
 		}
-		return g.pass(ctx, t, d, ledger.ReviewPass, "审阅通过（"+rt.ID+"，"+rt.Worker+"）")
+		return g.pass(ctx, t, d, ledger.ReviewPass, "审阅通过（"+last.Worker+"）")
 	}
 	if notes == "" {
 		notes = "审阅者没写具体问题"
 	}
-	_, err = Bounce(ctx, g.DB, t.ID, Actor, fmt.Sprintf("审阅打回（%s，%s）：%s", rt.ID, rt.Worker, notes))
+	_, err = Bounce(ctx, g.DB, t.ID, Actor, fmt.Sprintf("审阅打回（%s）：%s", last.Worker, notes))
 	return err
 }
 
-func (g *Gate) startReview(ctx context.Context, t ledger.Task) error {
-	author, err := LoadProfile(ctx, g.DB, t.Worker)
-	if err != nil {
-		return err
+// askReview 请分派任务拉起一轮审阅：who 空时按要求挑（首次），非空交回这位审阅者重审。
+func (g *Gate) askReview(ctx context.Context, t ledger.Task, who string) error {
+	if Review == nil {
+		return errors.New("分派任务没接上（gates.Review 由 dispatch 装配）")
 	}
-	w, err := mustWorkspace(ctx, g.DB, t.ID)
+	return Review(ctx, t.ID, who)
+}
+
+// RoundBrief 是审阅轮的详述（dispatch.launch 拼审阅轮提示词时用）：与过交付检查时同源的审阅材料，结论格式见 ReviewBrief。
+// dir 是本机工作树；原工作树在远程机器上时为空，只看 PR。
+func RoundBrief(ctx context.Context, db *store.DB, t ledger.Task, r Runner) (string, error) {
+	author, err := LoadProfile(ctx, db, t.Worker)
 	if err != nil {
-		return err
+		return "", err
 	}
-	repo, err := Slug(ctx, g.R, t.Repo)
+	repo, err := Slug(ctx, r, t.Repo)
 	if err != nil {
-		return err
+		return "", err
 	}
-	pr, err := ViewPR(ctx, g.R, repo, t.PR)
+	info, err := ViewPR(ctx, r, repo, t.PR)
 	if err != nil {
-		return err
+		return "", err
 	}
-	risk, err := Risk(ctx, g.DB, t.ID)
+	risk, err := Risk(ctx, db, t.ID)
 	if err != nil {
-		return err
+		return "", err
 	}
 	_, why := NeedReview(risk, author.Trust)
 	var last gateRecord
-	if body, ok, err := Last(ctx, g.DB, t.ID, KindGate); err != nil {
-		return err
+	if body, ok, err := Last(ctx, db, t.ID, KindGate); err != nil {
+		return "", err
 	} else if ok {
 		json.Unmarshal([]byte(body), &last)
+	}
+	w, err := mustWorkspace(ctx, db, t.ID)
+	if err != nil {
+		return "", err
 	}
 	dir := w.Dir
 	if w.Remote() {
 		dir = ""
 	}
-	detail, _, err := ledger.Brief(ctx, g.DB, t)
+	detail, _, err := ledger.Brief(ctx, db, t)
+	if err != nil {
+		return "", err
+	}
+	return ReviewBrief(t.ID, t.Title, repo, info.PR, dir, info.Base, why, last.Facts.Diff, detail), nil
+}
+
+// startReview 进审阅阶段的第一步：记下对审阅者的要求（只对审阅轮生效，不占用作者的重试预算），请分派任务拉起第一轮。
+func (g *Gate) startReview(ctx context.Context, t ledger.Task) error {
+	requiredAt, err := lastID(ctx, g.DB, t.ID, KindRequire)
 	if err != nil {
 		return err
 	}
-	brief := ReviewBrief(t.ID, t.Title, repo, pr.PR, dir, pr.Base, why, last.Facts.Diff, detail)
-	rt, err := ledger.Add(ctx, g.DB, ledger.NewTask{Title: Clip("审阅 "+t.ID+"："+t.Title, 200), Detail: brief,
-		Parent: t.ID, Org: t.Org, Priority: t.Priority}, Actor)
+	passedAt, err := lastID(ctx, g.DB, t.ID, string(ledger.GatePass))
 	if err != nil {
 		return err
 	}
-	launched, err := workers.Launched(ctx, g.DB, t.ID)
+	if requiredAt > passedAt {
+		return g.askReview(ctx, t, "") // 等工具或机器空闲时不重复记要求、唤醒循环
+	}
+	author, err := LoadProfile(ctx, g.DB, t.Worker)
 	if err != nil {
 		return err
 	}
-	req := Requirement{NotTool: author.Tool, NotModel: author.Model, MinTrust: "medium", NotWorkers: launched}
-	if err := record(ctx, g.DB, rt.ID, KindRequire, req); err != nil {
+	runs, err := workers.Runs(ctx, g.DB, t.ID, 50)
+	if err != nil {
 		return err
 	}
-	if err := ledger.Record(ctx, g.DB, rt.ID, KindReviewOf, Actor, t.ID); err != nil {
+	var authors []string
+	for _, run := range runs {
+		if run.Why != workers.WhyReview {
+			authors = append(authors, run.Worker)
+		}
+	}
+	if err := record(ctx, g.DB, t.ID, KindRequire, Requirement{NotTool: author.Tool, NotModel: author.Model, MinTrust: "medium", NotWorkers: authors}); err != nil {
 		return err
 	}
-	if err := ledger.Record(ctx, g.DB, t.ID, KindReviewer, Actor, rt.ID); err != nil {
-		return err
+	return g.askReview(ctx, t, "")
+}
+
+// reviewRounds 取本轮（最近一次 gate_pass 之后）why=review 的拉起（审阅轮，时间正序）。
+func reviewRounds(ctx context.Context, q store.Querier, task string) ([]workers.Run, error) {
+	rows, err := q.QueryContext(ctx, `SELECT body FROM task_events WHERE task = ? AND kind = ?
+		AND json_extract(body, '$.why') = ?
+		AND id > (SELECT COALESCE(max(id), 0) FROM task_events WHERE task = ? AND kind = ?) ORDER BY id`,
+		task, workers.RunKind, workers.WhyReview, task, string(ledger.GatePass))
+	if err != nil {
+		return nil, err
 	}
-	if Enqueue == nil {
-		return errors.New("分派任务没接上（gates.Enqueue 由 dispatch 装配）")
+	defer rows.Close()
+	var out []workers.Run
+	for rows.Next() {
+		var body string
+		if err := rows.Scan(&body); err != nil {
+			return nil, err
+		}
+		var r workers.Run
+		if err := json.Unmarshal([]byte(body), &r); err != nil {
+			return nil, fmt.Errorf("任务 %s 的拉起记录坏了：%w", task, err)
+		}
+		out = append(out, r)
 	}
-	return Enqueue(ctx, rt.ID, Actor)
+	return out, rows.Err()
+}
+
+// runExited 查某次拉起有没有退出记录（recordExit 每次退出必记）：没有就是还在跑（或等接管）。
+func runExited(ctx context.Context, q store.Querier, task string, n int) (bool, error) {
+	var done bool
+	err := q.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM task_events WHERE task = ? AND kind = ? AND json_extract(body, '$.n') = ?)`,
+		task, workers.ExitKind, n).Scan(&done)
+	return done, err
 }
 
 // Clip 按字符截断。

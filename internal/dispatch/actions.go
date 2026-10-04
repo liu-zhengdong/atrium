@@ -1,6 +1,7 @@
 package dispatch
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"os"
@@ -107,7 +108,7 @@ type LogChunk struct {
 	Running  bool          `json:"running"`
 }
 
-// hook 接上 watch 的重新入队、定时任务与审阅任务的分派任务、改说明的补充说明（服务进程里，Routes 装配时调）。
+// hook 接上 watch 的重新入队、定时任务与审阅轮的分派任务、改说明的补充说明（服务进程里，Routes 装配时调）。
 func hook(env *app.Env) {
 	watch.Use(watch.Hooks{Requeue: func(ctx context.Context, task string, why watch.Why) error {
 		return Requeue(ctx, env, task, why)
@@ -116,9 +117,8 @@ func hook(env *app.Env) {
 		_, err := Enqueue(ctx, env, task, Options{}, by)
 		return err
 	}
-	gates.Enqueue = func(ctx context.Context, task, by string) error {
-		_, err := Enqueue(ctx, env, task, Options{}, by)
-		return err
+	gates.Review = func(ctx context.Context, task, who string) error {
+		return Review(ctx, env, task, who)
 	}
 	ledger.Tell = func(ctx context.Context, task, text, by string) error {
 		_, err := Tell(ctx, env, task, text, by)
@@ -126,9 +126,94 @@ func hook(env *app.Env) {
 	}
 }
 
-// Requeue 给 watch：失败后换人重新入队（额度用尽、思考耗尽、启动后没进展都换人，不原样重派同一位）；额度用尽与启动后
-// 没进展都标不可用（额度优先：卡在额度报错上的启动超时也标账号），后续任务避开被标记的组合，其他试过的避开；沿用
-// 这一轮的换人上限，满了转受阻；被停的任务不再派。
+// Review 在原任务上拉起一轮审阅（gates 经装配的 gates.Review 调用）：作者刚退出，审阅者就跑在同一台机器上。
+// who 空：按 worker_require 挑（不同工具、不同模型、trust 够、不是作者）；能审的都忙时静默返回，gates.Sweep 下轮再试。
+// who 非空：交回这位审阅者重审（读不出结论的交回计次在 gates，不计作者的重试预算）。
+// 不改任务的执行者与机器登记：打回后 dispatch 沿用作者的登记重派（record 里审阅轮分支）。
+func Review(ctx context.Context, env *app.Env, id, who string) error {
+	db := env.DB
+	t, err := ledger.Get(ctx, db, id)
+	if err != nil {
+		return err
+	}
+	if t.Status != ledger.Running || t.Stage != ledger.StageReview {
+		return api.Conflict("%s 不在审阅阶段（当前 %s/%s），不拉起审阅轮", id, t.Status, t.Stage)
+	}
+	last, err := lastAuthorRun(ctx, db, id)
+	if err != nil {
+		return err
+	}
+	if last == nil {
+		return api.Conflict("%s 还没拉起过执行者，无从审阅", id)
+	}
+	d := get(env)
+	var w workers.Resolved
+	if who != "" {
+		if w, err = workers.Resolve(ctx, db, who); err != nil {
+			return err
+		}
+		req, err := requirement(ctx, db, id)
+		if err != nil {
+			return err
+		}
+		if who == last.Worker {
+			return api.Conflict("作者不能审阅自己的任务 %s", id)
+		}
+		if why := reviewRefusal(req, w.ID, w.Spec.Tool, w.Spec.Model, w.Rules.EffectiveTrust()); why != "" {
+			return api.Conflict("%s 不能重审 %s：%s", who, id, why)
+		}
+		busy, err := busyTools(ctx, db)
+		if err != nil {
+			return err
+		}
+		if w.Adapter.Exclusive && busy[w.Spec.Tool] {
+			return nil
+		}
+	} else {
+		var wait string
+		if w, wait, err = d.chooseReview(ctx, t, last); err != nil {
+			return err
+		}
+		if wait != "" {
+			return nil // 能审的都忙：留到下一轮 Sweep 再挑
+		}
+	}
+	// 机器容量：作者刚退出，同一台一般有空位；满了留在下一轮。
+	need, err := hostNeed(ctx, db, w.Spec, t)
+	if err != nil {
+		return err
+	}
+	need.Task = id // 同一任务的审阅轮接替作者，占用原来的机器容量
+	choice, err := pickHost(ctx, env, need, last.Host)
+	if err != nil {
+		return err
+	}
+	switch choice.Kind {
+	case "queue":
+		return nil
+	case "refuse":
+		return api.Conflict("%s 的审阅轮上不了 %s：%s", id, last.Host, choice.Reason)
+	}
+	if choice.Host != last.Host {
+		return api.Conflict("%s 的审阅轮换不了机器（作者工作目录在 %s）：%s", id, last.Host, choice.Reason)
+	}
+	o := launchOpts{Tokens: last.Tokens, W: w, Host: choice.Host, Risk: cmp.Or(last.Risk, "low"),
+		Why: workers.WhyReview, Review: true, Dir: last.Dir}
+	return d.launch(ctx, t, o)
+}
+
+// chooseReview 挑审阅执行者：档案能接 + 额度富余 + 不正忙 + 满足 worker_require（不同工具、不同模型、trust 够）+ 不是作者。
+// 要求只对审阅轮生效（view 的 review 参数），作者自己的重试不走这里。
+func (d *dispatcher) chooseReview(ctx context.Context, t ledger.Task, last *workers.Run) (workers.Resolved, string, error) {
+	exclude := map[string]bool{}
+	if last.Worker != "" {
+		exclude[last.Worker] = true // 作者不会成为自己的审阅者
+	}
+	return d.choose(ctx, t, Options{Risk: cmp.Or(last.Risk, "low"), Tokens: last.Tokens, Host: last.Host}, exclude, true)
+}
+
+// Requeue 给 watch：失败后重新入队；额度先标不可用，额度/思考沿用换人上限。
+// 额度失败按账号与机器范围避开，其他失败避开已试过的组合；被停的任务不再派。
 func Requeue(ctx context.Context, env *app.Env, id string, why watch.Why) error {
 	t, err := ledger.Get(ctx, env.DB, id)
 	if err != nil {

@@ -188,7 +188,7 @@ func TestBuildPrompt(t *testing.T) {
 	}
 	p = BuildPrompt(PromptInput{Task: "t5", Title: "审阅 t1", Review: true})
 	if strings.Contains(p, "交付结论") {
-		t.Errorf("审阅任务的提示词不该附交付结论：\n%s", p)
+		t.Errorf("审阅轮的提示词不该附交付结论：\n%s", p)
 	}
 	if r := ResumePrompt([]string{"改用 B"}); !strings.Contains(r, "- 改用 B") || !strings.Contains(r, langRule) {
 		t.Errorf("继续的补充：\n%s", r)
@@ -378,7 +378,7 @@ func TestViewIsolated(t *testing.T) {
 	if !env.Paths.Isolated() {
 		t.Fatal("临时目录应算隔离实例")
 	}
-	v, err := d.view(ctx, tk, Options{Risk: "low"}, nil)
+	v, err := d.view(ctx, tk, Options{Risk: "low"}, nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -393,7 +393,7 @@ func TestViewIsolated(t *testing.T) {
 	oldIsolated := isolated
 	isolated = func(*app.Env) bool { return false }
 	t.Cleanup(func() { isolated = oldIsolated })
-	if v, err = d.view(ctx, tk, Options{Risk: "low"}, nil); err != nil || refused(v, "claude") {
+	if v, err = d.view(ctx, tk, Options{Risk: "low"}, nil, false); err != nil || refused(v, "claude") {
 		t.Errorf("用户的服务照常挑内置工具：%+v %v", v, err)
 	}
 }

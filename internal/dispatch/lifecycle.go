@@ -78,7 +78,7 @@ func (d *dispatcher) reap(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		if t.Status != ledger.Running || t.Stage != ledger.StageNone {
+		if t.Status != ledger.Running || t.Stage != ledger.StageNone && !(t.Stage == ledger.StageReview && p.run.Why == workers.WhyReview) {
 			p.setStop("gone")
 			d.kill(ctx, p)
 			return nil

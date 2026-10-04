@@ -12,6 +12,7 @@ import (
 
 	"github.com/liu-zhengdong/atrium/internal/api"
 	"github.com/liu-zhengdong/atrium/internal/app"
+	"github.com/liu-zhengdong/atrium/internal/ledger"
 	"github.com/liu-zhengdong/atrium/internal/pause"
 	"github.com/liu-zhengdong/atrium/internal/store"
 	"github.com/liu-zhengdong/atrium/internal/workers"
@@ -358,6 +359,15 @@ func Pick(ctx context.Context, env *app.Env, need Need, pinned string) (Choice, 
 	busy, err := running(ctx, env.DB)
 	if err != nil {
 		return Choice{}, err
+	}
+	if need.Task != "" {
+		t, err := ledger.Get(ctx, env.DB, need.Task)
+		if err != nil {
+			return Choice{}, err
+		}
+		if t.Status == ledger.Running && busy[t.Host] > 0 {
+			busy[t.Host]-- // 原任务仍占着一个容量；新轮接替退出的上一轮
+		}
 	}
 	pauses, err := env.Pause.List(ctx)
 	if err != nil {

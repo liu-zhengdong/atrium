@@ -62,7 +62,7 @@ func TestRemoteCLISelection(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		v, err := d.view(ctx, ledger.Task{}, Options{Risk: "low"}, nil)
+		v, err := d.view(ctx, ledger.Task{}, Options{Risk: "low"}, nil, false)
 		if err != nil {
 			t.Fatal(err)
 		}

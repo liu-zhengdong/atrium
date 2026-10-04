@@ -29,7 +29,7 @@ func (d *dispatcher) launch(ctx context.Context, t ledger.Task, o launchOpts) er
 	if err != nil {
 		return err
 	}
-	if live.Status != t.Status || live.Stage != ledger.StageNone {
+	if live.Status != t.Status || live.Stage != ledger.StageNone && !(o.Review && live.Stage == ledger.StageReview) {
 		return api.Conflict("%s 已停止或进入下一阶段，不再拉起", t.ID)
 	}
 	o.W, err = CheckExecution(ctx, d.env, o.W, o.Host, o.Tokens)
@@ -38,15 +38,20 @@ func (d *dispatcher) launch(ctx context.Context, t ledger.Task, o launchOpts) er
 	}
 	remote := o.Host != LocalHost
 	var dir, branch string
-	if !remote {
+	switch {
+	case remote: // 审阅轮也在远程机器上跑：只调 gh 看 PR，不另拉工作树
+		if !o.Review && t.Repo != "" {
+			branch = Branch(t.ID)
+		}
+	case o.Review:
+		dir = o.Dir // 作者的工作树，只读
+	default:
 		if dir, branch, err = Workdir(ctx, data, t.ID, t.Repo, t.Dir); err != nil {
 			if isAPI(err) {
 				return err
 			}
 			return api.Conflict("准备工作目录失败：%v", err)
 		}
-	} else if t.Repo != "" {
-		branch = Branch(t.ID)
 	}
 	last, err := workers.LastRun(ctx, db, t.ID)
 	if err != nil {
@@ -62,8 +67,10 @@ func (d *dispatcher) launch(ctx context.Context, t ledger.Task, o launchOpts) er
 	}
 	secrets := o.Secrets
 	in := PromptInput{Task: t.ID, Org: t.Org, Title: t.Title, Profile: o.W.Body, Repo: t.Repo, Dir: t.Dir, Branch: branch}
-	if in.Origin, err = gates.Origin(ctx, originRunner(), t.Repo); err != nil {
-		return err
+	if !o.Review {
+		if in.Origin, err = gates.Origin(ctx, originRunner(), t.Repo); err != nil {
+			return err
+		}
 	}
 	if in.Global, err = org.Principles(); err != nil {
 		return err
@@ -78,7 +85,7 @@ func (d *dispatcher) launch(ctx context.Context, t ledger.Task, o launchOpts) er
 		}
 		in.Points = append(in.Points, org.PointsOver(chain)...)
 	}
-	if t.Skill != "" {
+	if t.Skill != "" && !o.Review {
 		s, err := skillOf(ctx, d.env, t.Skill)
 		if err != nil {
 			return err
@@ -89,22 +96,25 @@ func (d *dispatcher) launch(ctx context.Context, t ledger.Task, o launchOpts) er
 		return err
 	}
 	var upto int64
-	in.Detail, upto, err = ledger.Brief(ctx, db, t)
-	if err != nil {
-		return err
-	}
-	if t.PR != "" {
-		in.Detail += "\n\n已有 PR：" + t.PR + "；在当前任务分支上续做并更新这个 PR。"
-	}
-	if in.Bounces, err = bounceNotes(ctx, db, t.ID); err != nil {
-		return err
-	}
-	// 审阅任务（gates 建的）提示词不附交付结论那条：它的最后一行是审阅结论。
-	if _, in.Review, err = gates.Last(ctx, db, t.ID, gates.KindReviewOf); err != nil {
-		return err
-	}
-	if in.Guide, err = repoGuide(data, t.Repo, dir); err != nil {
-		return err
+	if o.Review {
+		// 审阅轮：详述是审阅材料与结论格式（gates.RoundBrief），不附交回原因、PR 行、仓库约定与交付规则（只读）。
+		if in.Detail, err = gates.RoundBrief(ctx, db, t, originRunner()); err != nil {
+			return err
+		}
+		in.Review = true
+	} else {
+		if in.Detail, upto, err = ledger.Brief(ctx, db, t); err != nil {
+			return err
+		}
+		if t.PR != "" {
+			in.Detail += "\n\n已有 PR：" + t.PR + "；在当前任务分支上续做并更新这个 PR。"
+		}
+		if in.Bounces, err = bounceNotes(ctx, db, t.ID); err != nil {
+			return err
+		}
+		if in.Guide, err = repoGuide(data, t.Repo, dir); err != nil {
+			return err
+		}
 	}
 	prompt := BuildPrompt(in)
 	if o.Session != "" {
@@ -138,7 +148,7 @@ func (d *dispatcher) launch(ctx context.Context, t ledger.Task, o launchOpts) er
 	var wait func() int
 	if remote {
 		clone := ""
-		if t.Repo != "" {
+		if !o.Review && t.Repo != "" { // 审阅轮不另拉工作树，只在那台机器上跑 gh
 			repo, err := RemoteRepo(ctx, t.Repo)
 			if err != nil {
 				return api.Conflict("%s 派不到远程：%v", t.ID, err)

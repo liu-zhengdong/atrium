@@ -20,7 +20,7 @@ import (
 )
 
 // 审阅任务回避拉起过被审任务的执行者：t877 第 4 轮派了 t856 的执行者 codex 去审，gates 判不合格，白跑一轮。
-// 有没拉起过的候选就挑它；点名拉起过的入队就拒；全被回避时转受阻，理由写明回避。
+// 审阅轮挑人和点名均拒绝作者；所有候选均回避时写明原因。
 func TestReviewRecusal(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
@@ -60,7 +60,7 @@ func TestReviewRecusal(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		rt, _ := ledger.Add(ctx, db, ledger.NewTask{Title: "审阅 " + src.ID, Parent: src.ID}, "gates")
+		rt := src
 		raw, _ := json.Marshal(gates.Requirement{NotTool: "claude", MinTrust: "medium", NotWorkers: launched})
 		if err := ledger.Record(ctx, db, rt.ID, gates.KindRequire, "gates", string(raw)); err != nil {
 			t.Fatal(err)
@@ -74,7 +74,7 @@ func TestReviewRecusal(t *testing.T) {
 	if strings.Join(req.NotWorkers, ",") != "rev1,rev2" {
 		t.Fatalf("回避名单应是拉起过的执行者去重：%v", req.NotWorkers)
 	}
-	v, err := d.view(ctx, rt, Options{Risk: "low"}, nil)
+	v, err := d.view(ctx, rt, Options{Risk: "low"}, nil, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,23 +86,21 @@ func TestReviewRecusal(t *testing.T) {
 			t.Fatalf("%s 应因回避被排除：%+v", c.ID, c)
 		}
 	}
-	if _, err := Enqueue(ctx, env, rt.ID, Options{Worker: "rev1", Risk: "low"}, "a9"); err == nil || !strings.Contains(err.Error(), gates.RecusedWhy) {
-		t.Fatalf("点名拉起过被审任务的执行者应拒绝入队：%v", err)
+	w, err := workers.Resolve(ctx, db, "rev1")
+	if err != nil {
+		t.Fatal(err)
 	}
-
+	if why := reviewRefusal(req, w.ID, w.Spec.Tool, w.Spec.Model, w.Rules.EffectiveTrust()); !strings.Contains(why, gates.RecusedWhy) {
+		t.Fatal(why)
+	}
 	launch("rev3")
 	rt = review()
-	if _, err := Enqueue(ctx, env, rt.ID, Options{Risk: "low"}, "gates"); err != nil {
+	v, err = d.view(ctx, rt, Options{Risk: "low"}, nil, true)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := d.tryOnce(ctx, item{Task: mustGet(t, db, rt.ID), Opts: Options{Risk: "low"}}); err != nil {
-		t.Fatal(err)
-	}
-	got := mustGet(t, db, rt.ID)
-	var note string
-	db.QueryRowContext(ctx, `SELECT json_extract(body, '$.note') FROM task_events WHERE task = ? AND kind = 'block' ORDER BY id DESC LIMIT 1`, rt.ID).Scan(&note)
-	if got.Status != ledger.Blocked || !strings.Contains(note, "没有能接的执行者") || !strings.Contains(note, "rev1、rev2、rev3 拉起过被审任务，审阅回避") {
-		t.Fatalf("全被回避应转受阻并写明回避：%s %q", got.Status, note)
+	if v.Recommended != "" || !strings.Contains(v.Reason, "rev1、rev2、rev3 拉起过被审任务，审阅回避") {
+		t.Fatalf("%+v", v)
 	}
 }
 

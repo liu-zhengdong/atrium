@@ -99,7 +99,7 @@ func queued(ctx context.Context, q store.Querier) ([]item, error) {
 			if err := json.Unmarshal([]byte(r.opts.String), &it.Opts); err != nil {
 				it.Err = err
 			}
-		} else if last, err := workers.LastRun(ctx, q, r.id); err != nil {
+		} else if last, err := lastAuthorRun(ctx, q, r.id); err != nil {
 			it.Err = err
 		} else if last != nil {
 			// 交回原执行者：同一执行者、同一台机器（工作目录在那里，接不了就等或转受阻，不换机）、同样的风险与凭据。
@@ -204,13 +204,6 @@ func Enqueue(ctx context.Context, env *app.Env, id string, o Options, actor stri
 		if why := r.Rules.Refusal(o.Risk, false); why != "" {
 			return t, api.Conflict("%s 接不了：%s", r.ID, why).WithNext("atrium task run " + id + " --dry-run --risk " + o.Risk)
 		}
-		req, err := requirement(ctx, db, id)
-		if err != nil {
-			return t, err
-		}
-		if why := reviewRefusal(req, r.ID, r.Spec.Tool, r.Spec.Model, r.Rules.EffectiveTrust()); why != "" {
-			return t, api.Conflict("%s 接不了：%s", r.ID, why).WithNext("atrium task run " + id + " --dry-run --risk " + o.Risk)
-		}
 		o.Worker = r.ID
 	}
 	note := summary(o)
@@ -274,7 +267,7 @@ func union(a, b []string) []string {
 	return out
 }
 
-// requirement 取审阅任务对执行者的要求（gates 建审阅任务时记在经历 worker_require）；不是审阅任务返回零值，什么都不排除。
+// require 是审阅轮对执行者的要求（gates 记在原任务经历 worker_require）：不同工具、不同模型、trust 够。
 func requirement(ctx context.Context, q store.Querier, task string) (gates.Requirement, error) {
 	var r gates.Requirement
 	body, ok, err := gates.Last(ctx, q, task, gates.KindRequire)

@@ -42,7 +42,7 @@ func TestQuotaSummaryNotSelection(t *testing.T) {
 			ON CONFLICT(account) DO UPDATE SET body = excluded.body`, "openquota", "openquota", body, store.Now()); err != nil {
 			t.Fatal(err)
 		}
-		v, err := d.view(ctx, ledger.Task{}, Options{Risk: "low"}, nil)
+		v, err := d.view(ctx, ledger.Task{}, Options{Risk: "low"}, nil, false)
 		if err != nil {
 			t.Fatal(err)
 		}

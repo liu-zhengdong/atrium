@@ -3,6 +3,7 @@ package dispatch
 import (
 	"cmp"
 	"context"
+	"encoding/json"
 	"slices"
 	"time"
 
@@ -15,6 +16,9 @@ func tries(runs []workers.Run) (same, switches int, tried map[string]bool) {
 	tried = map[string]bool{}
 	for i := len(runs) - 1; i >= 0; i-- {
 		r := runs[i]
+		if r.Why == workers.WhyReview {
+			continue
+		}
 		tried[r.Worker] = true
 		switch r.Why {
 		case workers.WhySame:
@@ -65,4 +69,21 @@ func markUnavailable(ctx context.Context, db *store.DB, run workers.Run, sig wor
 		return "", err
 	}
 	return "；已标记 " + m.Target() + " 不可用（" + m.Text() + "）", nil
+}
+
+// lastAuthorRun 取最近作者轮；审阅轮不覆盖作者重做所需的执行者、机器与选项。
+func lastAuthorRun(ctx context.Context, q store.Querier, task string) (*workers.Run, error) {
+	var body string
+	err := q.QueryRowContext(ctx, `SELECT body FROM task_events WHERE task = ? AND kind = ? AND json_extract(body, '$.why') != ? ORDER BY id DESC LIMIT 1`, task, workers.RunKind, workers.WhyReview).Scan(&body)
+	if store.IsNotFound(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var r workers.Run
+	if err := json.Unmarshal([]byte(body), &r); err != nil {
+		return nil, err
+	}
+	return &r, nil
 }

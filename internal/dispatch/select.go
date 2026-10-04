@@ -11,7 +11,8 @@ import (
 )
 
 // view 收集事实并挑执行者（task run --dry-run 与自动分派任务同一份）。
-func (d *dispatcher) view(ctx context.Context, t ledger.Task, o Options, exclude map[string]bool) (PickView, error) {
+// review 为真时应用 worker_require（审阅轮挑审阅执行者）：不同工具、不同模型、trust 够。
+func (d *dispatcher) view(ctx context.Context, t ledger.Task, o Options, exclude map[string]bool, review bool) (PickView, error) {
 	risk, tokens := o.Risk, o.Tokens
 	db := d.env.DB
 	var preferred []string
@@ -67,7 +68,7 @@ func (d *dispatcher) view(ctx context.Context, t ledger.Task, o Options, exclude
 			Exclusive: r.Adapter.Exclusive, Stat: workers.Count(stats[workers.Combo(r.ID)]), Fails: workers.Fails(stats[workers.Combo(r.ID)], ShakyWindow)}
 		f.Cost = r.Rules
 		f.Prefer = r.Rules.Prefer
-		if available.Marked(r.Spec) {
+		if !review && available.Marked(r.Spec) {
 			delete(exclude, r.ID)
 		}
 		if _, builtin := workers.Builtin(r.Spec.Tool); iso && builtin {
@@ -79,6 +80,9 @@ func (d *dispatcher) view(ctx context.Context, t ledger.Task, o Options, exclude
 			}
 			// 满载只影响何时拉起，不影响工具与任务能否匹配。
 			need.Urgent = true
+			if review {
+				need.Task = t.ID
+			}
 			choice, err := pickHost(ctx, d.env, need, o.Host)
 			if err != nil {
 				return PickView{}, err
@@ -108,16 +112,18 @@ func (d *dispatcher) view(ctx context.Context, t ledger.Task, o Options, exclude
 		}
 		facts = append(facts, f)
 	}
-	req, err := requirement(ctx, db, t.ID)
-	if err != nil {
-		return PickView{}, err
-	}
-	for i := range facts {
-		f := &facts[i]
-		if why := reviewRefusal(req, f.ID, f.Tool, f.Model, f.Trust); why != "" && f.Refusal == "" {
-			f.Refusal = why
+	if review {
+		req, err := requirement(ctx, db, t.ID)
+		if err != nil {
+			return PickView{}, err
 		}
-		f.Recused = req.Recused(f.ID)
+		for i := range facts {
+			f := &facts[i]
+			if why := reviewRefusal(req, f.ID, f.Tool, f.Model, f.Trust); why != "" && f.Refusal == "" {
+				f.Refusal = why
+			}
+			f.Recused = req.Recused(f.ID)
+		}
 	}
 	busy, err := busyTools(ctx, db)
 	if err != nil {

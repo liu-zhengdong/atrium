@@ -114,7 +114,7 @@ func TestUserAcceptsPR(t *testing.T) {
 	}
 }
 
-// 验收人是负责人：负责人能判；审阅任务是运行时建的，不等人验收。
+// 验收人是负责人：负责人能判。
 func TestLeaderAcceptsAfterReview(t *testing.T) {
 	e := setup(t)
 	o := e.dept(org.AcceptLeader)
@@ -123,21 +123,8 @@ func TestLeaderAcceptsAfterReview(t *testing.T) {
 	e.gh.Open("t1-work", goodBody)
 	task := e.inDept(o, "o/r", "claude+haiku", dir) // 低信任：先审阅
 	e.sweep()
-	ref, _, _ := gates.Last(e.ctx, e.db, task.ID, gates.KindReviewer)
-	if rt := e.get(ref); rt.Org != o {
-		t.Fatalf("审阅任务应在同一部门：%+v", rt)
-	}
-	e.db.ExecContext(e.ctx, `DELETE FROM queue WHERE task = ?`, ref)
-	ledger.Apply(e.ctx, e.db, ref, ledger.Event{Kind: ledger.Start}, "dispatch", "")
-	w := "codex+gpt"
-	ledger.SetFacts(e.ctx, e.db, ref, ledger.Facts{Worker: &w}, "dispatch")
-	ledger.Record(e.ctx, e.db, ref, gates.KindResult, "dispatch", "审阅结论：通过")
-	ledger.Record(e.ctx, e.db, ref, gates.KindWorktree, "dispatch", `{"host":"h1","dir":"`+filepath.ToSlash(t.TempDir())+`"}`)
-	e.exit(ref)
+	e.reviewExit(task.ID, "审阅结论：通过")
 	e.sweep()
-	if got := e.state(ref); got != "done/gate" {
-		t.Fatalf("审阅任务不等验收，应直接完成：%s", got)
-	}
 	if got := e.state(task.ID); got != "running/accept" {
 		t.Fatalf("审阅过了应等负责人验收：%s %s", got, e.lastNote(task.ID))
 	}
@@ -204,7 +191,7 @@ func TestAcceptDir(t *testing.T) {
 }
 
 // 提示词里怎么交由交付方式定：GitHub 仓库更新或新开 PR，本机仓库只提交不推送，没有仓库不提 PR。
-// 审阅任务不附交付结论那条：它的最后一行是审阅结论，两条都写会让审阅结论不在末行（t877 第 3 轮）。
+// 审阅轮不附交付结论那条：它的最后一行是审阅结论，两条都写会让审阅结论不在末行（t877 第 3 轮）。
 func TestPromptRules(t *testing.T) {
 	pr := strings.Join(gates.PromptRules("o/r", "", "", "task-t1", "", false), "\n")
 	if !strings.Contains(pr, "当前任务工作树的分支 task-t1 上提交、推送") ||
@@ -235,6 +222,6 @@ func TestPromptRules(t *testing.T) {
 	}
 	review := strings.Join(gates.PromptRules("", "", "", "", "", true), "\n")
 	if strings.Contains(review, "交付结论") {
-		t.Fatalf("审阅任务不该附交付结论：%s", review)
+		t.Fatalf("审阅轮不该附交付结论：%s", review)
 	}
 }

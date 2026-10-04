@@ -48,8 +48,8 @@ type landed struct {
 
 var noRepoRules = []string{"这件活没有仓库：在当前目录干，交付物是最后一条消息里的结论（写清调查结果与依据）。"}
 
-// endRule 没有改动可查的交付（message、dir），交付检查只凭最后一行判（ParseEnding）。分派任务时分不出会不会有改动，所以除审阅任务外一律附。
-// 审阅任务不附：它的最后一行是审阅结论（ReviewBrief 与 ParseReview），附了这条执行者会把交付结论写在审阅结论之后，原任务的 ParseReview 严格末行读不到（t877 第 3 轮）。
+// endRule 没有改动可查的交付（message、dir），交付检查只凭最后一行判（ParseEnding）。分派任务时分不出会不会有改动，所以除审阅轮外一律附。
+// 审阅轮不附：它的最后一行是审阅结论（ReviewBrief 与 ParseReview），附了这条执行者会把交付结论写在审阅结论之后，读结论严格末行读不到（t877 第 3 轮）。
 // noLandRule 是 pr 交付不让执行者做的应用动作；发布授权任务（ReleaseAuthorized）换成 releaseRule，授权内容以详述那一行为准。
 const (
 	noLandRule  = "不要合入、不要改默认分支、不要发版。"
@@ -110,7 +110,7 @@ func localRepo(repo, origin string) bool {
 
 // PromptRules 是分派任务时提示词里怎么交（dispatch 附进「通用约束」）；origin 见 Origin。分派任务时还没有改动，有仓库按要改代码写
 // （规则里说了不用改代码时怎么交）；choice 与 message 分派任务时分不出来，提示词相同，要不要写 choice.json 由任务详述（调研定时任务）说。
-// detail 是任务详述：发布授权任务把不让合入、发版那句换成 releaseRule。review 是审阅任务：不附交付结论那条（见 endRule）。
+// detail 是任务详述：发布授权任务把不让合入、发版那句换成 releaseRule。review 是审阅轮：不附交付结论那条（见 endRule）。
 func PromptRules(repo, dir, origin, branch, detail string, review bool) []string {
 	d := pick(repo, dir, origin, true, false)
 	release := ReleaseAuthorized(detail)
@@ -141,12 +141,9 @@ func Origin(ctx context.Context, r Runner, repo string) (string, error) {
 }
 
 // deliveryOf 查齐事实（本机仓库的 origin、工作目录根的 choice.json，交付检查时再查工作树有没有改动）后按 pick 选交付方式。
-// 任务级验收也覆盖零 diff：这类交付没有登记 PR，验收时仍按工作树事实选 message。
+// 任务级验收也覆盖零 diff：没有登记 PR 时按工作树事实选 message。
+// 审阅轮不走这里：它的回复由 review 直接读（roundResult + ParseReview），不查工作树或 choice.json。
 func (g *Gate) deliveryOf(ctx context.Context, t ledger.Task, atGate bool) (Delivery, error) {
-	// 审阅只交服务已记下的回复，不查执行者机器上的工作树或 choice.json。
-	if _, review, err := Last(ctx, g.DB, t.ID, KindReviewOf); err != nil || review {
-		return deliverMessage, err
-	}
 	switch {
 	case t.Repo != "":
 		origin, err := Origin(ctx, g.R, t.Repo)
@@ -192,15 +189,10 @@ func (g *Gate) choiceFile(ctx context.Context, t ledger.Task) ([]byte, error) {
 // checkEnding 是没有改动可查的交付（message、dir）的交付检查：按执行者这一轮最后的回复里的交付结论判（ParseEnding）。
 // 没做成、受阻、没写都转受阻交处理人读回复定（受阻是等外部依赖，不算失败；其余补说明重派或收尾），不交回执行者重跑同一份提示词。
 // 受阻说明以执行者的结论开头：没有改动是这种交付的常态，不是受阻的原因（t923、t1000 曾被读成「没 diff 被拦」）。
-// 审阅任务看的是审阅结论（reviewEnding），读不出就交回审阅者，原任务不卡在审阅阶段。
 func (g *Gate) checkEnding(ctx context.Context, t ledger.Task) (checked, error) {
-	_, review, err := Last(ctx, g.DB, t.ID, KindReviewOf)
+	reply, err := roundResult(ctx, g.DB, t.ID)
 	if err != nil {
 		return checked{}, err
-	}
-	reply, err := roundResult(ctx, g.DB, t.ID)
-	if err != nil || review {
-		return reviewEnding(reply), err
 	}
 	where := "没有仓库"
 	switch {
@@ -226,19 +218,6 @@ func (g *Gate) checkEnding(ctx context.Context, t ledger.Task) (checked, error) 
 		return checked{block: "执行者交付结论：" + word + "（" + why + "）" + next}, nil
 	}
 	return checked{note: where + "，交付结论：完成，结论在最后的回复里"}, nil
-}
-
-// reviewEnding 判审阅任务这一轮的回复读不读得出审阅结论（纯函数，与原任务读结论同一个 ParseReview）。
-// 读不出交回审阅者重审（交回计次，第 3 次转受阻）：回复为空多是取回复或登录出错，重派即可，不该让原任务等人重开审阅任务。
-func reviewEnding(reply string) checked {
-	const want = "最后一行单独写 `审阅结论：通过` 或 `审阅结论：打回`，问题写在它上面，它之后不再写别的"
-	if strings.TrimSpace(reply) == "" {
-		return checked{reasons: []string{"这一轮没记到审阅者的最后回复；审阅完在最后的回复里" + want}}
-	}
-	if _, _, ok := ParseReview(reply); !ok {
-		return checked{reasons: []string{"最后的回复读不出审阅结论：" + want}}
-	}
-	return checked{note: "审阅结论在最后的回复里"}
 }
 
 // CurrentReply 是执行者这一轮（最近一次拉起之后）最后的回复；这一轮没回复为空，不拿上一轮的充数。

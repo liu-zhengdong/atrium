@@ -258,110 +258,7 @@ func TestLocalCache(t *testing.T) {
 	}
 }
 
-func TestPace(t *testing.T) {
-	now := int64(1_800_000_000_000)
-	// 周窗 7 天过了一半，已用 30%：富余 20。
-	r := Reading{Account: "claude", ReadAt: now, Windows: []Window{
-		{ID: "session", Label: "Session", Used: 80, Period: 5 * hour},
-		{ID: "weekly", Label: "Weekly", Used: 30, ResetsAt: now + week*500, Period: week},
-	}}
-	p := PaceOf(r, now)
-	if *p.UsedPercent != 30 || *p.ElapsedPct != 50 || *p.SparePercent != 20 || *p.ShortUsedPct != 80 || *p.HoursToReset != 84 || p.Stale {
-		t.Fatalf("%+v", p)
-	}
-	// 零用量、没有重置时刻：周期进度留空。
-	r.Windows[1].Used = 0
-	if p := PaceOf(r, now); p.ElapsedPct != nil || p.SparePercent != nil {
-		t.Error("零用量应留空")
-	}
-	if p := PaceOf(r, now+11*60_000); !p.Stale {
-		t.Error("超过 10 分钟应为旧数")
-	}
-	if round1(-0.04) != 0 || round1(1.25) != 1.3 {
-		t.Error("round1")
-	}
-}
-
-func TestMergeHosts(t *testing.T) {
-	now := int64(10 * lastGood)
-	good := func(host, fp string, at int64) Stored {
-		return Stored{Host: host, Reading: Reading{Account: "claude", OK: true, Finger: fp, ReadAt: at,
-			Windows: []Window{{ID: "weekly", Used: 10, Period: week}}}}
-	}
-	bad := func(host string, at int64) Stored {
-		return Stored{Host: host, Reading: Reading{Account: "claude", Reason: "限流", ReadAt: at}}
-	}
-	cases := []struct {
-		name       string
-		rows       []Stored
-		from, note string
-	}{
-		{"本机优先", []Stored{good("h2", "B", now), good("h1", "A", now-100)}, "h1", "h2 的来源读数未合入摘要（账号/共享池关系未知）"},
-		{"本机没有取远程", []Stored{good("h2", "B", now)}, "h2", "读自 h2"},
-		{"本机失败沿用上次", []Stored{good("h1", "A", now-100), bad("h1", now)}, "h1", "本次读不到（限流），沿用上次读数"},
-		{"太旧不用", []Stored{good("h1", "A", now-lastGood-1), bad("h1", now)}, "", "读不到：限流"},
-		{"只有远程失败", []Stored{bad("h3", now)}, "", "读不到：限流（h3）"},
-	}
-	for _, c := range cases {
-		l := mergeHosts(c.rows, "h1", now)["claude"]
-		if l.From != c.from || l.Note != c.note {
-			t.Errorf("%s: from=%q note=%q", c.name, l.From, l.Note)
-		}
-	}
-}
-
-func TestLinesAndSpare(t *testing.T) {
-	f := func(v float64) *float64 { return &v }
-	builtin := map[string]Line{
-		"claude": {Pace: Pace{Account: "claude", UsedPercent: f(50), SparePercent: f(10)}, Source: "builtin"},
-		"codex":  {Pace: Pace{Account: "codex"}, Source: "builtin", Note: "读不到：没有找到 Codex 登录"},
-	}
-	oq := []Pace{{Account: "codex", UsedPercent: f(90), SparePercent: f(-5)}, {Account: "kimi", UsedPercent: f(10), SparePercent: f(30)}, {Account: "claude", UsedPercent: f(1)}}
-	lines := Lines(builtin, oq)
-	var order []string
-	byAcct := map[string]Line{}
-	for _, l := range lines {
-		order = append(order, l.Account)
-		byAcct[l.Account] = l
-	}
-	if !reflect.DeepEqual(order[:3], []string{"kimi", "claude", "codex"}) || len(lines) != len(Accounts) {
-		t.Fatalf("排序：%v", order)
-	}
-	if byAcct["claude"].Source != "builtin" || byAcct["codex"].Source != "openquota" || byAcct["codex"].Note != "自带读不到：没有找到 Codex 登录" {
-		t.Errorf("来源：%+v %+v", byAcct["claude"], byAcct["codex"])
-	}
-	if byAcct["cursor"].Note != "没有额度数据" {
-		t.Error("缺数据行不对")
-	}
-	// 富余就是 quota 一览里那一行的富余（同一个数）；能不能派另看给用户留的份额。
-	cases := []struct {
-		acct  string
-		spare *float64
-		stop  string
-	}{{"claude", f(10), ""}, {"codex", f(-5), "额度见底：账号 codex 已用 90.0%，须给用户留 20%"},
-		{"kimi", f(30), ""}, {"cursor", nil, ""}}
-	for _, c := range cases {
-		s := SpareOf(byAcct[c.acct], 20)
-		if !reflect.DeepEqual(s.Percent, c.spare) || s.Percent != byAcct[c.acct].SparePercent || s.Stop != c.stop {
-			t.Errorf("%s: %+v", c.acct, s)
-		}
-	}
-	for _, c := range []struct {
-		name string
-		l    Line
-		stop bool
-	}{
-		{"已用正好到留给用户的线", Line{Pace: Pace{Account: "claude", UsedPercent: f(80)}}, true},
-		{"差一点", Line{Pace: Pace{Account: "claude", UsedPercent: f(79.9)}}, false},
-		{"短窗用光", Line{Pace: Pace{Account: "claude", UsedPercent: f(10), ShortUsedPct: f(100)}}, true},
-	} {
-		if s := SpareOf(c.l, 20); (s.Stop != "") != c.stop {
-			t.Errorf("%s：%+v", c.name, s)
-		}
-	}
-}
-
-func TestRecordAndLast(t *testing.T) {
+func TestRecordAndReserve(t *testing.T) {
 	db, err := store.Open(filepath.Join(t.TempDir(), "a.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -397,27 +294,18 @@ func TestRecordAndLast(t *testing.T) {
 	}
 	db.Exec(`INSERT INTO quota_settings (name, value) VALUES ('reserve_percent', 50)`)
 	env := &app.Env{DB: db, Paths: config.Paths{Data: t.TempDir()}}
-	// 隔离实例没有后台读取，一览只摆存下的读数。
+	// 隔离实例没有后台读取，只保留缓存与设置。
 	if err := loop(ctx, env); err != nil {
 		t.Fatal(err)
 	}
-	ov, err := Last(ctx, env)
-	if err != nil {
-		t.Fatal(err)
-	}
-	spares := map[string]Spare{}
-	for _, l := range ov.Lines {
-		spares[l.Account] = SpareOf(l, ov.Reserve)
-	}
-	if ov.Reserve != 50 || spares["claude"].Stop != "" || spares["claude"].Stale || len(ov.Notes) != 1 {
-		t.Fatalf("%+v %+v", ov, spares)
-	}
-	if !strings.Contains(Format(ov), "claude") {
-		t.Error("Format")
+	reserve, err := Reserve(ctx, db)
+	all, readErr := Cached(ctx, db)
+	if err != nil || readErr != nil || reserve != 50 || len(all) != 4 {
+		t.Fatalf("reserve=%d rows=%d err=%v readErr=%v", reserve, len(all), err, readErr)
 	}
 }
 
-// 后台读取：本机自带读数与 OpenQuota 都存进库，重启后（新的读取器）一览照样有；OpenQuota 到期才再跑。
+// 后台读取：本机自带读数与 OpenQuota 都存进库，重启后（新的读取器）缓存照样有；OpenQuota 到期才再跑。
 func TestPoller(t *testing.T) {
 	db, err := store.Open(filepath.Join(t.TempDir(), "a.db"))
 	if err != nil {
@@ -425,7 +313,6 @@ func TestPoller(t *testing.T) {
 	}
 	defer db.Close()
 	ctx := context.Background()
-	env := &app.Env{DB: db, Paths: config.Paths{Data: t.TempDir()}}
 	d := fakeDeps(t, map[string]string{"/home/a/.local/share/opencode/auth.json": `{"opencode-go":{"key":"k"}}`},
 		func(w http.ResponseWriter, r *http.Request) {
 			w.Write([]byte(`{"usage":{"rolling":{"percent":1},"weekly":{"percent":2},"monthly":{"percent":3}}}`))
@@ -442,28 +329,16 @@ func TestPoller(t *testing.T) {
 		}
 		return []Pace{{Account: "kimi", UsedPercent: &used}}, nil
 	}}
-	line := func(acct string) Line {
-		ov, err := Last(ctx, env)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, l := range ov.Lines {
-			if l.Account == acct {
-				return l
-			}
-		}
-		t.Fatalf("没有 %s", acct)
-		return Line{}
-	}
 	if err := p.round(ctx, db); err != nil {
 		t.Fatal(err)
 	}
-	if l := line("opencode"); l.Source != "builtin" || l.UsedPercent == nil {
-		t.Errorf("自带读数应存下：%+v", l)
+	all, err := Cached(ctx, db)
+	if err != nil || len(all) != 3 {
+		t.Fatalf("本机假读数未存下：%v %d", err, len(all))
 	}
-	// 服务重启：内存里什么都没有，一览仍有 OpenQuota 的读数。
-	if l := line("kimi"); l.Source != "openquota" || l.UsedPercent == nil || *l.UsedPercent != 30 {
-		t.Errorf("OpenQuota 读数应落盘：%+v", l)
+	oq, err := openquotaStored(ctx, db)
+	if err != nil || len(oq.Rows) != 1 || *oq.Rows[0].UsedPercent != 30 {
+		t.Fatalf("OpenQuota 假读数未存下：%+v %v", oq, err)
 	}
 	now = now.Add(time.Minute)
 	p.round(ctx, db)
@@ -475,31 +350,13 @@ func TestPoller(t *testing.T) {
 	if err := p.round(ctx, db); err != nil || runs != 2 {
 		t.Fatalf("到期应再跑：%v %d", err, runs)
 	}
-	ov, _ := Last(ctx, env)
-	if len(ov.Notes) != 2 || ov.Notes[0] != "OpenQuota 读取失败" || line("kimi").Source != "openquota" {
-		t.Errorf("读不到时写原因：%+v", ov.Notes)
+	oq, err = openquotaStored(ctx, db)
+	if err != nil || oq.Error != "OpenQuota 读取失败" || len(oq.Rows) != 1 || *oq.Rows[0].UsedPercent != 30 {
+		t.Fatalf("失败应保留旧读数：%+v %v", oq, err)
 	}
 	// OpenQuota 那一行不混进各台读数。
-	all, err := stored(ctx, db)
+	all, err = stored(ctx, db)
 	if err != nil || len(all) != 3 {
 		t.Errorf("各台读数应是三家自带：%v %d", err, len(all))
-	}
-}
-
-func TestFormatNoData(t *testing.T) {
-	used := 40.0
-	ov := Overview{Reserve: 20, Lines: []Line{
-		{Pace: Pace{Account: "claude", UsedPercent: &used}},
-		{Pace: Pace{Account: "kimi"}},
-		{Pace: Pace{Account: "grok"}, Note: "没登录"},
-	}}
-	out := Format(ov)
-	for _, l := range strings.Split(strings.TrimSpace(out), "\n") {
-		if strings.TrimSpace(l) == "" || strings.TrimSpace(l) == "kimi" {
-			t.Errorf("不该有空行或只有账号名的行：\n%s", out)
-		}
-	}
-	if !strings.Contains(out, "没有额度数据：kimi、grok（没登录）") || !strings.Contains(out, "claude") {
-		t.Errorf("没数据的应汇成一行：\n%s", out)
 	}
 }

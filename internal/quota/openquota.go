@@ -72,7 +72,7 @@ func keychain(goos string, env map[string]string) func(service, account string) 
 // OpenquotaBin 是 OpenQuota 命令行的缺省位置；ATRIUM_OPENQUOTA_BIN 可覆盖，否则再按 PATH 找 openquota。
 const OpenquotaBin = "/Applications/OpenQuota.app/Contents/MacOS/openquota"
 
-// Pace 是 `openquota pace --json` 的一行（自带读数也折成同样的结构）。
+// Pace 是 `openquota pace --json` 的一行（过渡期保留读取和存储）。
 type Pace struct {
 	SourceFacts
 	Account       string   `json:"providerId"`
@@ -116,28 +116,4 @@ func readOpenquota(ctx context.Context, env map[string]string) ([]Pace, error) {
 		return nil, err
 	}
 	return rows, nil
-}
-
-// agePaces 只按原成功 refreshedAt 在消费时重算年龄；轮询不续鲜。
-// 摘要仍仅展示；没有身份/完整窗口/质量事实不能用于当前套餐判定。
-func agePaces(rows []Pace, now int64) []Pace {
-	out := append([]Pace(nil), rows...)
-	for i := range out {
-		p := &out[i]
-		if p.Remembered || p.ErrorKind != nil || p.RefreshOutcome == "failed" ||
-			p.DataQuality == "refreshFailed" || p.DataQuality == "empty" ||
-			p.DataQuality == "remembered" || p.DataQuality == "stale" {
-			p.Stale = true
-		}
-		at, err := time.Parse(time.RFC3339, p.RefreshedAt)
-		if err != nil || at.UnixMilli() > now {
-			p.Stale = true
-			p.SparePercent = nil
-			continue
-		}
-		age := now - at.UnixMilli()
-		p.RefreshedAgoH = round1(float64(age) / 3600000)
-		p.Stale = p.Stale || age >= staleAfter
-	}
-	return out
 }

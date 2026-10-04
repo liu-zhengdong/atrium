@@ -1,9 +1,5 @@
-// Package quota 是额度：自带读取 Claude Code、Codex、OpenCode Go 的用量（读本机已登录凭据调供应商用量接口，只读），
-// 其余账号本机有 OpenQuota 就用 `openquota pace --json` 补；远程机器上报的读数按机器/provider 保留。
-// 读取只在服务的后台循环里做（loop），读数存 quota_cache；分派任务、网页、命令都只取存下的读数（Last）。富余 = 周期已过 − 已用，不扣给用户留的份额（缺省 20%）；已用到 100 − 留给用户的份额 就不再派（SpareOf）。「工具+模型@机器」撞了额度的标记在 workers。
-//
-// Spares/Last 仅展示摘要，不作跨机器选择依据。给 hosts：Local（代理读本机）、Record（服务收远程读数）。
-// 派活避让只认 magpie 读数（magpie.go），它与上面同一条读取、上报与存储，但不进一览。
+// Package quota 负责额度后台读取、缓存与派活感知；余量展示由 OpenQuota/magpie 提供。
+// 派活避让只认 magpie 读数，旧厂商读取在过渡期保留；设置只管理给用户预留的份额。
 package quota
 
 import (
@@ -21,7 +17,6 @@ import (
 
 	"github.com/liu-zhengdong/atrium/internal/api"
 	"github.com/liu-zhengdong/atrium/internal/app"
-	"github.com/liu-zhengdong/atrium/internal/cli"
 	"github.com/liu-zhengdong/atrium/internal/platform"
 	"github.com/liu-zhengdong/atrium/internal/store"
 )
@@ -188,7 +183,7 @@ type oqStored struct {
 }
 
 // poller 是服务的后台读取：本机自带读取到期就读（到期由 Local 管），OpenQuota 每 okTTL 跑一次，读数都存进 quota_cache。
-// 分派任务、网页、命令只取存下的读数（Last），不等读取。
+// 派活感知只取存下的读数，不等读取。
 type poller struct {
 	local *Local
 	oq    func(context.Context) ([]Pace, error)
@@ -280,173 +275,8 @@ func openquotaStored(ctx context.Context, q store.Querier) (oqStored, error) {
 	return st, nil
 }
 
-// ---- 读一览 ----
-
-// Overview 是 quota 一览。
-type Overview struct {
-	Lines   []Line   `json:"lines"`
-	Reserve int      `json:"reserve"`
-	Notes   []string `json:"notes"`
-}
-
-// Last 是存下的读数的一览：不去读，马上返回（读取由后台循环做）。
-func Last(ctx context.Context, env *app.Env) (Overview, error) {
-	disabled, err := Disabled(ctx, env.DB)
-	if err != nil {
-		return Overview{}, err
-	}
-	all, err := stored(ctx, env.DB)
-	if err != nil {
-		return Overview{}, err
-	}
-	oq, err := openquotaStored(ctx, env.DB)
-	if err != nil {
-		return Overview{}, err
-	}
-	reserve, err := Reserve(ctx, env.DB)
-	if err != nil {
-		return Overview{}, err
-	}
-	ov := Overview{Reserve: reserve, Notes: []string{}}
-	if oq.Error != "" {
-		ov.Notes = append(ov.Notes, oq.Error)
-	}
-	if env.Paths.Isolated() {
-		ov.Notes = append(ov.Notes, "隔离实例不读本机额度（自带读取与 OpenQuota）")
-	}
-	all = slices.DeleteFunc(all, func(s Stored) bool { return s.Account == MagpieAccount })
-	for _, line := range Lines(mergeHosts(all, LocalHost, store.Now()), agePaces(oq.Rows, store.Now())) {
-		if !disabled[line.Account] {
-			ov.Lines = append(ov.Lines, line)
-		}
-	}
-	return ov, nil
-}
-
-// Spares 给分派任务：每个账号的富余与能不能派（见 SpareOf）。
-func Spares(ctx context.Context, env *app.Env) (map[string]Spare, error) {
-	ov, err := Last(ctx, env)
-	if err != nil {
-		return nil, err
-	}
-	out := map[string]Spare{}
-	for _, l := range ov.Lines {
-		out[l.Account] = SpareOf(l, ov.Reserve)
-	}
-	return out, nil
-}
-
 // ---- 接入 ----
 
 func Module() app.Module {
 	return app.Module{Name: "quota", Commands: Commands, Routes: Routes, Run: loop}
-}
-
-type setBody struct {
-	Reserve *int `json:"reserve,omitempty"`
-}
-
-func Routes(r *api.Router, env *app.Env) {
-	r.Handle("GET /api/quota", func(q *api.Req) (any, error) { return Last(q.Context(), env) })
-	r.Handle("POST /api/quota", func(q *api.Req) (any, error) {
-		if q.Actor.Kind != "user" {
-			return nil, api.Forbidden("只有用户能改额度设置")
-		}
-		var b setBody
-		if err := q.Decode(&b); err != nil {
-			return nil, err
-		}
-		ctx := q.Context()
-		if b.Reserve != nil {
-			if *b.Reserve < 0 || *b.Reserve > 90 {
-				return nil, api.Usage("--reserve: 应为 0 到 90 的整数，收到 %d", *b.Reserve)
-			}
-			if _, err := env.DB.ExecContext(ctx, `INSERT INTO quota_settings (name, value) VALUES ('reserve_percent', ?)
-				ON CONFLICT (name) DO UPDATE SET value = excluded.value`, *b.Reserve); err != nil {
-				return nil, err
-			}
-		}
-		return Last(ctx, env)
-	})
-}
-
-func Commands(t *cli.Table) {
-	t.Group("quota", "额度：各账号用量与给用户留的份额")
-	t.Add(cli.Command{Path: "quota", Summary: "各账号额度与富余（撞了额度的「工具+模型@机器」见 atrium workers）",
-		Run: func(c *cli.Ctx) error {
-			if err := c.MaxArgs(0); err != nil {
-				return err
-			}
-			var ov Overview
-			if err := c.Call("GET", "/api/quota", nil, &ov); err != nil {
-				return err
-			}
-			return c.Done(ov, Format(ov), "atrium workers")
-		}})
-	t.Add(cli.Command{Path: "quota set", Summary: "改额度设置（只有用户能改）",
-		Flags: []cli.Flag{
-			{Name: "reserve", Value: "百分比", Help: "给用户留的份额（缺省 20），账号已用到 100 减它就不再派任务"},
-		},
-		Run: func(c *cli.Ctx) error {
-			if err := c.MaxArgs(0); err != nil {
-				return err
-			}
-			if !c.Has("reserve") {
-				return api.Usage("--reserve: 必填")
-			}
-			n, err := c.Int("reserve", 0)
-			if err != nil {
-				return err
-			}
-			var ov Overview
-			if err := c.Call("POST", "/api/quota", setBody{Reserve: &n}, &ov); err != nil {
-				return err
-			}
-			return c.Done(ov, Format(ov), "atrium quota")
-		}})
-}
-
-// Format 是 quota 的人读输出：有数据的一行一个账号，没有数据的汇成一行。
-func Format(ov Overview) string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "给用户留 %d%%；富余 = 周期已过 − 已用\n", ov.Reserve)
-	pct := func(p *float64) string {
-		if p == nil {
-			return "—"
-		}
-		return fmt.Sprintf("%.1f%%", *p)
-	}
-	var none []string // 没有额度数据的账号，汇成一行
-	for _, l := range ov.Lines {
-		if l.UsedPercent == nil {
-			if l.Note != "" {
-				none = append(none, l.Account+"（"+l.Note+"）")
-			} else {
-				none = append(none, l.Account)
-			}
-			continue
-		}
-		fmt.Fprintf(&b, "%-12s", l.Account)
-		fmt.Fprintf(&b, "已用 %s  富余 %s  短窗 %s", pct(l.UsedPercent), pct(l.SparePercent), pct(l.ShortUsedPct))
-		if l.Plan != nil && *l.Plan != "" {
-			fmt.Fprintf(&b, "  %s", *l.Plan)
-		}
-		if l.Stale {
-			b.WriteString("  旧数")
-		}
-		if l.Source == "openquota" {
-			b.WriteString("  来自 OpenQuota")
-		}
-		if l.Note != "" {
-			fmt.Fprintf(&b, "  （%s）", l.Note)
-		}
-		b.WriteString("\n")
-	}
-	if len(none) > 0 {
-		fmt.Fprintf(&b, "没有额度数据：%s\n", strings.Join(none, "、"))
-	}
-	for _, n := range ov.Notes {
-		fmt.Fprintf(&b, "提示：%s\n", n)
-	}
-	return b.String()
 }

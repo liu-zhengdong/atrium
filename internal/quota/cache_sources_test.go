@@ -113,13 +113,6 @@ func TestOpenquotaOriginalAgeAndFailure(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	used := 25.0
 	rows := []Pace{{Account: "codex", UsedPercent: &used, RefreshedAt: now.Format(time.RFC3339)}}
-	got := agePaces(rows, now.Add(11*time.Minute).UnixMilli())
-	if !got[0].Stale || rows[0].Stale || got[0].RefreshedAt != rows[0].RefreshedAt {
-		t.Fatal("消费重算不得更改原事实", got)
-	}
-	if !agePaces([]Pace{{Account: "codex"}}, now.UnixMilli())[0].Stale {
-		t.Fatal("未知成功时间不能新鲜")
-	}
 	db, err := store.Open(filepath.Join(t.TempDir(), "a.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -143,7 +136,7 @@ func TestOpenquotaOriginalAgeAndFailure(t *testing.T) {
 	if err != nil || cached.Error == "" || len(cached.Rows) != 1 || cached.Rows[0].RefreshedAt != rows[0].RefreshedAt {
 		t.Fatal("失败不能换身份或成功时间", cached, err)
 	}
-	t.Log("预期失败保留旧数/原成功时刻、消费11分钟后旧数、未知时间为旧；实际符合")
+	t.Log("预期失败保留旧数/原成功时刻；实际符合")
 }
 
 // 当前测试构建的二进制充当假来源，仅 pace 参数触发；不读配置/登录。

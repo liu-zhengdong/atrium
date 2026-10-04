@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -116,14 +117,89 @@ func TestChoicesUpgradeRollbackAndForeignKeys(t *testing.T) {
 	t.Log("故意失败后：旧 CHECK、3 条 choices、临时表回滚；同一专用连接 foreign_keys=1，非法关联写入被拒")
 }
 
-func TestChoicesUpgradeRejectsUnknown(t *testing.T) {
+func TestChoicesUpgradeUnknownStarts(t *testing.T) {
 	db, path := legacyChoices(t)
 	if _, err := db.Exec(`ALTER TABLE choices ADD COLUMN unknown TEXT`); err != nil {
 		t.Fatal(err)
 	}
 	db.Close()
-	if opened, err := Open(path); err == nil {
-		opened.Close()
-		t.Fatal("未知结构放行")
+	opened, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer opened.Close()
+	if opened.ChoicesSkipped == nil {
+		t.Fatal("缺少未知结构信号")
+	}
+	var n int
+	if err := opened.QueryRow(`SELECT count(*) FROM choices`).Scan(&n); err != nil || n != 3 {
+		t.Fatalf("数据未保留：%d %v", n, err)
+	}
+}
+
+// 任务中确认的历史 DDL，独立夹具避免识别逻辑与测试共享错误假设。
+const decisionChoicesDDL = `CREATE TABLE choices (
+  id         TEXT PRIMARY KEY,
+  department TEXT NOT NULL REFERENCES departments (id),
+  task       TEXT UNIQUE REFERENCES tasks (id),
+  title      TEXT NOT NULL,
+  recommend  TEXT NOT NULL,
+  reason     TEXT NOT NULL,
+  status     TEXT NOT NULL CHECK (status IN ('open', 'picked', 'passed')),
+  note       TEXT NOT NULL DEFAULT '',
+  decision   TEXT REFERENCES decisions (id),
+  created_by TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  decided_at INTEGER
+);`
+
+func TestDecisionChoicesUpgrade(t *testing.T) {
+	for _, populated := range []bool{false, true} {
+		t.Run(fmt.Sprint(populated), func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "atrium.db")
+			raw, err := sql.Open("sqlite", path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer raw.Close()
+			fixture := strings.Replace(schema, tableDefinition("choices"), decisionChoicesDDL, 1)
+			if _, err := raw.Exec(fixture); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := raw.Exec(`INSERT INTO departments(id,name,created_at,updated_at) VALUES('o1','隔离',1,1);
+    INSERT INTO choices(id,department,title,recommend,reason,status,note,created_by,created_at,decided_at) VALUES('c1','o1','标题','1','理由','picked','备注','a1',123,456);`); err != nil {
+				t.Fatal(err)
+			}
+			if populated {
+				if _, err := raw.Exec(`UPDATE choices SET decision='d1'`); err != nil {
+					t.Fatal(err)
+				}
+			}
+			raw.Close()
+			db, err := Open(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			var ddl string
+			if err := db.QueryRow(`SELECT sql FROM sqlite_schema WHERE name='choices'`).Scan(&ddl); err != nil {
+				t.Fatal(err)
+			}
+			if populated {
+				if db.ChoicesSkipped == nil || normalizeDDL(ddl, "choices") != normalizeDDL(decisionChoicesDDL, "choices") {
+					t.Fatal("非空 decision 未保留")
+				}
+				var decision string
+				if err := db.QueryRow(`SELECT decision FROM choices`).Scan(&decision); err != nil || decision != "d1" {
+					t.Fatalf("decision 丢失：%s %v", decision, err)
+				}
+			} else if db.ChoicesSkipped != nil || normalizeDDL(ddl, "choices") != normalizeDDL(tableDefinition("choices"), "choices") {
+				t.Fatal("迁移结构不正确", ddl)
+			}
+			var n int
+			if err := db.QueryRow(`SELECT count(*) FROM choices WHERE id='c1' AND department='o1' AND task IS NULL AND title='标题' AND recommend='1' AND reason='理由' AND status='picked' AND note='备注' AND created_by='a1' AND created_at=123 AND decided_at=456`).Scan(&n); err != nil || n != 1 {
+				t.Fatalf("数据不一致：%d %v", n, err)
+			}
+		})
 	}
 }

@@ -28,16 +28,17 @@ import (
 
 // 事件种类。新增种类在这里加常量，别处不写字符串字面量。
 const (
-	TaskStatus   = "task.status"        // 任务状态变化（含转入已合入）；Body: {"from","to","stage","title","note"?}
-	TaskAssigned = "task.assigned"      // 交给负责人去拆（建任务、改处理人、草稿转待派时 ledger 发，要处理；交出去之后的补充说明、改说明也经它送到）；Body: {"title","tell"?}
-	Overdue      = "overdue"            // 当前等待对象到期（watch 包发）；Body: {"holder","held_ms","next",…}
-	ChoiceOpen   = "choice.open"        // 有选项单等用户拍板（org/agenda 发，投秘书）；Body: {"choice","title"}
-	OnlineFailed = "online.failed"      // 自升级失败（服务的由 release 发，远程代理的由 hosts 发并带 "host"；投秘书；同一版本本进程只发一次）；Body: {"from","to","error"}
-	LimitFull    = "limit.full"         // 刚到或超了上限（watch 巡检发）；Body: {"key","what","used","max","unit","fix","next","text"}
-	WorkerDown   = "worker.down"        // 新出现一条等人处理的执行者不可用标记（workers 发，投秘书，要处理，去重键按「工具[+模型]@机器」）；Body: {"target","reason","next"}
-	ScheduleFail = "schedule.failed"    // 定时任务建任务失败（org/agenda 发，要处理）；Body: {"schedule","note"}
-	ScheduleWake = "schedule.wake"      // 自唤醒定时任务到点（org/agenda 发，投部门负责人，要处理，只叫醒负责人不建任务不派活）；Body: {"schedule","title","detail","note"}
-	HostRecord   = "host.record_failed" // 远程机器记录失败（hosts 发，投秘书，要处理）；Body: {"host","note"}
+	ChoicesUpgradeSkipped = "choices.upgrade_skipped" // 未知选项单结构，需手工迁移。
+	TaskStatus            = "task.status"             // 任务状态变化（含转入已合入）；Body: {"from","to","stage","title","note"?}
+	TaskAssigned          = "task.assigned"           // 交给负责人去拆（建任务、改处理人、草稿转待派时 ledger 发，要处理；交出去之后的补充说明、改说明也经它送到）；Body: {"title","tell"?}
+	Overdue               = "overdue"                 // 当前等待对象到期（watch 包发）；Body: {"holder","held_ms","next",…}
+	ChoiceOpen            = "choice.open"             // 有选项单等用户拍板（org/agenda 发，投秘书）；Body: {"choice","title"}
+	OnlineFailed          = "online.failed"           // 自升级失败（服务的由 release 发，远程代理的由 hosts 发并带 "host"；投秘书；同一版本本进程只发一次）；Body: {"from","to","error"}
+	LimitFull             = "limit.full"              // 刚到或超了上限（watch 巡检发）；Body: {"key","what","used","max","unit","fix","next","text"}
+	WorkerDown            = "worker.down"             // 新出现一条等人处理的执行者不可用标记（workers 发，投秘书，要处理，去重键按「工具[+模型]@机器」）；Body: {"target","reason","next"}
+	ScheduleFail          = "schedule.failed"         // 定时任务建任务失败（org/agenda 发，要处理）；Body: {"schedule","note"}
+	ScheduleWake          = "schedule.wake"           // 自唤醒定时任务到点（org/agenda 发，投部门负责人，要处理，只叫醒负责人不建任务不派活）；Body: {"schedule","title","detail","note"}
+	HostRecord            = "host.record_failed"      // 远程机器记录失败（hosts 发，投秘书，要处理）；Body: {"host","note"}
 )
 
 // 级别。
@@ -435,6 +436,9 @@ func Reclassify(ctx context.Context, q store.Querier) (int64, error) {
 
 // run 是清理循环：启动时先把旧的秘书普通回执降为知会（Reclassify），再清一次，之后每小时清一次；全局暂停时不清。
 func run(ctx context.Context, env *app.Env) error {
+	if err := ReportChoicesUpgrade(ctx, env.DB); err != nil {
+		return err
+	}
 	var n int64
 	err := env.DB.Tx(ctx, func(tx *sql.Tx) (err error) {
 		n, err = Reclassify(ctx, tx)

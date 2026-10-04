@@ -17,7 +17,7 @@ import (
 // cross 的级别由 leaders.EscalateLevel 定（不挂未完成任务的是知会）；落到秘书的 cross 一律知会（SecretaryAct）。
 func LevelOf(kind string, body any) string {
 	switch kind {
-	case Overdue, OnlineFailed, LimitFull, TaskAssigned, LeaderEscalate:
+	case ChoicesUpgradeSkipped, Overdue, OnlineFailed, LimitFull, TaskAssigned, LeaderEscalate:
 		return Act
 	case TaskStatus:
 		switch to := field(body, "to"); {
@@ -44,7 +44,7 @@ func SecretaryAct(kind string, body any) bool {
 	case TaskStatus:
 		to := field(body, "to")
 		return field(body, "accept_by") != "" || to == "failed" || to == "blocked"
-	case ChoiceOpen, Overdue, WorkerDown, LimitFull, OnlineFailed, ScheduleFail, ScheduleWake, HostRecord, TaskAssigned:
+	case ChoicesUpgradeSkipped, ChoiceOpen, Overdue, WorkerDown, LimitFull, OnlineFailed, ScheduleFail, ScheduleWake, HostRecord, TaskAssigned:
 		return true
 	}
 	return false
@@ -147,6 +147,8 @@ func Summary(r Row, names map[string]string) string {
 		title = "「" + clip(t, 40) + "」"
 	}
 	switch r.Kind {
+	case ChoicesUpgradeSkipped:
+		return s("database") + "：" + s("skipped") + " · " + s("next")
 	case TaskAssigned:
 		if a := s("ask"); a != "" {
 			return "你问用户的「" + clip(a, 40) + "」有回话" + title + "：" + clip(s("tell"), 80)

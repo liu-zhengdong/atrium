@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http/httptest"
 	"os"
@@ -17,6 +18,18 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/ledger"
 	"github.com/liu-zhengdong/atrium/internal/workers"
 )
+
+type failedLogWriter struct{ err error }
+
+func (w failedLogWriter) Write(p []byte) (int, error) { return 0, w.err }
+
+func TestCompleteLogWriteFailure(t *testing.T) {
+	want := errors.New("output disk full")
+	c := &cli.Ctx{Env: cli.Env{Stdout: failedLogWriter{want}}}
+	if err := completeLog(c, "t1", "", LogChunk{Text: "原始错误"}); !errors.Is(err, want) {
+		t.Fatalf("输出失败未返回：%v", err)
+	}
+}
 
 func TestHistoricalLogCLI(t *testing.T) {
 	env, _ := setup(t)

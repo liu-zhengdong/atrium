@@ -100,7 +100,9 @@ func taskLog(c *cli.Ctx) error {
 func completeLog(c *cli.Ctx, id, path string, ch LogChunk) error {
 	// 完整原文直接流式写出，避免整份日志积在内存。
 	for {
-		fmt.Fprint(c.Env.Stdout, ch.Text)
+		if _, err := fmt.Fprint(c.Env.Stdout, ch.Text); err != nil {
+			return err
+		}
 		if ch.Text == "" {
 			if !c.Bool("follow") || !ch.Running {
 				return nil

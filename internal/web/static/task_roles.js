@@ -1,4 +1,4 @@
-const historyKind = {created:"建立",edited:"修改",note:"备注",status:"状态变化",escalated:"上报"};
+const historyKind = {created:"建立",edited:"修改",note:"备注",status:"状态变化",escalated:"上报",wake:"被唤醒"};
 /* 结构角色与经历：名字只查服务端名册投影，正文原样转义。 */
 function identityHTML(id, label = identityText(id, nav.names)) {
 

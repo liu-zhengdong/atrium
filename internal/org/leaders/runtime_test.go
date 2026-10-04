@@ -601,6 +601,14 @@ func TestWake(t *testing.T) {
 	if _, ok := h.auth(l.Env["ATRIUM_LEADER_TOKEN"]); ok {
 		t.Fatal("唤醒结束令牌应作废")
 	}
+	// 唤醒在涉及任务上留痕：拆派过程从第一步起在 task show 与网页可见，不必翻负责人日志（t1066）。
+	his, err := ledger.History(ctx, env.DB, "t1", 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if last := his[len(his)-1]; last.Kind != WakeKind || last.Actor != "a2" || last.Body != "事件 #1" {
+		t.Fatalf("t1 末条应是 wake 经历：%+v", his)
+	}
 	round()
 	if f.calls.Load() != 1 {
 		t.Fatal("没有新事件不该再唤醒")
@@ -612,6 +620,14 @@ func TestWake(t *testing.T) {
 	round()
 	if h.fails["a2"] != 1 || targetOf(2) != "a2" {
 		t.Fatalf("第一次失败：fails=%d target=%s", h.fails["a2"], targetOf(2))
+	}
+	// 每次唤醒各记一条：同一任务再次被唤醒是又一次过程。
+	his, err = ledger.History(ctx, env.DB, "t1", 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := len(his); n < 2 || his[n-2].Body != "事件 #1" || his[n-1].Kind != WakeKind || his[n-1].Body != "事件 #2" {
+		t.Fatalf("t1 应再有第二条 wake 经历：%+v", his)
 	}
 	round()
 	if h.fails["a2"] != 0 || targetOf(2) != "a1" {

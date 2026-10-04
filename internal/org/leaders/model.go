@@ -24,6 +24,9 @@ const (
 	MaxFails    = 2                // 连续失败几次就把没确认的事件转交上一层
 	MaxBatch    = 50               // 一次唤醒最多带几条事件
 	maxNote     = 2000
+
+	// WakeKind 是负责人被唤醒时在涉及任务上记的经历类型：拆派过程在 task show 与网页可见，不必翻 wake.log。
+	WakeKind = "wake"
 )
 
 // Kinds 是负责人上报的类别。

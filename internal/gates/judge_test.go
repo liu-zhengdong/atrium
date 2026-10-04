@@ -125,6 +125,8 @@ func TestParseReview(t *testing.T) {
 	}{
 		{"看过了\n审阅结论：通过\n", true, "看过了", true},
 		{"1. a.go:3 空指针\n\n审阅结论: **打回**", false, "1. a.go:3 空指针", true},
+		// t877：结论后跟 CLI 的会话续接提示行与空行，仍判读出结论。
+		{"看过了\n审阅结论：通过\n\nTo resume this session: kimi -r fake", true, "看过了", true},
 		{"审阅结论：通过\n后来又说了别的", false, "", false},
 		{"", false, "", false},
 		{"审阅结论：再看看", false, "", false},

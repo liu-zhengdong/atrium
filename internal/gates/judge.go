@@ -351,6 +351,8 @@ var (
 	verdictLine = regexp.MustCompile(`审阅结论\s*[:：]\s*\**\s*(通过|打回)`)
 	// 未完成放在完成前面，避免更长的词被截短。读不出不猜。
 	endingLine = regexp.MustCompile(`交付结论\s*[:：]\s*\**\s*(未完成|没做成|受阻|完成)`)
+	// 执行者 CLI 附在回复之后的会话续接提示（kimi 输出「To resume this session: kimi -r …」），不是正文。
+	resumeHint = regexp.MustCompile(`^To resume this session:`)
 )
 
 // lastLine 按最后一行非空文字读结论：last 匹配 re 时返回第一个分组，之前的文字留末尾 n 个字作说明，
@@ -370,9 +372,18 @@ func lastLine(text string, re *regexp.Regexp, n int) (got, before, after string,
 	return m[1], before, after, true
 }
 
-// ParseReview 从审阅者的收尾文字读结论：最后一行必须是「审阅结论：通过/打回」，之前的文字作意见。
+// ParseReview 从审阅者的收尾文字读结论：从尾部往前找最近的「审阅结论：通过/打回」，之前的文字作意见。
+// 结论与末尾之间只许空行和续接提示行（resumeHint）；还有其他内容（如交付结论，提示词侧已不为审阅任务附它）读不出，不猜。
 func ParseReview(text string) (pass bool, notes string, ok bool) {
-	got, notes, _, ok := lastLine(text, verdictLine, 1500)
+	lines := strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n")
+	for len(lines) > 0 {
+		if last := strings.TrimSpace(lines[len(lines)-1]); last == "" || resumeHint.MatchString(last) {
+			lines = lines[:len(lines)-1]
+			continue
+		}
+		break
+	}
+	got, notes, _, ok := lastLine(strings.Join(lines, "\n"), verdictLine, 1500)
 	return got == "通过", notes, ok
 }
 

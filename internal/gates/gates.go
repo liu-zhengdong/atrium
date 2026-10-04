@@ -365,7 +365,7 @@ func (g *Gate) review(ctx context.Context, t ledger.Task) error {
 	}
 	pass, notes, ok := ParseReview(result)
 	if !ok {
-		_, err := Block(ctx, g.DB, t.ID, fmt.Sprintf("审阅任务 %s 最后一行没写「审阅结论：通过/打回」", rt.ID))
+		_, err := Block(ctx, g.DB, t.ID, fmt.Sprintf("审阅任务 %s 的回复读不出「审阅结论：通过/打回」", rt.ID))
 		return err
 	}
 	reqBody, _, err := Last(ctx, g.DB, rt.ID, KindRequire)

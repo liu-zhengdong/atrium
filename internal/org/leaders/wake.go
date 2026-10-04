@@ -5,13 +5,9 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
-	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -26,7 +22,6 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/pause"
 	"github.com/liu-zhengdong/atrium/internal/platform"
 	"github.com/liu-zhengdong/atrium/internal/store"
-	"github.com/liu-zhengdong/atrium/internal/worktree"
 )
 
 // Launch 是一次唤醒要起的进程：用哪个执行者档案、提示词、工作目录、环境（已含负责人令牌）。
@@ -36,6 +31,16 @@ type Launch struct {
 	Prompt  string
 	Dir     string
 	Env     map[string]string
+	Attempt *Attempt
+}
+
+// Attempt 是注入边界的一次运行结果。Finish 只判退出及写共用不可用标记；
+// 事件确认、身份、权限、停止与次数仍由 leaders 拥有，不存第二份状态。
+type Attempt struct {
+	Preferred []string
+	Tried     []string
+	Profile   string
+	Finish    func(context.Context, string, int, bool) (retry bool, reason string, err error)
 }
 
 // Launcher 把一次唤醒翻成进程调用（不拉起，拉起、限时、结束由本包经 platform 做）。
@@ -234,46 +239,94 @@ func pendingByLeader(ctx context.Context, q store.Querier) ([]Pending, error) {
 // 用上了执行者组合的唤醒都落一条唤醒记录；服务停下的不记。
 func (h *hub) wake(ctx context.Context, env *app.Env, p Pending) {
 	log := env.Log.With("leader", p.Leader)
-	run, err := h.launch(ctx, env, p)
-	if ctx.Err() != nil {
-		return // 服务停下：不算这位的失败，下次起来重新唤醒
-	}
-	if err != nil {
-		log.Warn("负责人唤醒失败", "err", err)
-	}
-	bg := context.WithoutCancel(ctx)
-	if run.started {
-		if terr := recordTaskWakes(bg, env.DB, p); terr != nil {
-			log.Warn("记负责人唤醒经历失败", "err", terr)
+	attempt := &Attempt{}
+	for {
+		paused, perr := h.paused(ctx, env, p.Leader)
+		if perr != nil {
+			log.Error("查停机状态失败", "err", perr)
+			return
 		}
-	}
-	left, lerr := unacked(bg, env.DB, p.Leader, p.IDs)
-	if lerr != nil {
-		log.Error("查这批事件是否确认失败", "err", lerr)
-		return
-	}
-	h.mu.Lock()
-	next, forward := Outcome(len(left), h.fails[p.Leader])
-	h.fails[p.Leader] = next
-	h.mu.Unlock()
-	var to []string
-	var ferr error
-	switch {
-	case forward:
-		var n int64
-		if to, n, ferr = forwardUp(bg, env.DB, p.Leader, left); ferr != nil {
-			log.Error("转交上一层失败", "err", ferr)
-		} else {
-			log.Warn("负责人连续没处理完，事件已转交上一层", "to", to, "events", n)
+		if paused || ctx.Err() != nil {
+			return
 		}
-	case len(left) > 0:
-		log.Warn("负责人这次没处理完", "left", len(left), "fails", next)
-	}
-	if run.profile == "" {
+		run, err := h.launch(ctx, env, p, attempt)
+		if ctx.Err() != nil {
+			return // 服务停下：不算这位的失败，下次起来重新唤醒
+		}
+		if err != nil {
+			log.Warn("负责人唤醒失败", "err", err)
+		}
+		bg := context.WithoutCancel(ctx)
+		if run.started {
+			if terr := recordTaskWakes(bg, env.DB, p); terr != nil {
+				log.Warn("记负责人唤醒经历失败", "err", terr)
+			}
+		}
+		left, lerr := unacked(bg, env.DB, p.Leader, p.IDs)
+		if lerr != nil {
+			log.Error("查这批事件是否确认失败", "err", lerr)
+			return
+		}
+		retry := false
+		if run.started && attempt.Finish != nil {
+			paused, perr := h.paused(bg, env, p.Leader)
+			if perr != nil {
+				log.Error("查停机状态失败", "err", perr)
+				return
+			}
+			if paused {
+				return
+			}
+			seg, serr := readFrom(run.log, run.from)
+			if serr != nil {
+				log.Error("读取唤醒日志失败", "err", serr)
+				return
+			}
+			code := 0
+			if err != nil {
+				code = 1
+			}
+			again, reason, ferr := attempt.Finish(bg, seg, code, len(left) < len(p.IDs))
+			retry = again && ferr == nil && len(left) > 0
+			if ferr != nil {
+				err = ferr
+			} else if reason != "" {
+				err = fmt.Errorf("%s", reason)
+			}
+		}
+		h.mu.Lock()
+		next, forward := Outcome(len(left), h.fails[p.Leader])
+		h.fails[p.Leader] = next
+		h.mu.Unlock()
+		if retry && !forward {
+			if rerr := h.record(bg, env, p, run, err, len(left), nil, nil); rerr != nil {
+				log.Error("记唤醒记录失败", "err", rerr)
+				return
+			}
+			attempt.Tried = append(attempt.Tried, run.profile)
+			attempt.Finish = nil
+			continue
+		}
+		var to []string
+		var ferr error
+		switch {
+		case forward:
+			var n int64
+			if to, n, ferr = forwardUp(bg, env.DB, p.Leader, left); ferr != nil {
+				log.Error("转交上一层失败", "err", ferr)
+			} else {
+				log.Warn("负责人连续没处理完，事件已转交上一层", "to", to, "events", n)
+			}
+		case len(left) > 0:
+			log.Warn("负责人这次没处理完", "left", len(left), "fails", next)
+		}
+		if run.profile == "" {
+			return
+		}
+		if rerr := h.record(bg, env, p, run, err, len(left), to, ferr); rerr != nil {
+			log.Error("记唤醒记录失败", "err", rerr)
+		}
 		return
-	}
-	if rerr := h.record(bg, env, p, run, err, len(left), to, ferr); rerr != nil {
-		log.Error("记唤醒记录失败", "err", rerr)
 	}
 }
 
@@ -318,171 +371,6 @@ func readFrom(path string, from int64) (string, error) {
 	}
 	raw, err := io.ReadAll(f)
 	return string(raw), err
-}
-
-// launch 签发令牌、组提示词、经 Launcher 与 platform 拉起，等到退出或超时；令牌在返回时作废。
-func (h *hub) launch(ctx context.Context, env *app.Env, p Pending) (wakeRun, error) {
-	var run wakeRun
-	who, err := org.GetIdentity(ctx, env.DB, p.Leader)
-	if err != nil {
-		return run, err
-	}
-	h.mu.Lock()
-	fails := h.fails[p.Leader]
-	h.mu.Unlock()
-	run.profile, run.n = PickWorker(who.Workers, fails), fails+1
-	if run.profile == "" {
-		return run, fmt.Errorf("%s 没有登记执行者组合", who.ID)
-	}
-	l := getLauncher()
-	if l == nil {
-		return run, errors.New("拉起接口还没接上（leaders.SetLauncher）")
-	}
-	prompt, err := buildPrompt(ctx, env.DB, who, p.IDs)
-	if err != nil {
-		return run, err
-	}
-	dir := filepath.Join(env.Paths.Data, "leaders", who.ID)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return run, err
-	}
-	// 会话临时目录：同一负责人同时只有一次唤醒，每次先清空；退出后按它回收残留进程。
-	tmp := filepath.Join(dir, "tmp")
-	if err := worktree.RemoveTemp(tmp); err != nil {
-		return run, err
-	}
-	if err := os.MkdirAll(tmp, 0o700); err != nil {
-		return run, err
-	}
-	token, err := h.issue(who.ID)
-	if err != nil {
-		return run, err
-	}
-	defer h.revoke(token)
-	spec, err := l(ctx, Launch{Leader: who.ID, Profile: run.profile, Prompt: prompt, Dir: dir,
-		Env: leaderEnv(platform.EnvMap(os.Environ()), token, env.Paths.Data, tmp)})
-	if err != nil {
-		return run, err
-	}
-	run.log = filepath.Join(dir, "wake.log")
-	logf, err := platform.OpenLog(run.log)
-	if err != nil {
-		return run, err
-	}
-	defer logf.Close()
-	if run.from, err = logf.Seek(0, io.SeekCurrent); err != nil {
-		return run, err
-	}
-	fmt.Fprintf(logf, "\n=== %s 唤醒 %s（%s），事件 %v\n", time.Now().Format(time.RFC3339), who.ID, run.profile, p.IDs)
-	spec.ManagedTree = true
-	redact := platform.RedactLog(logf, spec.Env)
-	spec.Stdout, spec.Stderr, spec.Detached = redact, redact, true
-	if spec.Dir == "" {
-		spec.Dir = dir
-	}
-	run.begin = store.Now()
-	cmd, err := platform.Start(spec)
-	if err != nil {
-		return run, err
-	}
-	run.started = true
-	err = waitLimited(ctx, cmd, tmp, h.timeout)
-	redact.Close()
-	run.end = store.Now()
-	return run, err
-}
-
-// waitLimited 等进程退出并回收会话残留；超时或服务停下就结束整棵进程树。
-func waitLimited(ctx context.Context, cmd *exec.Cmd, tmp string, limit time.Duration) error {
-	done := make(chan error, 1)
-	go func() { done <- platform.WaitSession(cmd, tmp) }()
-	timer := time.NewTimer(limit)
-	defer timer.Stop()
-	select {
-	case err := <-done:
-		return err
-	case <-timer.C:
-		platform.KillTree(cmd.Process.Pid)
-		<-done
-		return fmt.Errorf("超过 %s 没结束，已结束", limit)
-	case <-ctx.Done():
-		platform.KillTree(cmd.Process.Pid)
-		<-done
-		return ctx.Err()
-	}
-}
-
-// leaderEnv：执行者白名单环境（临时目录是这位负责人的会话临时目录），去掉 ATRIUM_WORKER（负责人不是执行者），加本次令牌与数据目录；
-// 服务所在目录排进 PATH 最前，atrium 命令就是这个服务的同一个二进制。
-func leaderEnv(base map[string]string, token, data, tmp string) map[string]string {
-	env := platform.WorkerEnv(runtime.GOOS, base, tmp)
-	delete(env, "ATRIUM_WORKER")
-	env["ATRIUM_LEADER_TOKEN"] = token
-	env["ATRIUM_DATA"] = data
-	platform.SelfOnPath(env)
-	return env
-}
-
-func buildPrompt(ctx context.Context, q store.Querier, who org.Identity, ids []int64) (string, error) {
-	in := PromptInput{Leader: who}
-	roster, err := org.Leaders(ctx, q)
-	if err != nil {
-		return "", err
-	}
-	in.Names = make(map[string]string, len(roster))
-	for _, identity := range roster {
-		in.Names[identity.ID] = identity.Name
-	}
-	ps, err := org.Parents(ctx, q)
-	if err != nil {
-		return "", err
-	}
-	if in.Global, err = org.Principles(); err != nil {
-		return "", err
-	}
-	skills, err := org.Skills(ctx, q)
-	if err != nil {
-		return "", err
-	}
-	in.Skills = org.SkillIndex(skills, "")
-	lm, err := org.LeaderMap(ctx, q)
-	if err != nil {
-		return "", err
-	}
-	for _, d := range who.Depts {
-		dept, err := org.Get(ctx, q, d)
-		if err != nil {
-			return "", err
-		}
-		b := DeptBrief{Dept: dept}
-		if b.Path, err = org.Ancestors(ctx, q, d); err != nil {
-			return "", err
-		}
-		if b.Chain, err = org.Chain(ctx, q, d); err != nil {
-			return "", err
-		}
-		if b.Materials, err = MaterialsOverview(ctx, q, d); err != nil {
-			return "", err
-		}
-		for _, c := range org.Covered(ps, lm, d) {
-			sub, err := org.Get(ctx, q, c)
-			if err != nil {
-				return "", err
-			}
-			b.Covered = append(b.Covered, sub)
-		}
-		in.Depts = append(in.Depts, b)
-	}
-	memo, err := org.GetMemo(ctx, q, who.ID)
-	if err != nil {
-		return "", err
-	}
-	in.Memo = memo.Body
-	if in.Events, err = eventRows(ctx, q, ids); err != nil {
-		return "", err
-	}
-	in.Upstream = Upstream(ps, lm, who.ID, "")
-	return Prompt(in), nil
 }
 
 func idArgs(ids []int64) (string, []any) {

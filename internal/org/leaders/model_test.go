@@ -74,9 +74,7 @@ func TestOutcome(t *testing.T) {
 			t.Errorf("Outcome(%d,%d) = %d,%v", c.left, c.fails, next, fwd)
 		}
 	}
-	if PickWorker(nil, 0) != "" || PickWorker([]string{"a", "b"}, 1) != "b" || PickWorker([]string{"a", "b"}, 2) != "a" {
-		t.Error("PickWorker 轮换不对")
-	}
+
 }
 
 func TestUpstream(t *testing.T) {

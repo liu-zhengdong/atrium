@@ -14,20 +14,19 @@ import (
 
 // 与 dispatch 的约定（都记在任务经历 task_events 里，取最近一条）：
 //
-//	worktree        dispatch 拉起执行者时记 Worktree：{"host":"hN","dir":"<那台上的绝对路径>"}；交付检查按 host 查事实
+//	worktree        dispatch 拉起作者轮时记 Worktree：{"host":"hN","dir":"<那台上的绝对路径>"}；交付检查按 host 查事实
 //	risk            task run --risk 记：high / medium / low（没记按 low）
 //	result          执行者退出时记它最后的回复原文；审阅结论从这里读
-//	worker_require  gates 建审阅任务时记（Requirement 的 JSON）；dispatch 挑执行者、点名入队时按它排除
+//	worker_require  gates 进审阅阶段时记在原任务上（Requirement 的 JSON）；dispatch 挑审阅执行者时按它排除，只对审阅轮生效
 const (
 	KindWorktree = "worktree"
 	KindRisk     = "risk"
 	KindResult   = "result"
 	KindRequire  = "worker_require"
-	KindReviewOf = "review_of" // 审阅任务上：被审的原任务 tN
-	KindReviewer = "reviewer"  // 原任务上：这一轮的审阅任务 tN
-	KindGate     = "gate"      // 交付检查结论（Verdict JSON）
-	KindReview   = "review"    // 审阅结论
-	KindMerge    = "merge"     // 合入队列的经过：冲突文件、检查没过的摘要、跳过检查
+	KindReviewer = "reviewer" // 原任务上：每次审阅轮拉起记一条 {"worker":…}（本轮的审阅执行者）
+	KindGate     = "gate"     // 交付检查结论（Verdict JSON）
+	KindReview   = "review"   // 审阅结论
+	KindMerge    = "merge"    // 合入队列的经过：冲突文件、检查没过的摘要、跳过检查
 	// KindMergeCommit 是合入后 merge 记的 {"pr","commit"}；release 据此等含它的版本。
 	KindMergeCommit = "merge_commit"
 	// KindSkillCheck 是一项技能检查的结论（一行人话）；KindArtifact 是它生成的一个产物（截图、联系表）的绝对路径，
@@ -94,9 +93,10 @@ func LoadProfile(ctx context.Context, q store.Querier, worker string) (Profile, 
 	return Profile{Name: r.ID, Tool: r.Spec.Tool, Model: r.Spec.Model, Trust: r.Rules.EffectiveTrust(), Checks: r.Rules.Checks}, nil
 }
 
-// Enqueue 是分派任务入队（即 task run：dispatch.Enqueue），dispatch 装配时接上。建审阅任务后用它派出去。
-// 交回（Bounce）不用它：转 queued 的任务 dispatch 沿用上次拉起的执行者与选项。
-var Enqueue func(ctx context.Context, id, by string) error
+// Review 请分派任务在原任务上拉起一轮审阅（dispatch.Review，dispatch 装配时接上）。
+// who 空：按 worker_require 挑审阅执行者（不同工具、不同模型、trust 够、不是作者）；非空：交回这位审阅者重审。
+// 能审的都忙时静默返回，gates.Sweep 下一轮再试；拉起失败返回错误。
+var Review func(ctx context.Context, id, who string) error
 
 // Bounce 交回原执行者（同工作树同分支重派）：记原因、按次数转 queued 或 blocked。
 // 转 queued 的由 dispatch 按上次拉起的执行者、风险与凭据重派，不另写队列行。

@@ -323,9 +323,8 @@ func NeedReview(risk, trust string) (bool, string) {
 	return len(why) > 0, strings.Join(why, "，")
 }
 
-// Requirement 是审阅者的要求：与原执行者不同工具、不同模型，trust 至少 medium，
-// 且回避拉起过被审任务的每一位执行者（NotWorkers）。
-// 记在审阅任务经历里（kind "worker_require"，JSON）；dispatch 挑执行者与点名入队时按它排除，gates 读结论前再按它核对。
+// Requirement 是审阅者的要求：不同工具、不同模型、trust 至少 medium。
+// 记在原任务经历里，只在审阅轮读取（kind "worker_require"，JSON），dispatch 挑执行者时按它排除。
 type Requirement struct {
 	NotTool    string   `json:"not_tool"`
 	NotModel   string   `json:"not_model,omitempty"`
@@ -384,7 +383,7 @@ func lastLine(text string, re *regexp.Regexp, n int) (got, before, after string,
 }
 
 // ParseReview 从审阅者的收尾文字读结论：从尾部往前找最近的「审阅结论：通过/打回」，之前的文字作意见。
-// 结论与末尾之间只许空行和续接提示行（resumeHint）；还有其他内容（如交付结论，提示词侧已不为审阅任务附它）读不出，不猜。
+// 结论与末尾之间只许空行和续接提示行（resumeHint）；还有其他内容（如交付结论，提示词侧已不为审阅轮附它）读不出，不猜。
 func ParseReview(text string) (pass bool, notes string, ok bool) {
 	lines := strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n")
 	for len(lines) > 0 {

@@ -116,6 +116,7 @@ type Candidate struct {
 
 // Need 是一件活对机器的要求。
 type Need struct {
+	Task   string `json:"task,omitempty"` // 同一任务二次拉起复用已有容量，不把它自己再计一次
 	Tool   string `json:"tool"`
 	Model  string `json:"model,omitempty"`
 	Repo   string `json:"repo"` // owner/name；没有仓库为空

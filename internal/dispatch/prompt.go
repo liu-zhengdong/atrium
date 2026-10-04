@@ -25,7 +25,7 @@ type PromptInput struct {
 	Dir     string   // 工作地点（本机文件夹，原地干）；与 Repo 只有一个
 	Origin  string   // 本机仓库 origin 的地址（gates.Origin；没有为空），和 Repo 一起定交付方式
 	Branch  string
-	Review  bool   // 审阅任务：提示词不附交付结论那条（gates.PromptRules）
+	Review  bool   // 审阅轮：提示词不附交付结论那条（gates.PromptRules）
 	Guide   string // 目标仓库自己的约定（.agents/README.md 正文）；没有就空
 }
 
@@ -68,6 +68,11 @@ func BuildPrompt(in PromptInput) string {
 		for _, l := range lines {
 			fmt.Fprintf(&b, "- %s\n", strings.ReplaceAll(strings.TrimSpace(l), "\n", " "))
 		}
+	}
+	if in.Review {
+		section("通用约束", commonRules)
+		b.WriteString("\n本轮只读审阅：不修改文件、不提交、不推送、不评论、不合入；最后一行只写「审阅结论：通过」或「审阅结论：打回」。\n")
+		return b.String()
 	}
 	if in.Global != "" {
 		fmt.Fprintf(&b, "\n%s", in.Global)

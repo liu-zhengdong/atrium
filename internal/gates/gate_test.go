@@ -9,11 +9,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/liu-zhengdong/atrium/internal/gates"
 	"github.com/liu-zhengdong/atrium/internal/gates/fakegh"
-	"github.com/liu-zhengdong/atrium/internal/hosts"
 	"github.com/liu-zhengdong/atrium/internal/ledger"
 	"github.com/liu-zhengdong/atrium/internal/org"
 	"github.com/liu-zhengdong/atrium/internal/pause"
@@ -50,10 +48,9 @@ func setup(t *testing.T) *env {
 			t.Fatal(err)
 		}
 	}
-	gates.Enqueue = func(ctx context.Context, id, by string) error { // 代替 dispatch.Enqueue
-		_, err := ledger.Apply(ctx, db, id, ledger.Event{Kind: ledger.Enqueue}, by, "")
-		return err
-	}
+	oldReview := gates.Review
+	gates.Review = func(ctx context.Context, id, who string) error { e.reviewLaunch(id, who); return nil }
+	t.Cleanup(func() { gates.Review = oldReview })
 	return e
 }
 
@@ -341,146 +338,114 @@ func TestGateNoRepo(t *testing.T) {
 	}
 }
 
-// 低信任执行者：交付检查通过后建审阅任务；审阅者结论决定进合入队列还是交回。
-func TestReview(t *testing.T) {
-	cases := []struct {
-		name     string
-		reviewer string
-		result   string
-		rt       ledger.Status // 审阅任务
-		status   ledger.Status
-		stage    ledger.Stage
-	}{
-		{"通过", "codex+gpt", "看过了\n审阅结论：通过", ledger.Done, ledger.Running, ledger.StageMerge},
-		{"打回", "codex+gpt", "a.go:1 缺测试\n审阅结论：打回", ledger.Done, ledger.Queued, ""},
-		// 读不出结论：交回审阅者重审，原任务继续等审阅，不转受阻。
-		{"没写结论", "codex+gpt", "看过了", ledger.Queued, ledger.Running, ledger.StageReview},
-		{"结论之后还有话", "codex+gpt", "审阅结论：通过\n交付结论：完成", ledger.Queued, ledger.Running, ledger.StageReview},
-		{"空回复", "codex+gpt", "", ledger.Queued, ledger.Running, ledger.StageReview},
-		{"审阅者与原执行者同工具不算", "claude+sonnet", "审阅结论：通过", ledger.Done, ledger.Blocked, ledger.StageReview},
-		{"审阅者拉起过原任务不算", "codex+gpt", "审阅结论：通过", ledger.Done, ledger.Blocked, ledger.StageReview},
+// reviewLaunch 模拟 dispatch 在原任务上拉起审阅，作者登记保持原样。
+func (e *env) reviewLaunch(id, who string) {
+	e.t.Helper()
+	if who == "" {
+		who = "codex+gpt"
 	}
-	for _, c := range cases {
+	last, err := workers.LastRun(e.ctx, e.db, id)
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	n := 1
+	if last != nil {
+		n = last.N + 1
+	}
+	raw, _ := json.Marshal(workers.Run{N: n, Why: workers.WhyReview, Worker: who, Host: "h1"})
+	if err := ledger.Record(e.ctx, e.db, id, workers.RunKind, "dispatch", string(raw)); err != nil {
+		e.t.Fatal(err)
+	}
+	if err := ledger.Record(e.ctx, e.db, id, gates.KindReviewer, "dispatch", `{"worker":"`+who+`"}`); err != nil {
+		e.t.Fatal(err)
+	}
+}
+func (e *env) reviewExit(id, reply string) {
+	e.t.Helper()
+	last, err := workers.LastRun(e.ctx, e.db, id)
+	if err != nil || last == nil {
+		e.t.Fatalf("last run: %v %v", last, err)
+	}
+	if err := ledger.Record(e.ctx, e.db, id, gates.KindResult, "dispatch", reply); err != nil {
+		e.t.Fatal(err)
+	}
+	raw, _ := json.Marshal(workers.Exit{N: last.N})
+	if err := ledger.Record(e.ctx, e.db, id, workers.ExitKind, "dispatch", string(raw)); err != nil {
+		e.t.Fatal(err)
+	}
+}
+func TestReview(t *testing.T) {
+	for _, c := range []struct {
+		name, reply string
+		status      ledger.Status
+		stage       ledger.Stage
+	}{
+		{"通过", "看过了\n审阅结论：通过", ledger.Running, ledger.StageMerge},
+		{"打回", "a.go:1 缺测试\n审阅结论：打回", ledger.Queued, ledger.StageNone},
+		{"没结论", "看过了", ledger.Running, ledger.StageReview},
+		{"末行不对", "审阅结论：通过\n交付结论：完成", ledger.Running, ledger.StageReview},
+		{"空回复", "", ledger.Running, ledger.StageReview},
+	} {
 		t.Run(c.name, func(t *testing.T) {
 			e := setup(t)
 			dir := filepath.Join(t.TempDir(), "wt")
 			e.gh.Branch(dir, "t1-work", map[string]string{"a.go": "package a\n"})
 			e.gh.Open("t1-work", goodBody)
 			task := e.delivered("做事", "claude+haiku", dir)
-			first := "kimi+k2"
-			if c.name == "审阅者拉起过原任务不算" {
-				first = c.reviewer
+			ledger.Record(e.ctx, e.db, task.ID, "tell", "a7", "保留完整内容")
+			e.sweep()
+			brief, err := gates.RoundBrief(e.ctx, e.db, e.get(task.ID), e.gh)
+			if err != nil || !strings.Contains(brief, "保留完整内容") || !strings.Contains(brief, "审阅结论：通过") {
+				t.Fatalf("brief %s %v", brief, err)
 			}
-			for _, w := range []string{first, "claude+haiku"} { // 中途换过人：先别人后 claude
-				raw, _ := json.Marshal(workers.Run{Worker: w, Why: workers.WhyFirst})
-				ledger.Record(e.ctx, e.db, task.ID, workers.RunKind, "dispatch", string(raw))
-			}
-			detail := "分批写内容，保留后续批次表"
-			if _, err := e.db.ExecContext(e.ctx, `UPDATE tasks SET detail = ? WHERE id = ?`, detail, task.ID); err != nil {
-				t.Fatal(err)
-			}
-			const tell = "内容一次写全、写设计理念、删后续批次表"
-			if err := ledger.Record(e.ctx, e.db, task.ID, "tell", "a7", tell); err != nil {
-				t.Fatal(err)
+			req, _, _ := gates.Last(e.ctx, e.db, task.ID, gates.KindRequire)
+			if !strings.Contains(req, `"not_tool":"claude"`) {
+				t.Fatal(req)
 			}
 			e.sweep()
-			if got := e.get(task.ID); got.Stage != ledger.StageReview {
-				t.Fatalf("低信任应先审阅：%+v", got)
+			if e.count(task.ID, workers.RunKind) != 1 {
+				t.Fatal("重复拉起")
 			}
-			ref, ok, _ := gates.Last(e.ctx, e.db, task.ID, gates.KindReviewer)
-			rt := e.get(ref)
-			if !ok || rt.Status != ledger.Queued || rt.Parent != task.ID || !strings.Contains(rt.Detail, "审阅结论：通过") {
-				t.Fatalf("审阅任务不对：%+v", rt)
-			}
-			if !strings.Contains(rt.Detail, "## 原任务详述\n\n"+detail) || !strings.Contains(rt.Detail, tell) || !strings.Contains(rt.Detail, "以后面为准") {
-				t.Fatalf("审阅任务遗漏原说明、补充说明或优先级：%s", rt.Detail)
-			}
-			req, _, _ := gates.Last(e.ctx, e.db, rt.ID, gates.KindRequire)
-			if !strings.Contains(req, `"not_tool":"claude"`) || !strings.Contains(req, `"min_trust":"medium"`) || !strings.Contains(req, `"not_workers":["`+first+`","claude+haiku"]`) {
-				t.Fatalf("审阅者要求不对：%s", req)
-			}
-			e.sweep() // 审阅任务还在排队：原任务不动，也不重复建
-			if again, _, _ := gates.Last(e.ctx, e.db, task.ID, gates.KindReviewer); again != ref {
-				t.Fatalf("重复建了审阅任务：%s", again)
-			}
-			e.db.ExecContext(e.ctx, `DELETE FROM queue WHERE task = ?`, rt.ID)
-			ledger.Apply(e.ctx, e.db, rt.ID, ledger.Event{Kind: ledger.Start}, "dispatch", "")
-			w := c.reviewer
-			ledger.SetFacts(e.ctx, e.db, rt.ID, ledger.Facts{Worker: &w}, "dispatch")
-			ledger.Record(e.ctx, e.db, rt.ID, gates.KindResult, "dispatch", c.result)
-			// 代理查询明确报错：旧路径会读 choice.json 并把审阅转受阻。
-			host, remoteDir := e.remoteAgent()
-			if err := os.Mkdir(filepath.Join(remoteDir, "choice.json"), 0o700); err != nil {
-				t.Fatal(err)
-			}
-			if _, err := hosts.Ask(e.ctx, host, hosts.Query{Dir: remoteDir, File: "choice.json"}); err == nil {
-				t.Fatal("远程查询应返回读取目录的错误")
-			}
-			ledger.Record(e.ctx, e.db, rt.ID, gates.KindWorktree, "dispatch", `{"host":"`+host+`","dir":"`+filepath.ToSlash(remoteDir)+`"}`)
-			e.exit(rt.ID)
+			e.reviewExit(task.ID, c.reply)
 			e.sweep()
-			if got := e.get(rt.ID); got.Status != c.rt {
-				t.Fatalf("审阅任务 %s，期望 %s：%s", got.Status, c.rt, e.lastNote(rt.ID))
+			got := e.get(task.ID)
+			if got.Status != c.status || got.Stage != c.stage || got.Worker != "claude+haiku" {
+				t.Fatalf("%+v", got)
 			}
-			if c.rt == ledger.Queued && !strings.Contains(e.lastNote(rt.ID), "`审阅结论：通过` 或 `审阅结论：打回`") {
-				t.Fatalf("交回原因没写怎么补：%s", e.lastNote(rt.ID))
+			var total int
+			e.db.QueryRowContext(e.ctx, `SELECT count(*) FROM tasks`).Scan(&total)
+			if total != 1 {
+				t.Fatalf("出现平行任务 %d", total)
 			}
-			if got := e.get(task.ID); got.Status != c.status || got.Stage != c.stage {
-				t.Fatalf("原任务 %s/%s，期望 %s/%s：%s", got.Status, got.Stage, c.status, c.stage, e.lastNote(task.ID))
+			if c.stage != ledger.StageReview && e.count(task.ID, gates.KindReview) != 1 {
+				t.Fatal("没记结论")
 			}
-			if first == c.reviewer && !strings.Contains(e.lastNote(task.ID), c.reviewer+" "+gates.RecusedWhy) {
-				t.Fatalf("受阻理由应写明回避：%s", e.lastNote(task.ID))
-			}
+
 		})
 	}
 }
-
-// 审阅任务失败、原任务转受阻后，审阅任务重跑出了结论：原任务照结论接着走，不用人转交。
-func TestReviewRerunAfterBlock(t *testing.T) {
-	cases := []struct {
-		name   string
-		result string
-		rt     ledger.Status // 审阅任务
-		status ledger.Status
-		stage  ledger.Stage
-		blocks int
-	}{
-		{"通过", "看过了\n审阅结论：通过", ledger.Done, ledger.Running, ledger.StageMerge, 1},
-		{"打回", "a.go:1 缺测试\n审阅结论：打回", ledger.Done, ledger.Queued, "", 1},
-		{"还是没写结论", "看过了", ledger.Queued, ledger.Blocked, ledger.StageReview, 1},
+func TestReviewMissingThreeTimes(t *testing.T) {
+	e := setup(t)
+	dir := filepath.Join(t.TempDir(), "wt")
+	e.gh.Branch(dir, "t1-work", map[string]string{"a.go": "package a\n"})
+	e.gh.Open("t1-work", goodBody)
+	task := e.delivered("做事", "claude+haiku", dir)
+	e.sweep()
+	for i := 1; i <= 3; i++ {
+		e.reviewExit(task.ID, "读不出结论")
+		e.sweep()
+		got := e.get(task.ID)
+		want := ledger.Running
+		if i == 3 {
+			want = ledger.Blocked
+		}
+		if got.Status != want || got.Stage != ledger.StageReview {
+			t.Fatalf("第%d次 %+v", i, got)
+		}
 	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			e := setup(t)
-			dir := filepath.Join(t.TempDir(), "wt")
-			e.gh.Branch(dir, "t1-work", map[string]string{"a.go": "package a\n"})
-			e.gh.Open("t1-work", goodBody)
-			task := e.delivered("做事", "claude+haiku", dir)
-			e.sweep()
-			ref, _, _ := gates.Last(e.ctx, e.db, task.ID, gates.KindReviewer)
-			e.db.ExecContext(e.ctx, `DELETE FROM queue WHERE task = ?`, ref)
-			ledger.Apply(e.ctx, e.db, ref, ledger.Event{Kind: ledger.Start}, "dispatch", "")
-			ledger.Apply(e.ctx, e.db, ref, ledger.Event{Kind: ledger.ExitFail}, "dispatch", "没登录")
-			e.sweep()
-			e.sweep() // 受阻后审阅任务没再出结论：原任务不动，也不重复记受阻
-			if got := e.get(task.ID); got.Status != ledger.Blocked || got.Stage != ledger.StageReview || e.count(task.ID, "block") != 1 {
-				t.Fatalf("审阅任务失败原任务应受阻一次：%+v，受阻 %d 次", got, e.count(task.ID, "block"))
-			}
-
-			time.Sleep(2 * time.Millisecond) // 结论新旧按毫秒比
-			e.start(ref, "codex+gpt")        // 负责人改派重跑
-			ledger.Record(e.ctx, e.db, ref, gates.KindResult, "dispatch", c.result)
-			ledger.Record(e.ctx, e.db, ref, gates.KindWorktree, "dispatch", `{"host":"h1","dir":"`+filepath.ToSlash(t.TempDir())+`"}`)
-			e.exit(ref)
-			e.sweep()
-			e.sweep()
-			if got := e.get(ref); got.Status != c.rt {
-				t.Fatalf("审阅任务 %s，期望 %s：%s", got.Status, c.rt, e.lastNote(ref))
-			}
-			if got := e.get(task.ID); got.Status != c.status || got.Stage != c.stage || e.count(task.ID, "block") != c.blocks {
-				t.Fatalf("原任务 %s/%s、受阻 %d 次，期望 %s/%s、%d 次：%s", got.Status, got.Stage, e.count(task.ID, "block"), c.status, c.stage, c.blocks, e.lastNote(task.ID))
-			}
-		})
+	e.sweep()
+	if e.count(task.ID, workers.RunKind) != 3 || e.count(task.ID, "block") != 1 {
+		t.Fatal("受阻后重复审阅")
 	}
 }
 

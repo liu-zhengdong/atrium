@@ -145,9 +145,9 @@ func (d *dispatcher) tryOnce(ctx context.Context, it item) error {
 	if p, err := d.paused(ctx, t, ""); err != nil || p {
 		return err
 	}
-	w, why, err := d.choose(ctx, t, it.Opts, nil)
+	w, why, err := d.choose(ctx, t, it.Opts, nil, false)
 	if err != nil {
-		if isAPI(err) {
+		if err != nil && isAPI(err) {
 			return d.block(ctx, t.ID, err.Error())
 		}
 		return err
@@ -225,9 +225,9 @@ func lastBounce(ctx context.Context, q store.Querier, task string) (stage, note 
 	return string(b.From.Stage), b.Note, true, nil
 }
 
-// choose 定执行者：写死的核对能接；自动的按 Pick。wait 非空表示能接的此刻都接不了（正忙、机器没就绪、
-// 标了不可用），留在队列里等，wait 是在等什么。
-func (d *dispatcher) choose(ctx context.Context, t ledger.Task, o Options, exclude map[string]bool) (w workers.Resolved, wait string, err error) {
+// choose 定执行者：写死的核对能接；自动的按 Pick。wait 为真表示能接的都正忙，留在队列里等。
+// review 为真时应用 worker_require（审阅轮挑人；作者自己的拉起不受审阅者要求约束）。
+func (d *dispatcher) choose(ctx context.Context, t ledger.Task, o Options, exclude map[string]bool, review bool) (w workers.Resolved, wait string, err error) {
 	if o.Worker != "" && exclude == nil {
 		w, err := workers.Resolve(ctx, d.env.DB, o.Worker)
 		if err != nil {
@@ -251,7 +251,7 @@ func (d *dispatcher) choose(ctx context.Context, t ledger.Task, o Options, exclu
 	for _, a := range o.Avoid {
 		exclude[a] = true
 	}
-	v, err := d.view(ctx, t, o, exclude)
+	v, err := d.view(ctx, t, o, exclude, review)
 	if err != nil {
 		return w, "", err
 	}
@@ -282,7 +282,12 @@ func noteWait(ctx context.Context, db *store.DB, id, why string) error {
 
 // busyTools 是在跑的执行者用到的工具。
 func busyTools(ctx context.Context, q store.Querier) (map[string]bool, error) {
-	rows, err := q.QueryContext(ctx, `SELECT worker FROM tasks WHERE status = 'running' AND stage = '' AND worker != '' LIMIT 1000`)
+	rows, err := q.QueryContext(ctx, `SELECT worker FROM tasks WHERE status = 'running' AND stage = '' AND worker != ''
+		UNION ALL SELECT json_extract(r.body, '$.worker') FROM tasks t JOIN task_events r
+		ON r.id = (SELECT max(id) FROM task_events WHERE task = t.id AND kind = 'launch')
+		WHERE t.status = 'running' AND t.stage = 'review' AND json_extract(r.body, '$.why') = 'review'
+		AND NOT EXISTS (SELECT 1 FROM task_events x WHERE x.task = t.id AND x.kind = 'exit'
+		AND json_extract(x.body, '$.n') = json_extract(r.body, '$.n')) LIMIT 1000`)
 	if err != nil {
 		return nil, err
 	}
@@ -310,6 +315,8 @@ type launchOpts struct {
 	Cause   string   // Why 为 bounce 时的原因类别
 	Session string   // 继续会话
 	Pending []string // 继续时带的补充说明
+	Review  bool     // 审阅轮：只读审阅，提示词用 gates.RoundBrief，工作目录沿用作者的
+	Dir     string   // 审阅轮的本机工作目录（作者的工作树）；远程机器上为空
 }
 
 type tellRow struct {
@@ -399,8 +406,17 @@ func (d *dispatcher) remoteWaiter(p *proc, rr int) func() int {
 }
 
 // record 记录结果：从队列拉起的转 running；记执行者与机器、拉起记录；删队列行。
+// 审阅轮只记拉起与本轮审阅者：不改任务的执行者/机器登记（交回作者重派读它们），不覆盖工作树登记。
 func (d *dispatcher) record(ctx context.Context, t ledger.Task, run workers.Run) error {
 	db := d.env.DB
+	if run.Why == workers.WhyReview {
+		raw, _ := json.Marshal(run)
+		if err := ledger.Record(ctx, db, t.ID, workers.RunKind, actor, string(raw)); err != nil {
+			return err
+		}
+		rv, _ := json.Marshal(map[string]string{"worker": run.Worker})
+		return ledger.Record(ctx, db, t.ID, gates.KindReviewer, actor, string(rv))
+	}
 	if t.Status == ledger.Queued {
 		if _, err := ledger.Apply(ctx, db, t.ID, ledger.Event{Kind: ledger.Start}, actor, run.Worker+" 在 "+run.Host); err != nil {
 			return err
@@ -556,15 +572,24 @@ func (d *dispatcher) adopt(ctx context.Context) error {
 		return err
 	}
 	return ledger.EachTask(ctx, db, "dispatch.adopt", list, func(t ledger.Task) string { return t.ID }, func(t ledger.Task) error {
-		if t.Stage != ledger.StageNone || d.procOf(t.ID) != nil {
+		if (t.Stage != ledger.StageNone && t.Stage != ledger.StageReview) || d.procOf(t.ID) != nil {
 			return nil
 		}
 		run, err := workers.LastRun(ctx, db, t.ID)
 		if err != nil {
 			return err
 		}
-		if run == nil {
+		if run == nil || (t.Stage == ledger.StageReview && run.Why != workers.WhyReview) {
 			return nil
+		}
+		if run.Why == workers.WhyReview {
+			var exited bool
+			if err := db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM task_events WHERE task = ? AND kind = ? AND json_extract(body, '$.n') = ?)`, t.ID, workers.ExitKind, run.N).Scan(&exited); err != nil {
+				return err
+			}
+			if exited {
+				return nil
+			}
 		}
 		w, err := workers.Resolve(ctx, db, run.Worker)
 		if err != nil {

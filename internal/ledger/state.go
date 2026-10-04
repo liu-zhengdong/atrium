@@ -38,7 +38,7 @@ type Stage string
 const (
 	StageNone   Stage = ""
 	StageGate   Stage = "gate"   // 交付检查：运行时查事实
-	StageReview Stage = "review" // 另一个模型审阅
+	StageReview Stage = "review" // 审阅轮：在原任务上另拉一个执行者审阅（不建新任务）
 	StageAccept Stage = "accept" // 等验收人（部门设置的 leader 或 user）判
 )
 

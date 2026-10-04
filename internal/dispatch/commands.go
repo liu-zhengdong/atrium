@@ -93,7 +93,7 @@ func dryRun(q *api.Req, env *app.Env, id string, o Options) (RunResult, error) {
 	if err != nil {
 		return RunResult{}, err
 	}
-	v, err := get(env).view(ctx, t, o, map[string]bool{})
+	v, err := get(env).view(ctx, t, o, map[string]bool{}, false)
 	if err != nil {
 		return RunResult{}, err
 	}

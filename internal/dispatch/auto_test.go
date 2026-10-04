@@ -32,7 +32,7 @@ func TestNamedOnlyWorker(t *testing.T) {
 		t.Fatal(err)
 	}
 	d := get(env)
-	v, err := d.view(ctx, tk, Options{Risk: "low"}, nil)
+	v, err := d.view(ctx, tk, Options{Risk: "low"}, nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,14 +48,14 @@ func TestNamedOnlyWorker(t *testing.T) {
 	if !found {
 		t.Fatal("拒绝的执行者仍应列出")
 	}
-	w, wait, err := d.choose(ctx, tk, Options{Worker: "fake", Risk: "low"}, nil)
+	w, wait, err := d.choose(ctx, tk, Options{Worker: "fake", Risk: "low"}, nil, false)
 	if err != nil || wait != "" || w.ID != "fake" {
 		t.Fatalf("点名 choose：%+v %v %v", w, wait, err)
 	}
 	if _, err := Enqueue(ctx, env, tk.ID, Options{Worker: "fake", Risk: "low"}, "u1"); err != nil {
 		t.Fatalf("点名入队：%v", err)
 	}
-	if _, _, err := d.choose(ctx, tk, Options{Worker: "fake", Risk: "low"}, map[string]bool{}); err == nil {
+	if _, _, err := d.choose(ctx, tk, Options{Worker: "fake", Risk: "low"}, map[string]bool{}, false); err == nil {
 		t.Fatal("换人重试不能挑只点名执行者")
 	}
 	rows, err := workers.List(ctx, db)
@@ -70,7 +70,7 @@ func TestNamedOnlyWorker(t *testing.T) {
 	if _, err := workers.SaveProfile(ctx, db, "harness/fake", workers.Edit{Unset: []string{"auto"}}, "u1"); err != nil {
 		t.Fatal(err)
 	}
-	v, err = d.view(ctx, tk, Options{Risk: "low"}, nil)
+	v, err = d.view(ctx, tk, Options{Risk: "low"}, nil, false)
 	if err != nil || v.Recommended != "fake" {
 		t.Fatalf("缺省仍自动挑：%+v %v", v, err)
 	}

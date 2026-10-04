@@ -22,9 +22,10 @@ const (
 	WhyResume  = "resume"  // 本轮结束后带着补充说明继续会话
 	WhyRestart = "restart" // 停掉带着补充说明重派
 	WhyBounce  = "bounce"  // 交付被交回（冲突、检查没过、审阅打回、验收打回、交付检查未通过）后原执行者接着改；原因在 Cause
+	WhyReview  = "review"  // 审阅轮：交付检查过了要审阅，在原任务上拉起审阅执行者（不属于作者的重试预算）
 )
 
-// Run 是一次拉起的记录（任务经历 kind "launch" 的正文）。gates 读 Risk、Dir、Worker；watch 读 PID、Log、Host。
+// Run 是一次拉起的记录（任务经历 kind "launch" 的正文）。gates 读 Risk、Dir、Worker、Why（审阅轮）；watch 读 PID、Log、Host。
 type Run struct {
 	Tokens    int64    `json:"tokens,omitempty"` // 任务声明量，恢复/交回沿用，不估算
 	N         int      `json:"n"`                // 这件任务的第几次拉起（1 起），日志 run-N.log

@@ -7,11 +7,55 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/ledger"
 	"github.com/liu-zhengdong/atrium/internal/workers"
 	"os"
+	"strings"
 	"time"
 )
 
+// reviewExited 收审阅轮的尾：记回复与退出记录，原任务停在审阅阶段（状态机不动），读结论与交回计次归 gates.Sweep 的 review。
+// 不做信号分流（重试、换人、额度标记都归常态执行者轮）：读不出结论的轮在 gates 按同一口径交回审阅者重审。
+func (d *dispatcher) reviewExited(ctx context.Context, p *proc, code int) error {
+	db := d.env.DB
+	t, err := ledger.Get(ctx, db, p.task)
+	if err != nil {
+		return err
+	}
+	last, err := workers.LastRun(ctx, db, p.task)
+	if err != nil {
+		return err
+	}
+	if t.Status != ledger.Running || t.Stage != ledger.StageReview || last == nil || last.N != p.run.N {
+		return recordExit(ctx, db, p.task, p.run, workers.Exit{N: p.run.N, Reason: "任务已停止或进入下一阶段"})
+	}
+	log, err := workers.Tail(p.run.Log, workers.TailBytes)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	sig := workers.Classify(code, p.run.Worker, log, time.Now())
+	reply, err := p.adapter.ReadReply(p.run.Log)
+	if err != nil {
+		reply = "" // 读不出回复按空结论走交回重审，不让审阅轮卡死在退出处理
+		sig.Reason = strings.TrimSpace(sig.Reason + "；读回复失败：" + err.Error())
+	}
+	if err := ledger.Record(ctx, db, p.task, gates.KindResult, actor, reply); err != nil {
+		return err
+	}
+	head, err := readHead(p.run.Log, 64*1024)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	reason := sig.Reason
+	if reason == "" {
+		reason = "审阅轮退出，等读结论"
+	}
+	exit := workers.Exit{N: p.run.N, Model: workers.ModelOf(p.run.Worker, head), Outcome: workers.OutcomeOf(sig, code == 0), Reason: reason}
+	return recordExit(ctx, db, p.task, p.run, exit)
+}
+
 func (d *dispatcher) exited(ctx context.Context, p *proc, code int) error {
 	db := d.env.DB
+	if p.run.Why == workers.WhyReview {
+		return d.reviewExited(ctx, p, code)
+	}
 	t, err := ledger.Get(ctx, db, p.task)
 	if err != nil {
 		return err
@@ -135,7 +179,7 @@ func (d *dispatcher) exited(ctx context.Context, p *proc, code int) error {
 		}
 	case "switch":
 		var why string
-		o.W, why, err = d.choose(ctx, t, Options{Risk: p.run.Risk, Tokens: p.run.Tokens}, tried)
+		o.W, why, err = d.choose(ctx, t, Options{Risk: p.run.Risk, Tokens: p.run.Tokens}, tried, false)
 		o.Why = workers.WhySwitch
 		wait := why != ""
 		if err == nil && !wait {

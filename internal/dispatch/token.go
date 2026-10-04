@@ -144,7 +144,13 @@ func authWorker(env *app.Env) api.Authenticator {
 		if last != nil {
 			lastN = last.N
 		}
-		if !WorkerLive(t.Status, t.Stage, lastN, n) {
+		live := WorkerLive(t.Status, t.Stage, lastN, n)
+		if t.Status == ledger.Running && t.Stage == ledger.StageReview && last != nil && last.Why == workers.WhyReview && n == lastN {
+			var exited bool
+			err := env.DB.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM task_events WHERE task = ? AND kind = ? AND json_extract(body, '$.n') = ?)`, task, workers.ExitKind, n).Scan(&exited)
+			live = err == nil && !exited
+		}
+		if !live {
 			return api.Actor{}, false
 		}
 		return workerActor(task), true
@@ -154,7 +160,17 @@ func authWorker(env *app.Env) api.Authenticator {
 // workerGuard 是执行者令牌的统一权限判定：按 WorkerRule 取规则，加资料再查部门，写备注再查是不是本任务。
 func workerGuard(env *app.Env) api.Guard {
 	return func(q *api.Req) error {
-		switch WorkerRule(q.Pattern) {
+		rule := WorkerRule(q.Pattern)
+		if rule != WorkerRead {
+			t, err := ledger.Get(q.Context(), env.DB, workerTask(q.Actor))
+			if err != nil {
+				return err
+			}
+			if t.Stage == ledger.StageReview {
+				return api.Forbidden("审阅轮只读，不能调 %s", q.Pattern)
+			}
+		}
+		switch rule {
 		case WorkerRead:
 			return nil
 		case WorkerMaterial:

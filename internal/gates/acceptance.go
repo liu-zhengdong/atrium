@@ -11,7 +11,7 @@ import (
 )
 
 // acceptBy 是这件任务过了交付检查、审阅之后要等谁验收：部门的验收人（沿树继承），auto 为空。
-// 没有应用的交付方式（dir、message）和运行时自己建的审阅任务不等人验收。
+// 没有应用的交付方式（dir、message）不等人验收。
 func acceptBy(ctx context.Context, q store.Querier, t ledger.Task, d Delivery) (string, error) {
 	if a, err := ledger.AcceptanceOf(ctx, q, t.ID); err != nil || a != nil {
 		if err != nil {
@@ -25,9 +25,6 @@ func acceptBy(ctx context.Context, q store.Querier, t ledger.Task, d Delivery) (
 	}
 	if d.land == nil {
 		return "", nil
-	}
-	if _, review, err := Last(ctx, q, t.ID, KindReviewOf); err != nil || review {
-		return "", err
 	}
 	who, _, err := org.Acceptor(ctx, q, t.Org)
 	if err != nil || who == org.AcceptAuto {

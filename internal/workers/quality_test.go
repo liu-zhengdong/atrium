@@ -3,6 +3,7 @@ package workers
 import (
 	"context"
 	"encoding/json"
+	"math"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -47,11 +48,11 @@ func TestQualities(t *testing.T) {
 		{Worker: "trae+m", N: 1, Outcome: OutOK, Usage: Usage{Cost: price(7), Currency: "CNY", USD: price(1)}},
 		{Worker: "trae+m", N: 1, Outcome: OutOK, Usage: Usage{Cost: price(14), Currency: "CNY", USD: price(2)}},
 	}
-	if g := Qualities(cny, nil, Combo); g[0].CostPerDeliveryUSD == nil || *g[0].CostPerDeliveryUSD != 1.5 || g[0].costText() != "USD 1.5" {
+	if g := Qualities(cny, nil, Combo); g[0].CostPerDeliveryUSD == nil || *g[0].CostPerDeliveryUSD != 1.5 || g[0].costText() != "每次交付 USD 1.5（完整读数 2/2）" {
 		t.Fatalf("折合后的每次交付花费：%+v", g[0])
 	}
 	cny[1].Usage.USD = nil
-	if g := Qualities(cny, nil, Combo); g[0].CostPerDeliveryUSD != nil || g[0].costText() != "未知（能折成 USD 的完整读数 1/2）" {
+	if g := Qualities(cny, nil, Combo); g[0].CostPerDeliveryUSD != nil || g[0].costText() != "已知合计 USD 1（完整读数 1/2；每次交付未知）" {
 		t.Fatalf("缺一次折合就不能算：%+v", g[0])
 	}
 	// 同率同花费时用时短在前，未知在后；最终名字保证确定顺序。
@@ -201,4 +202,21 @@ func TestReadQualityWindow(t *testing.T) {
 func fmtRun(n int) string {
 	raw, _ := json.Marshal(Run{N: n, Worker: "codex+m:high", Host: "h0"})
 	return string(raw)
+}
+
+func TestQualityKnownCost(t *testing.T) {
+	for _, bad := range []Usage{{}, {Cost: price(-1), Currency: "USD"}, {Cost: price(math.NaN()), Currency: "USD"}, {Cost: price(math.Inf(1)), Currency: "USD"}, {Cost: price(0), Currency: "USD", Missing: []string{"输入"}}, {Cost: price(7), Currency: "CNY"}} {
+		got := Qualities([]Attempt{{Worker: "codex+m", Outcome: OutOK, Usage: Usage{Cost: price(2), Currency: "USD"}}, {Worker: "codex+m", Outcome: OutQuota, Usage: bad}, {Worker: "codex+m", Outcome: OutSetup}}, nil, Combo)[0]
+		if got.CostSamples != 1 || got.KnownCostUSD == nil || *got.KnownCostUSD != 2 || got.CostPerDeliveryUSD != nil {
+			t.Fatalf("缺失或坏输入不能变免费：%+v", got)
+		}
+	}
+	zero := Qualities([]Attempt{{Worker: "codex+m", Outcome: OutOK, Usage: Usage{Cost: price(0), Currency: "USD"}}}, nil, Combo)[0]
+	if zero.KnownCostUSD == nil || zero.CostPerDeliveryUSD == nil || *zero.CostPerDeliveryUSD != 0 {
+		t.Fatalf("真实0必须保留：%+v", zero)
+	}
+	noDelivery := Qualities([]Attempt{{Worker: "codex+m", Outcome: OutFail, Usage: Usage{Cost: price(2), Currency: "USD"}}}, nil, Combo)[0]
+	if noDelivery.CostPerDeliveryUSD != nil || noDelivery.KnownCostUSD == nil {
+		t.Fatalf("无交付只能显示合计：%+v", noDelivery)
+	}
 }

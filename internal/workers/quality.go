@@ -17,6 +17,8 @@ type Quality struct {
 	Retries            int            `json:"retries"`
 	RetryRate          float64        `json:"retry_rate"`
 	BounceReasons      map[string]int `json:"bounce_reasons"`
+	KnownCostUSD       *float64       `json:"known_cost_usd"`
+	CostText           string         `json:"cost_text"`
 	CostSamples        int            `json:"cost_samples"`
 	CostPerDeliveryUSD *float64       `json:"cost_per_delivery_usd"`
 }
@@ -54,12 +56,16 @@ func qualities(attempts []Attempt, leader bool, key func(string) string) []Quali
 				total += *v
 			}
 		}
+		if q.CostSamples > 0 {
+			q.KnownCostUSD = &total
+		}
 		q.DeliveryRate = float64(q.OK) / float64(q.Launches)
 		q.RetryRate = float64(q.Retries) / float64(q.Launches)
 		if q.OK > 0 && q.CostSamples == q.Launches {
 			v := total / float64(q.OK)
 			q.CostPerDeliveryUSD = &v
 		}
+		q.CostText = q.costText()
 		out = append(out, q)
 	}
 	return out
@@ -101,14 +107,18 @@ func (q Quality) Name() string {
 }
 
 func (q Quality) costText() string {
-	if q.CostPerDeliveryUSD == nil {
-		return fmt.Sprintf("未知（能折成 USD 的完整读数 %d/%d）", q.CostSamples, q.Launches)
+	coverage := fmt.Sprintf("完整读数 %d/%d", q.CostSamples, q.Launches)
+	if q.CostPerDeliveryUSD != nil {
+		return fmt.Sprintf("每次交付 USD %.6g（%s）", *q.CostPerDeliveryUSD, coverage)
 	}
-	return fmt.Sprintf("USD %.6g", *q.CostPerDeliveryUSD)
+	if q.KnownCostUSD != nil {
+		return fmt.Sprintf("已知合计 USD %.6g（%s；每次交付未知）", *q.KnownCostUSD, coverage)
+	}
+	return fmt.Sprintf("未知（%s）", coverage)
 }
 
 func (q Quality) String() string {
-	return fmt.Sprintf("近 %d 天 %d 次拉起：交付 %d（%.1f%%） · 被交回 %d · 重试 %d（%.1f%%） · 其他失败 %d · 额度 %d · 起不来 %d · 每次交付 %s · 用时中位 %s", int(QualityWindow.Hours()/24), q.Launches, q.OK, q.DeliveryRate*100, q.Bounce, q.Retries, q.RetryRate*100, q.Fail, q.Quota, q.Setup, q.costText(), DurationText(q.MedianMS))
+	return fmt.Sprintf("近 %d 天 %d 次拉起：交付 %d（%.1f%%） · 被交回 %d · 重试 %d（%.1f%%） · 其他失败 %d · 额度 %d · 起不来 %d · 花费 %s · 用时中位 %s", int(QualityWindow.Hours()/24), q.Launches, q.OK, q.DeliveryRate*100, q.Bounce, q.Retries, q.RetryRate*100, q.Fail, q.Quota, q.Setup, q.costText(), DurationText(q.MedianMS))
 }
 
 func writeBounceReasons(b *strings.Builder, q Quality) {

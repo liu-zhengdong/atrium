@@ -156,7 +156,7 @@ func Transition(from State, e Event) (State, error) {
 		}
 		return State{Failed, StageNone}, nil
 	case GatePass:
-		if !delivering || st != StageGate {
+		if (!delivering && !(s == Blocked && (e.NeedReview || e.AcceptBy != ""))) || st != StageGate {
 			return reject("任务不在交付检查阶段（当前 %s/%s）", s, st)
 		}
 		if e.NeedReview {

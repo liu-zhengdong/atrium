@@ -226,7 +226,9 @@ func record(ctx context.Context, db *store.DB, id, kind string, body any) error 
 
 type gateRecord struct {
 	Verdict
-	Facts Facts `json:"facts"`
+	Facts    Facts           `json:"facts"`
+	ResultID int64           `json:"result_id,omitempty"`
+	Recovery *MergedRecovery `json:"recovery,omitempty"`
 }
 
 // gate 按交付方式查事实、判定交付检查结果：不过交回执行者；过了按风险先审阅，或按部门的验收人等验收，或直接应用。

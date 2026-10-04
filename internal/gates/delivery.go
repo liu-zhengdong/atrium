@@ -146,6 +146,19 @@ func Origin(ctx context.Context, r Runner, repo string) (string, error) {
 func (g *Gate) deliveryOf(ctx context.Context, t ledger.Task, atGate bool) (Delivery, error) {
 	switch {
 	case t.Repo != "":
+		if t.PR != "" {
+			repo, e := Slug(ctx, g.R, t.Repo)
+			if e != nil {
+				return Delivery{}, e
+			}
+			pr, e := ViewPR(ctx, g.R, repo, t.PR)
+			if e != nil {
+				return Delivery{}, e
+			}
+			if pr.State == "MERGED" {
+				return deliverPR, nil
+			}
+		}
 		origin, err := Origin(ctx, g.R, t.Repo)
 		changed := true
 		if err == nil && (atGate || t.Stage == ledger.StageAccept && t.PR == "") {
@@ -272,6 +285,10 @@ func (g *Gate) landChoice(ctx context.Context, t ledger.Task) (landed, error) {
 // checkPR 查事实、判定交付检查结果：git 在工作树所在机器上查（On），PR 由服务查 GitHub；过了记下 PR，按风险与信任定要不要审阅。
 // 发布授权任务（ReleaseAuthorized）的 PR 按授权已合入：pr_exists 换成 release_published（ReleaseChecks），不要求 PR 开着。
 func (g *Gate) checkPR(ctx context.Context, t ledger.Task) (checked, error) {
+	return g.checkPRWithRecovery(ctx, t, nil)
+}
+
+func (g *Gate) checkPRWithRecovery(ctx context.Context, t ledger.Task, recovery *MergedRecovery) (checked, error) {
 	w, err := mustWorkspace(ctx, g.DB, t.ID)
 	if err != nil {
 		return checked{}, err
@@ -300,14 +317,32 @@ func (g *Gate) checkPR(ctx context.Context, t ledger.Task) (checked, error) {
 			return checked{}, err
 		}
 	}
+	recheck := !release && mergedRecheck(facts, t.PR)
+	if recovery != nil && !recheck {
+		return checked{block: "当前 head 不是原任务同一已合入 head"}, nil
+	}
 	v := Judge(checks, facts)
-	if !release && v.Pass && (facts.PR == nil || facts.PR.State != "OPEN") {
+	if recheck {
+		v = recheckVerdict(checks, facts)
+	}
+	if !release && !recheck && v.Pass && (facts.PR == nil || facts.PR.State != "OPEN") {
 		v.Pass = false
 		v.Reasons = append(v.Reasons, "pr_exists：分支 "+facts.Branch+" 没有开着的 PR，无从合入")
 	}
-	reasons, blocked, err := QueueBlock(ctx, g.DB, facts.PR, t.ID)
+	resultID, reply, err := deliveryResult(ctx, g.DB, t.ID)
 	if err != nil {
 		return checked{}, err
+	}
+	reasons, blocked := Admit(facts.PR, reply)
+	if recheck {
+		done, _, ok := ParseEnding(reply)
+		if !ok || !done {
+			blocked = "已合入复核的原回复未完成"
+		}
+		if recovery != nil {
+			reasons = nil
+			blocked = ""
+		}
 	}
 	if blocked != "" {
 		v.Pass = false
@@ -316,8 +351,10 @@ func (g *Gate) checkPR(ctx context.Context, t ledger.Task) (checked, error) {
 		v.Pass = false
 		v.Reasons = append(v.Reasons, reasons...)
 	}
-	if err := record(ctx, g.DB, t.ID, KindGate, gateRecord{v, facts}); err != nil {
-		return checked{}, err
+	if recovery == nil || (v.Pass && blocked == "") {
+		if err := record(ctx, g.DB, t.ID, KindGate, gateRecord{Verdict: v, Facts: facts, ResultID: resultID, Recovery: recovery}); err != nil {
+			return checked{}, err
+		}
 	}
 	if blocked != "" {
 		return checked{block: blocked}, nil
@@ -358,6 +395,9 @@ func (g *Gate) landPR(ctx context.Context, t ledger.Task) (landed, error) {
 	info, err := ViewPR(ctx, g.R, repo, cur.PR)
 	if err != nil {
 		return landed{}, err
+	}
+	if !ReleaseAuthorized(cur.Detail) && info.State == "MERGED" {
+		return g.landRecheck(ctx, cur, repo)
 	}
 	if ReleaseAuthorized(cur.Detail) && info.State == "MERGED" {
 		return landed{note: "PR 已按授权合入并发布，没有要应用的"}, nil

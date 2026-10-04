@@ -36,9 +36,12 @@ func Module() app.Module {
 }
 
 func Commands(t *cli.Table) {
-	t.Add(cli.Command{Path: "task merge", Args: "<tN>", Summary: "放进合入队列：登记亲手做的 PR（--pr），或放行受阻的交付",
+	t.Add(cli.Command{Path: "task merge", Args: "<tN>", Summary: "登记 PR 或恢复交付：已合入只读复核用 --restore-merged 进入原任务审阅/验收",
 		Flags: []cli.Flag{
 			{Name: "pr", Value: "号或链接", Help: "登记这件任务的 PR（没登记过时必填）"},
+			{Name: "restore-merged", Bool: true, Help: "仅生命周期错配：核对实际产物后恢复同一已合入 head 到原任务审阅/验收（不判完成）"},
+			{Name: "reason", Value: "文字", Help: "恢复原因：确认受阻仅因已合入 PR 的关卡错配"},
+			{Name: "evidence", Value: "文字", Help: "已核对的实际交付证据"},
 			{Name: "repo", Value: "owner/name", Help: "PR 所在仓库（缺省取任务的仓库或 PR 链接）"},
 		},
 		Run: func(c *cli.Ctx) error {
@@ -50,8 +53,11 @@ func Commands(t *cli.Table) {
 				return err
 			}
 			var t ledger.Task
-			if err := c.Call("POST", "/api/tasks/"+id+"/merge", Body{PR: c.Str("pr"), Repo: c.Str("repo")}, &t); err != nil {
+			if err := c.Call("POST", "/api/tasks/"+id+"/merge", Body{PR: c.Str("pr"), Repo: c.Str("repo"), RestoreMerged: c.Bool("restore-merged"), Reason: c.Str("reason"), Evidence: c.Str("evidence")}, &t); err != nil {
 				return err
+			}
+			if t.Stage == ledger.StageReview {
+				return c.Done(t, fmt.Sprintf("%s 已恢复原任务审阅，审阅通过后等负责人验收", t.ID), "atrium task show "+t.ID)
 			}
 			if t.Stage == ledger.StageAccept {
 				return c.Done(t, fmt.Sprintf("%s 已登记 %s，部门的验收人要先验收", t.ID, t.PR), "atrium task show "+t.ID)
@@ -66,8 +72,11 @@ func Commands(t *cli.Table) {
 
 // Body 是 POST /api/tasks/{id}/merge。
 type Body struct {
-	PR   string `json:"pr,omitempty"`
-	Repo string `json:"repo,omitempty"`
+	RestoreMerged bool   `json:"restore_merged,omitempty"`
+	Reason        string `json:"reason,omitempty"`
+	Evidence      string `json:"evidence,omitempty"`
+	PR            string `json:"pr,omitempty"`
+	Repo          string `json:"repo,omitempty"`
 }
 
 var prURL = regexp.MustCompile(`^https://github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/pull/(\d+)/?$`)
@@ -108,6 +117,16 @@ func Deliver(ctx context.Context, db *store.DB, r gates.Runner, id string, in Bo
 	t, err := ledger.Get(ctx, db, id)
 	if err != nil {
 		return t, err
+	}
+	if in.RestoreMerged {
+		if in.PR != "" || in.Repo != "" {
+			return t, api.Usage("--restore-merged: 只能恢复原任务已登记 PR，不接受 --pr/--repo")
+		}
+		g := &gates.Gate{DB: db, R: r}
+		return g.RestoreMerged(ctx, id, actor, gates.MergedRecovery{Reason: in.Reason, Evidence: in.Evidence})
+	}
+	if in.Reason != "" || in.Evidence != "" {
+		return t, api.Usage("--reason/--evidence: 仅用于 --restore-merged")
 	}
 	ev := ledger.Event{Kind: ledger.Deliver, Land: ledger.StageMerge}
 	if a, err := ledger.AcceptanceOf(ctx, db, id); err != nil {

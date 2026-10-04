@@ -219,7 +219,7 @@ gates    ─→ ledger.Apply/Record（查 PR 用 gh，经 platform）
 merge    ─→ ledger.Apply、platform（git、gh、快检查）
 release  ─→ service 的 restart 接口、ledger.Apply(Land)、events.Emit(OnlineFailed)
 release、hosts ─→ release/selfupdate（版本判定、下载替换；hosts 引不到 release：release 经 gates 引 hosts）
-watch    ─→ ledger.Get/Apply、events.Emit(Overdue, LimitFull)、org、platform.KillTree
+watch    ─→ ledger.Get/Apply、events.Emit(Overdue, LimitFull)、org、platform.KillTree（只结束检查进程；执行者归 dispatch.reap）
 dispatch、merge ─→ watch.Track（拉起执行者或检查后登记 pid、日志、工作树）
 dispatch ─→ watch.Use(Hooks{Requeue})：卡住、额度用尽或思考耗尽时重新入队（可换人、标额度）
 workers  ─→ watch.Use(Hooks{Signal})：从日志尾部读思考耗尽、额度用尽与收尾；leaders.SetLauncher：负责人唤醒按执行者组合拉起；leaders.WakeUsage、ReadWakes：唤醒的用量与质量统计

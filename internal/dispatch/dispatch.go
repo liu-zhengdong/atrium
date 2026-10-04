@@ -474,13 +474,18 @@ func (d *dispatcher) track(p *proc, wait func() int) {
 }
 
 func (d *dispatcher) kill(ctx context.Context, p *proc) {
+	select {
+	case <-p.done:
+		return // 本轮已完成 WaitSession；迟到的终止不能再使用旧 PID 或远程任务号。
+	default:
+	}
 	if p.remote {
 		if err := stopRemote(ctx, d.env, p.task); err != nil {
 			d.env.Log.Error("结束远程执行者失败", "task", p.task, "err", err)
 		}
 		return
 	}
-	if err := platform.KillTree(p.run.PID); err != nil && platform.Alive(p.run.PID) {
+	if err := platform.KillTree(p.run.PID); err != nil {
 		d.env.Log.Error("结束执行者失败", "task", p.task, "pid", p.run.PID, "err", err)
 	}
 }

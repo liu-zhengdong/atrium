@@ -268,7 +268,8 @@ func perform(ctx context.Context, env *app.Env, hk Hooks, t ledger.Task, f Facts
 		return ledger.Record(ctx, db, t.ID, "watch", "runtime", string(body))
 	}
 	kill := func() {
-		if f.Proc != nil && f.Proc.Local() && o.Alive {
+		// 执行者由 dispatch.reap 按本轮 proc 结束；watch 只结束自己跟进的检查进程。
+		if f.Proc != nil && f.Proc.Role == "check" && f.Proc.Local() && o.Alive {
 			if err := platform.KillTree(f.Proc.PID); err != nil {
 				env.Log.Warn("结束进程树失败", "task", t.ID, "pid", f.Proc.PID, "err", err)
 			}

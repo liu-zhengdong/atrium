@@ -308,12 +308,12 @@ func Commands(t *cli.Table) {
 			return c.Done(ch, text, "atrium task run "+first)
 		}})
 	t.Group("schedule", "定时任务")
-	t.Add(cli.Command{Path: "schedule add", Args: "<oN> <标题>", Summary: fmt.Sprintf("到点在部门下生成一件任务并派发，按周期反复或指定那天一次（每部门上限 %d 条）", org.MaxSchedules),
+	t.Add(cli.Command{Path: "schedule add", Args: "<oN> <标题>", Summary: fmt.Sprintf("到点生成一轮：task/patrol/research 建任务并派发，wake 自唤醒只提醒负责人不派活（每部门上限 %d 条）", org.MaxSchedules),
 		Flags: []cli.Flag{
 			{Name: "every", Value: "周期", Help: "7d、1d、12h、2w（至少 1h）"},
-			{Name: "on", Value: "YYYY-MM-DD", Help: "只在这天触发一次，生成任务后这条自动删除（与 --every 二选一；停机错过的恢复后补上）"},
+			{Name: "on", Value: "YYYY-MM-DD", Help: "只在这天触发一次，到点后这条自动删除（与 --every 二选一；停机错过的恢复后补上）"},
 			{Name: "at", Value: "HH:MM", Help: "本机钟点：--every 只给整天的周期；--on 缺省 " + OnDefaultAt},
-			{Name: "kind", Value: "种类", Help: "task 自定义（缺省）/ patrol 体验巡检（每轮只派本机）/ research 调研（写 choice.json 出选项单）"},
+			{Name: "kind", Value: "种类", Help: "task 自定义（缺省）/ patrol 体验巡检（每轮只派本机）/ research 调研（写 choice.json 出选项单）/ wake 自唤醒（到点只提醒负责人，不建任务）"},
 			{Name: "detail", Value: "文字", Help: "每轮任务的详述"},
 			{Name: "skill", Value: "名字", Help: "每轮任务用的技能"},
 		},
@@ -379,11 +379,18 @@ func Commands(t *cli.Table) {
 			if err := c.Call("POST", "/api/schedules/"+url.PathEscape(id)+"/run", nil, &res); err != nil {
 				return err
 			}
-			text := fmt.Sprintf("%s 生成了 %s「%s」并已派发", id, res.Task.ID, res.Task.Title)
+			next := "atrium schedule ls --node " + res.Schedule.Org
+			var text string
+			if res.Task.ID != "" {
+				text = fmt.Sprintf("%s 生成了 %s「%s」并已派发", id, res.Task.ID, res.Task.Title)
+				next = "atrium task wait " + res.Task.ID
+			} else {
+				text = fmt.Sprintf("%s 已提醒负责人「%s」（自唤醒不派活）", id, res.Schedule.Title)
+			}
 			if res.Schedule.Once {
 				text += "；这条一次性的定时任务已删"
 			}
-			text, next, err := events.AsyncNext(c, text, "atrium task wait "+res.Task.ID)
+			text, next, err = events.AsyncNext(c, text, next)
 			if err != nil {
 				return err
 			}

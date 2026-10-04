@@ -87,7 +87,8 @@ func TestChoicesUpgradeRollbackAndForeignKeys(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer conn.Close()
-	if err := upgradeChoicesConn(context.Background(), conn); err == nil || !strings.Contains(err.Error(), "外键检查失败") {
+	old := strings.Replace(tableDefinition("choices"), "'passed', 'void'", "'passed'", 1)
+	if err := upgradeTableConn(context.Background(), conn, "choices", old); err == nil || !strings.Contains(err.Error(), "外键检查失败") {
 		t.Fatalf("want failure: %v", err)
 	}
 	var fk int

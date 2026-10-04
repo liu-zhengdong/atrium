@@ -735,7 +735,7 @@ type Sched struct {
 	ID       string `json:"id"`
 	Org      string `json:"org"`
 	DeptName string `json:"dept_name"`
-	Kind     string `json:"kind,omitempty"` // 体验巡检、调研才写；自定义的不写
+	Kind     string `json:"kind,omitempty"` // 非 task 种类才写（体验巡检、调研、自唤醒）
 	Title    string `json:"title"`
 	Cadence  string `json:"cadence"` // 多久一轮（agenda.Cadence，与 schedule ls 同一份）
 	Once     bool   `json:"once"`    // 一次性的：到点生成一次后删掉，没有下一轮

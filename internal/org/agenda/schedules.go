@@ -9,6 +9,7 @@ import (
 
 	"github.com/liu-zhengdong/atrium/internal/api"
 	"github.com/liu-zhengdong/atrium/internal/app"
+	"github.com/liu-zhengdong/atrium/internal/events"
 	"github.com/liu-zhengdong/atrium/internal/ledger"
 	"github.com/liu-zhengdong/atrium/internal/org"
 	"github.com/liu-zhengdong/atrium/internal/store"
@@ -24,7 +25,7 @@ import (
 // 没接上时定时任务照样生成任务，但那一轮记「分派任务未接入」并报错。
 var Enqueue func(ctx context.Context, env *app.Env, task, actor string) error
 
-var Kinds = map[string]string{"task": "自定义", "patrol": "体验巡检", "research": "调研"}
+var Kinds = map[string]string{"task": "自定义", "patrol": "体验巡检", "research": "调研", "wake": "自唤醒"}
 
 // DispatchFailed 是一轮分派任务失败时记在 last_note 里的字样；网页据此把这一轮标红。
 const DispatchFailed = "分派任务失败"
@@ -130,7 +131,10 @@ func AddSchedule(ctx context.Context, db *store.DB, in NewSchedule, actor string
 		in.Kind = "task"
 	}
 	if _, ok := Kinds[in.Kind]; !ok {
-		return Schedule{}, api.Usage("--kind: 应为 task（自定义）、patrol（体验巡检）或 research（调研），收到 %q", in.Kind)
+		return Schedule{}, api.Usage("--kind: 应为 task（自定义）、patrol（体验巡检）、research（调研）或 wake（自唤醒，到点只提醒负责人），收到 %q", in.Kind)
+	}
+	if in.Kind == "wake" && in.Skill != "" {
+		return Schedule{}, api.Usage("--skill: 自唤醒不派活，用不上；要派活用 task")
 	}
 	if err := need("--title", in.Title, maxScheduleTitle); err != nil {
 		return Schedule{}, err
@@ -340,9 +344,33 @@ func recentUnpicked(ctx context.Context, q store.Querier, dept string) ([]string
 	return out, nil
 }
 
+// remindRound 是自唤醒种类的一轮：只给部门负责人发一条要处理事件把它叫醒，不建任务、不进分派任务队列。
+// 一次性的叫醒后删掉这条；反复的记下一轮时间与最近一笔。
+func remindRound(ctx context.Context, env *app.Env, x Schedule, next int64, note string, now int64) error {
+	err := env.DB.Tx(ctx, func(tx *sql.Tx) error {
+		return events.Emit(ctx, tx, events.Event{Kind: events.ScheduleWake, Dept: x.Org, Key: "schedule.wake:" + x.ID,
+			Level: events.Act, By: x.ID, Body: map[string]any{"schedule": x.ID, "title": x.Title, "detail": x.Detail, "note": strings.TrimSpace(note)}})
+	})
+	if err != nil {
+		return err
+	}
+	if x.Once {
+		_, err = env.DB.ExecContext(ctx, `DELETE FROM schedules WHERE id = ?`, x.ID)
+	} else {
+		_, err = env.DB.ExecContext(ctx, `UPDATE schedules SET last_run_at = ?, next_at = ?, last_note = ? WHERE id = ?`, now, next, note, x.ID)
+	}
+	return err
+}
+
 // runRound 生成一轮：建任务、送进分派任务队列、记在定时任务上。next 为 0 表示不改下一轮（手动 run）。
 // 一次性的只要任务建成就删掉这条（分派任务失败的由任务自己转受阻带出原因），不会再生成第二次。
 func runRound(ctx context.Context, env *app.Env, x Schedule, next int64, note string, now int64, loc *time.Location) (ledger.Task, error) {
+	if next == 0 {
+		next = x.NextAt
+	}
+	if x.Kind == "wake" {
+		return ledger.Task{}, remindRound(ctx, env, x, next, note, now)
+	}
 	var unpicked []string
 	if x.Kind == "research" {
 		var err error
@@ -354,9 +382,6 @@ func runRound(ctx context.Context, env *app.Env, x Schedule, next int64, note st
 	t, err := ledger.Add(ctx, env.DB, ledger.NewTask{Title: title, Detail: detail, Org: x.Org, Skill: x.Skill, By: x.CreatedBy}, x.ID)
 	if err != nil {
 		return ledger.Task{}, err
-	}
-	if next == 0 {
-		next = x.NextAt
 	}
 	var runErr error
 	if Enqueue == nil {
@@ -393,5 +418,9 @@ func RunNow(ctx context.Context, env *app.Env, id string, loc *time.Location) (l
 		return ledger.Task{}, api.Conflict("%s 上一轮 %s 还没结束", id, open).WithNext("atrium task show " + open)
 	}
 	now := store.Now()
-	return runRound(ctx, env, x, 0, "手动生成一轮", now, loc)
+	note := "手动生成一轮"
+	if x.Kind == "wake" {
+		note = "手动提醒一轮"
+	}
+	return runRound(ctx, env, x, 0, note, now, loc)
 }

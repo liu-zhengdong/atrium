@@ -8,7 +8,9 @@ import (
 	"time"
 
 	"github.com/liu-zhengdong/atrium/internal/app"
+	"github.com/liu-zhengdong/atrium/internal/events"
 	"github.com/liu-zhengdong/atrium/internal/ledger"
+	"github.com/liu-zhengdong/atrium/internal/org"
 )
 
 func TestTickIsolatesBadSchedule(t *testing.T) {
@@ -93,6 +95,88 @@ func TestTickEnqueueErrorBlocksOnlyRound(t *testing.T) {
 	task, err := ledger.Get(ctx, env.DB, x.LastTask)
 	if err != nil || task.Status != ledger.Blocked || calls != 2 {
 		t.Fatalf("task=%+v err=%v calls=%d", task, err, calls)
+	}
+}
+
+// 自唤醒定时：到点只给部门负责人发一条要处理事件把它叫醒，不建任务、不进分派任务队列；
+// 一次性的提醒后删掉；反复的记下一轮；手动提醒不改下一轮；建的时候拒收 --skill。
+func TestWakeTick(t *testing.T) {
+	env, _ := setup(t)
+	ctx := context.Background()
+	loc := time.UTC
+	start := ms(time.Date(2026, 10, 8, 8, 0, 0, 0, loc))
+	ldr, err := org.AddLeader(ctx, env.DB, org.NewLeader{Name: "分部主管", Workers: []string{"fake"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dept, err := org.Add(ctx, env.DB, org.NewDept{Name: "分部", Leader: ldr.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var queued []string
+	old := Enqueue
+	t.Cleanup(func() { Enqueue = old })
+	Enqueue = func(_ context.Context, _ *app.Env, task, _ string) error { queued = append(queued, task); return nil }
+
+	if _, err := AddSchedule(ctx, env.DB, NewSchedule{Org: dept.ID, Title: "x", Kind: "wake", Skill: "anything", On: "2026-10-09"}, "a9", start, loc); code(err) != "usage" {
+		t.Fatalf("自唤醒不派活，不该收 --skill：%v", err)
+	}
+	// 一次性的：到点发事件叫醒负责人，然后删掉这条。
+	x, err := AddSchedule(ctx, env.DB, NewSchedule{Org: dept.ID, Title: "收父任务", Detail: "重派 t999", Kind: "wake", On: "2026-10-08", At: "18:40"}, "a9", start, loc)
+	if err != nil || !x.Once {
+		t.Fatalf("%+v %v", x, err)
+	}
+	due := ms(time.Date(2026, 10, 8, 18, 40, 0, 0, loc))
+	if err := Tick(ctx, env, due, loc); err != nil {
+		t.Fatal(err)
+	}
+	if len(queued) != 0 {
+		t.Fatalf("自唤醒不该派活：%v", queued)
+	}
+	var n int
+	if err := env.DB.QueryRow(`SELECT count(*) FROM tasks`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Fatalf("自唤醒不该建任务：%d", n)
+	}
+	var target, level, body string
+	if err := env.DB.QueryRow(`SELECT target, level, body FROM events WHERE kind = 'schedule.wake'`).Scan(&target, &level, &body); err != nil {
+		t.Fatal(err)
+	}
+	if target != ldr.ID || level != events.Act || !strings.Contains(body, "收父任务") || !strings.Contains(body, "重派 t999") {
+		t.Fatalf("target=%s level=%s body=%s", target, level, body)
+	}
+	if _, err := GetSchedule(ctx, env.DB, x.ID); code(err) != "not_found" {
+		t.Fatalf("提醒后应删掉：%v", err)
+	}
+	// 反复的：到点提醒并排下一轮，不记上一轮任务。
+	y, err := AddSchedule(ctx, env.DB, NewSchedule{Org: dept.ID, Title: "每日提醒", Kind: "wake", Every: "1d", At: "09:00"}, "a9", start, loc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	day2 := due + day
+	if err := Tick(ctx, env, day2, loc); err != nil {
+		t.Fatal(err)
+	}
+	y, err = GetSchedule(ctx, env.DB, y.ID)
+	if err != nil || y.LastTask != "" || !strings.Contains(y.LastNote, "到点提醒") || y.NextAt <= day2 {
+		t.Fatalf("%+v %v", y, err)
+	}
+	// 手动提醒：上一条还没取走时合进去（count 加一），不另发一条、不改下一轮。
+	if _, err := RunNow(ctx, env, y.ID, loc); err != nil {
+		t.Fatal(err)
+	}
+	var total, cnt int
+	if err := env.DB.QueryRow(`SELECT count(*), coalesce(sum(count),0) FROM events WHERE kind = 'schedule.wake'`).Scan(&total, &cnt); err != nil {
+		t.Fatal(err)
+	}
+	if total != 2 || cnt != 3 {
+		t.Fatalf("wake 事件 %d 条共 %d 次，应为 2 条 3 次", total, cnt)
+	}
+	y2, err := GetSchedule(ctx, env.DB, y.ID)
+	if err != nil || y2.NextAt != y.NextAt {
+		t.Fatalf("手动提醒不该改下一轮：%+v %v", y2, err)
 	}
 }
 

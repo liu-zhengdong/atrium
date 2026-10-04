@@ -35,6 +35,8 @@ type Reading struct {
 	Windows []Window `json:"windows,omitempty"`
 	ReadAt  int64    `json:"read_at"`
 	Finger  string   `json:"finger,omitempty"` // 来源指纹；Go 输入为 key，不能证明账号或共享池
+	// Plans 只有 magpie 读数有（Account 为 MagpieAccount）：它一次给全部套餐。
+	Plans   []MagpiePlan `json:"plans,omitempty"`
 	retryAt int64
 }
 
@@ -49,7 +51,7 @@ type Deps struct {
 	Keychain func(service, account string) (string, error)
 	HTTP     *http.Client
 	Now      func() time.Time
-	// URLs 覆盖用量接口地址（测试用）；键为账号。
+	// URLs 覆盖用量接口地址；键为账号。magpie 只从这里取（LocalDeps 填），没填就不读 magpie。
 	URLs map[string]string
 }
 
@@ -80,6 +82,8 @@ func ReadAccount(ctx context.Context, d Deps, account string) Reading {
 		r = readCodex(ctx, d)
 	case "opencode":
 		r = readOpencode(ctx, d)
+	case MagpieAccount:
+		r = readMagpie(ctx, d)
 	default:
 		r = Reading{Reason: "没有自带读取"}
 	}
@@ -638,5 +642,6 @@ func LocalDeps(goos, home string, env map[string]string) Deps {
 		Keychain: keychain(goos, env),
 		HTTP:     &http.Client{},
 		Now:      time.Now,
+		URLs:     map[string]string{MagpieAccount: magpieURL(env)},
 	}
 }

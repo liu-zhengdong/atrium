@@ -147,17 +147,10 @@ func TestSourceCacheFailureIdentity(t *testing.T) {
 	if !reflect.DeepEqual(stored.Rows[0], p) {
 		t.Fatal("失败改变旧账号事实")
 	}
-	got, err := CachedSources(ctx, db, now.Add(time.Minute).UnixMilli())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !got[0].Stale || got[0].CacheIdentityMatch != "unknown" || got[0].AccountIdentity.Value != "synthetic-A" || got[0].RefreshedAt != p.RefreshedAt {
-		t.Fatal("失败续鲜/冒充当前身份", got)
-	}
 	if !agePaces([]Pace{p}, now.Add(11*time.Minute).UnixMilli())[0].Stale {
 		t.Fatal("年龄未重算")
 	}
-	t.Log("预期刷新失败保留A身份/原时刻/全窗口，消费当前匹配unknown且旧数；实际符合，不证明B当前套餐或真实账号绑定")
+	t.Log("预期刷新失败保留A身份/原时刻/全窗口；实际符合，不证明B当前套餐或真实账号绑定")
 }
 
 func TestSourceQualityAge(t *testing.T) {

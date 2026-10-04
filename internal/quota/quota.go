@@ -3,6 +3,7 @@
 // 读取只在服务的后台循环里做（loop），读数存 quota_cache；分派任务、网页、命令都只取存下的读数（Last）。富余 = 周期已过 − 已用，不扣给用户留的份额（缺省 20%）；已用到 100 − 留给用户的份额 就不再派（SpareOf）。「工具+模型@机器」撞了额度的标记在 workers。
 //
 // Spares/Last 仅展示摘要，不作跨机器选择依据。给 hosts：Local（代理读本机）、Record（服务收远程读数）。
+// 派活避让只认 magpie 读数（magpie.go），它与上面同一条读取、上报与存储，但不进一览。
 package quota
 
 import (
@@ -10,8 +11,10 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -34,17 +37,25 @@ func goos() string { return runtime.GOOS }
 
 // Local 是一台机器上自带读取的到期表：到期才真去请求。只由一个后台循环调用（服务的 loop 或代理的上报）。
 type Local struct {
-	deps Deps
-	next map[string]time.Time
+	deps     Deps
+	accounts []string
+	next     map[string]time.Time
 }
 
-func NewLocal(d Deps) *Local { return &Local{deps: d, next: map[string]time.Time{}} }
+// NewLocal 读自带账号；配了 magpie 地址（LocalDeps 总会配）再读 magpie。
+func NewLocal(d Deps) *Local {
+	accounts := Builtin
+	if d.url(MagpieAccount) != "" {
+		accounts = append(slices.Clone(Builtin), MagpieAccount)
+	}
+	return &Local{deps: d, accounts: accounts, next: map[string]time.Time{}}
+}
 
 // Due 读到期的账号并返回这些新读数（没到期的不读、不返回）。
 func (l *Local) Due(ctx context.Context, disabled map[string]bool) []Reading {
 	now := l.deps.Now()
 	var due []string
-	for _, a := range Builtin {
+	for _, a := range l.accounts {
 		if disabled[a] {
 			delete(l.next, a)
 			continue
@@ -129,14 +140,7 @@ func DropHost(ctx context.Context, q store.Querier, host string) error {
 	return err
 }
 
-func isAccount(a string) bool {
-	for _, x := range Accounts {
-		if x == a {
-			return true
-		}
-	}
-	return false
-}
+func isAccount(a string) bool { return a == MagpieAccount || slices.Contains(Accounts, a) }
 
 func stored(ctx context.Context, q store.Querier) ([]Stored, error) {
 	rows, err := q.QueryContext(ctx, `SELECT body FROM quota_cache WHERE account != ? ORDER BY read_at DESC LIMIT ?`, oqKey, CacheRows+1)
@@ -204,7 +208,7 @@ func (p *poller) round(ctx context.Context, db *store.DB) error {
 		}
 	}
 	now := p.now()
-	if now.Sub(p.oqAt) < okTTL {
+	if p.oq == nil || now.Sub(p.oqAt) < okTTL {
 		return nil
 	}
 	p.oqAt = now
@@ -241,13 +245,18 @@ func poll(ctx context.Context, db *store.DB, p *poller) error {
 	}
 }
 
-// loop 是服务的后台循环。隔离实例（config.Paths.Isolated）不读本机：不碰开发者的登录、钥匙串与 OpenQuota，只摆存下的读数。
+// loop 是服务的后台循环。隔离实例（config.Paths.Isolated）不读本机：不碰开发者的登录、钥匙串与 OpenQuota，只摆存下的读数；
+// 只有显式给了 ATRIUM_MAGPIE_URL（演练用的假 magpie）才读那一个地址。
 func loop(ctx context.Context, env *app.Env) error {
+	osEnv := platform.EnvMap(os.Environ())
 	if env.Paths.Isolated() {
-		return nil
+		if strings.TrimSpace(osEnv["ATRIUM_MAGPIE_URL"]) == "" {
+			return nil
+		}
+		d := Deps{Env: osEnv, HTTP: &http.Client{}, Now: time.Now, URLs: map[string]string{MagpieAccount: magpieURL(osEnv)}}
+		return poll(ctx, env.DB, &poller{local: &Local{deps: d, accounts: []string{MagpieAccount}, next: map[string]time.Time{}}, now: time.Now})
 	}
 	home, _ := os.UserHomeDir()
-	osEnv := platform.EnvMap(os.Environ())
 	return poll(ctx, env.DB, &poller{
 		local: NewLocal(LocalDeps(runtime.GOOS, home, osEnv)),
 		oq:    func(ctx context.Context) ([]Pace, error) { return readOpenquota(ctx, osEnv) },
@@ -305,6 +314,7 @@ func Last(ctx context.Context, env *app.Env) (Overview, error) {
 	if env.Paths.Isolated() {
 		ov.Notes = append(ov.Notes, "隔离实例不读本机额度（自带读取与 OpenQuota）")
 	}
+	all = slices.DeleteFunc(all, func(s Stored) bool { return s.Account == MagpieAccount })
 	for _, line := range Lines(mergeHosts(all, LocalHost, store.Now()), agePaces(oq.Rows, store.Now())) {
 		if !disabled[line.Account] {
 			ov.Lines = append(ov.Lines, line)

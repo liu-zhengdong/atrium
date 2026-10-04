@@ -10,6 +10,20 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/workers"
 )
 
+// quotaReset：额度用尽而报文没写恢复时刻时，经 magpie 的组合按 magpie 窗口的重置时间定恢复（重试节奏）；
+// 读数未知仍按 workers.Hold。
+func (d *dispatcher) quotaReset(ctx context.Context, p *proc, sig workers.Signal) (workers.Signal, error) {
+	if sig.Kind != workers.SignalQuota || sig.ResetAt != 0 || p.binding == nil {
+		return sig, nil
+	}
+	a, err := workers.LoadAvailability(ctx, d.env)
+	if err != nil {
+		return sig, err
+	}
+	sig.ResetAt = a.QuotaReset(p.binding)
+	return sig, nil
+}
+
 // 已证实共享池才将同一个失败标记写给实际成员。无绑定/服务重启后只沿用
 // 原组合 mark；不重新解析失败进程的旧身份，不清标，不延长保留期。
 func (d *dispatcher) markSharedFailure(ctx context.Context, p *proc, sig workers.Signal) error {

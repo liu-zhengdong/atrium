@@ -2,9 +2,9 @@ package dispatch
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -15,63 +15,27 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/workers"
 )
 
-// 只合成已知事实，不把 m146 现实 null 关系升级为已知。
-func installSyntheticExecution(t *testing.T, ctx context.Context, db *store.DB, mode string) {
+// 合成绑定：pi 的组合都算经 magpie 的同一个 provider；different-account 让 sibling 走另一个 provider。
+func installSyntheticExecution(t *testing.T, mode string) {
 	t.Helper()
-	ptr := func(v float64) *float64 { return &v }
-	unit, evidence := "tokens", "synthetic same-pool/window token denominator"
-	identity := func(value string) quota.AccountIdentity {
-		return quota.AccountIdentity{Kind: "accountHash", Value: value, Source: "synthetic account+organization"}
-	}
-	scope := &quota.SharedScope{ID: "synthetic-pool", Source: "synthetic model membership", WindowIDs: []string{"week"}}
-	var rows []quota.Pace
-	for _, card := range []string{"pi-A", "pi-B", "aaa-paid", "zzz-free"} {
-		id := identity("A")
-		if card == "pi-B" {
-			id = identity("B")
-		}
-		total := float64(1000)
-		if card == "aaa-paid" {
-			total = 2000
-		}
-		rows = append(rows, quota.Pace{Account: card, RefreshedAt: time.Now().Format(time.RFC3339Nano), SourceFacts: quota.SourceFacts{AccountIdentity: &id, SharedScope: scope, CacheIdentityMatch: "matched", DataQuality: "cache", RefreshOutcome: "notRequested", QuotaCount: 1, QuotaLimit: 64, ValueMetricLimit: 64, ValueMetrics: []json.RawMessage{}, Quotas: []quota.SourceWindow{{ID: "week", Label: "week", UsedPercent: ptr(20), Format: "count", Unit: &unit, LimitValue: ptr(total), UsedValue: ptr(total * 0.2), SourceNote: &evidence}}}})
-	}
-	body, err := json.Marshal(map[string]any{"rows": rows})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err = db.ExecContext(ctx, `INSERT INTO quota_cache VALUES ('openquota','openquota',?,?)`, string(body), store.Now()); err != nil {
-		t.Fatal(err)
-	}
 	old := workers.ResolveExecution
 	workers.ResolveExecution = func(_ context.Context, _ *app.Env, r workers.Resolved, host string) (workers.Resolved, error) {
-		card := ""
-		id := identity("A")
-		switch r.Spec.Tool {
-		case "pi":
-			if mode == "token-pick" || mode == "token-recovery" {
-				return r, nil
-			}
-			card = "pi-A"
-			if mode == "different-account" && r.CLIModel == "opencode-go/zero-action" {
-				card = "pi-B"
-				id = identity("B")
-			}
-		case "aaa-paid", "zzz-free":
-			if mode != "token-pick" && mode != "token-recovery" {
-				return r, nil
-			}
-			card = r.Spec.Tool
-		default:
+		if r.Spec.Tool != "pi" {
 			return r, nil
 		}
-		r.QuotaBinding = &workers.ExecutionBinding{Worker: r.ID, Host: host, Provider: "synthetic-actual-provider", Card: card, Source: "synthetic credential source + model membership", Account: id, WindowIDs: []string{"week"}}
-		if r.Spec.Tool == "pi" {
-			r.QuotaBinding.Scope = scope
+		provider := "synthetic"
+		if mode == "different-account" && r.CLIModel == "opencode-go/zero-action" {
+			provider = "other"
 		}
+		r.QuotaBinding = &workers.ExecutionBinding{Worker: r.ID, Host: host, Provider: provider}
 		return r, nil
 	}
 	t.Cleanup(func() { workers.ResolveExecution = old })
+}
+
+func magpieReading(provider string, used float64, resetAt int64) quota.Reading {
+	return quota.Reading{Account: quota.MagpieAccount, OK: true, ReadAt: store.Now(),
+		Plans: []quota.MagpiePlan{{Provider: provider, Windows: []quota.Window{{ID: "7d", Used: used, ResetsAt: resetAt}}}}}
 }
 
 func TestPickTokenDemand(t *testing.T) {
@@ -105,7 +69,7 @@ func TestSharedFailurePreservesMarksAndBudget(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	installSyntheticExecution(t, ctx, db, "known-pool")
+	installSyntheticExecution(t, "known-pool")
 	env := &app.Env{DB: db}
 	r, err := workers.Resolve(ctx, db, "pi")
 	if err != nil {
@@ -115,11 +79,17 @@ func TestSharedFailurePreservesMarksAndBudget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := CheckExecution(ctx, env, r, LocalHost, 601); err == nil {
-		t.Fatal("写死执行者不能绕过容量检查")
+	if err := quota.Record(ctx, db, LocalHost, []quota.Reading{magpieReading("synthetic", 85, 0)}); err != nil {
+		t.Fatal(err)
 	}
-	if _, err := CheckExecution(ctx, env, r, LocalHost, 600); err != nil {
-		t.Fatal("恰好容纳应能启动", err)
+	if _, err := CheckExecution(ctx, env, r, LocalHost, 0); err == nil || !strings.Contains(err.Error(), "额度将满") {
+		t.Fatal("写死执行者也不能绕过窗口将满", err)
+	}
+	if err := quota.Record(ctx, db, LocalHost, []quota.Reading{magpieReading("synthetic", 50, 0)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := CheckExecution(ctx, env, r, LocalHost, 0); err != nil {
+		t.Fatal("窗口有余应能启动", err)
 	}
 	base, _ := workers.MarkOf(workers.Signal{Kind: workers.SignalQuota}, r.Spec, LocalHost, time.Now())
 	member := base
@@ -154,5 +124,48 @@ func TestSharedFailurePreservesMarksAndBudget(t *testing.T) {
 	}
 	if next, err := workers.Marks(ctx, db, store.Now()); err != nil || len(next) != len(marks) {
 		t.Fatal("规划失败不得写部分标记", next, err)
+	}
+}
+
+// 重试节奏：额度用尽而报文没写恢复时刻，经 magpie 的组合按 magpie 窗口的重置时间恢复；读数未知或直连仍按 Hold。
+func TestQuotaResetFromMagpie(t *testing.T) {
+	ctx := context.Background()
+	db, err := store.Open(filepath.Join(t.TempDir(), "a.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	reset := store.Now() + 90*60_000
+	if err := quota.Record(ctx, db, LocalHost, []quota.Reading{magpieReading("cursor", 100, reset)}); err != nil {
+		t.Fatal(err)
+	}
+	d := &dispatcher{env: &app.Env{DB: db}}
+	bound := &workers.ExecutionBinding{Worker: "pi+cursor/auto", Host: LocalHost, Provider: "cursor"}
+	quotaSig := workers.Signal{Kind: workers.SignalQuota}
+	for _, tc := range []struct {
+		name    string
+		binding *workers.ExecutionBinding
+		sig     workers.Signal
+		want    int64
+	}{
+		{"magpie-reset", bound, quotaSig, reset},
+		{"message-wins", bound, workers.Signal{Kind: workers.SignalQuota, ResetAt: 42}, 42},
+		{"direct", nil, quotaSig, 0},
+		{"other-host-unknown", &workers.ExecutionBinding{Worker: bound.Worker, Host: "h3", Provider: "cursor"}, quotaSig, 0},
+		{"not-quota", bound, workers.Signal{Kind: workers.SignalNoStart}, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sig, err := d.quotaReset(ctx, &proc{binding: tc.binding}, tc.sig)
+			if err != nil || sig.ResetAt != tc.want {
+				t.Fatalf("resetAt=%d want %d err=%v", sig.ResetAt, tc.want, err)
+			}
+			m, ok := workers.MarkOf(sig, workers.Spec{Tool: "pi", Model: "cursor/auto"}, LocalHost, time.Now())
+			if tc.name == "magpie-reset" && (!ok || m.Until != reset) {
+				t.Fatal("标记应在 magpie 窗口重置时恢复", m)
+			}
+			if tc.name == "direct" && (!ok || m.Until-m.Since != workers.Hold.Milliseconds()) {
+				t.Fatal("未知仍按 Hold", m)
+			}
+		})
 	}
 }

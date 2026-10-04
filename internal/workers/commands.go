@@ -145,7 +145,7 @@ func marksOf(marks []Mark, s Spec) []Mark {
 
 // Show 是 workers <名字>：档案名（含 /）给原文，否则按执行者标识给叠加结果。
 func Show(ctx context.Context, q store.Querier, name string) (Detail, error) {
-	if strings.Contains(name, "/") && layerNameRE.MatchString(name) {
+	if strings.Contains(name, "/") && CheckName(name) == nil {
 		p, err := GetProfile(ctx, q, name)
 		if err != nil {
 			return Detail{}, err

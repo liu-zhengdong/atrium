@@ -78,19 +78,35 @@ type Profile struct {
 
 var checkNameRE = regexp.MustCompile(`^[a-z_]+$`)
 
-// 模型段用 modelSeg（见 adapter.go）：models、combos 名里的模型可带方括号档位后缀（GLM-5.3[1m]）。
-var layerNameRE = regexp.MustCompile(`^(harness|models|combos)/([\w.@-]+(\+` + modelSeg + `)?)$`)
+// 各层名段的正则：工具名一段；模型段用 modelSeg（见 adapter.go），models、combos 里的模型
+// 都可带方括号档位后缀（GLM-5.3[1m]），两个入口同一套规则。
+var (
+	layerToolRE  = regexp.MustCompile(`^[\w.@-]+$`)
+	layerModelRE = regexp.MustCompile(`^` + modelSeg + `$`)
+)
 
 // CheckName 校验档案名：harness/<工具>、models/<模型>、combos/<工具>+<模型>（模型取最后一段，不带 provider 前缀）。
 func CheckName(name string) error {
-	m := layerNameRE.FindStringSubmatch(name)
-	if m == nil || strings.HasPrefix(m[2], ".") {
-		return api.Usage("档案名应为 harness/<工具>、models/<模型> 或 combos/<工具>+<模型>，收到 %q", name)
+	layer, rest, ok := strings.Cut(name, "/")
+	bad := api.Usage("档案名应为 harness/<工具>、models/<模型> 或 combos/<工具>+<模型>，收到 %q", name)
+	if !ok || strings.HasPrefix(rest, ".") {
+		return bad
 	}
-	if (m[1] == "combos") != (m[3] != "") {
-		return api.Usage("档案名 %s：只有 combos 层写 <工具>+<模型>", name)
+	switch layer {
+	case "harness":
+		if layerToolRE.MatchString(rest) {
+			return nil
+		}
+	case "models":
+		if layerModelRE.MatchString(rest) {
+			return nil
+		}
+	case "combos":
+		if tool, model, ok := strings.Cut(rest, "+"); ok && layerToolRE.MatchString(tool) && layerModelRE.MatchString(model) {
+			return nil
+		}
 	}
-	return nil
+	return bad
 }
 
 // SplitSource 拆出 frontmatter（YAML）与正文。纯函数。

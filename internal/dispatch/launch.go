@@ -220,7 +220,8 @@ func startLocal(tool string, req workers.Request, extra map[string]string, c con
 	if err != nil {
 		return nil, 0, nil, err
 	}
-	defer logf.Close()
+	// 日志由本进程的拷贝 goroutine 经 redact 写入，退出回收时（wait 里）才关；不能 defer（拉起返回时进程还在跑）。
+	redact := platform.RedactLog(logf, env)
 	var in io.Reader
 	switch {
 	case l.Live:
@@ -244,7 +245,7 @@ func startLocal(tool string, req workers.Request, extra map[string]string, c con
 		defer f.Close()
 		in = f
 	}
-	spec := platform.Spec{Path: exe, Args: l.Args, Dir: l.Dir, Env: env, Stdout: logf, Stderr: logf, Detached: true, ManagedTree: true}
+	spec := platform.Spec{Path: exe, Args: l.Args, Dir: l.Dir, Env: env, Stdout: redact, Stderr: redact, Detached: true, ManagedTree: true}
 	if in != nil {
 		spec.Stdin = in
 	}
@@ -253,9 +254,13 @@ func startLocal(tool string, req workers.Request, extra map[string]string, c con
 		if stdin != nil {
 			stdin.Close()
 		}
+		redact.Close()
+		logf.Close()
 		return nil, 0, nil, err
 	}
 	return func() int {
+		defer redact.Close()
+		defer logf.Close()
 		if err := platform.WaitSession(cmd, tempDir); err != nil {
 			var exit *exec.ExitError
 			if cmd.ProcessState == nil || !errors.As(err, &exit) {

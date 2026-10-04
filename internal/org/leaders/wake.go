@@ -368,7 +368,8 @@ func (h *hub) launch(ctx context.Context, env *app.Env, p Pending) (wakeRun, err
 	}
 	fmt.Fprintf(logf, "\n=== %s 唤醒 %s（%s），事件 %v\n", time.Now().Format(time.RFC3339), who.ID, run.profile, p.IDs)
 	spec.ManagedTree = true
-	spec.Stdout, spec.Stderr, spec.Detached = logf, logf, true
+	redact := platform.RedactLog(logf, spec.Env)
+	spec.Stdout, spec.Stderr, spec.Detached = redact, redact, true
 	if spec.Dir == "" {
 		spec.Dir = dir
 	}
@@ -379,6 +380,7 @@ func (h *hub) launch(ctx context.Context, env *app.Env, p Pending) (wakeRun, err
 	}
 	run.started = true
 	err = waitLimited(ctx, cmd, tmp, h.timeout)
+	redact.Close()
 	run.end = store.Now()
 	return run, err
 }

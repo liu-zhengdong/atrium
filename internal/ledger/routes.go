@@ -66,16 +66,18 @@ func BuildTree(tasks []Task, deps map[string][]DepState) *TreeNode {
 
 // Detail 是 task show 的内容。
 type Detail struct {
-	Task       Task        `json:"task"`
-	Parties    Parties     `json:"parties"`
-	ByName     string      `json:"by_name,omitempty"` // 任务分派人的名字，只给带来源的（来源一行写「组织发现 · 名字」）
-	Deps       []DepState  `json:"deps"`
-	Ready      bool        `json:"ready"`
-	WaitingOn  []string    `json:"waiting_on,omitempty"`
-	Broken     []DepState  `json:"broken,omitempty"`
-	Children   *Summary    `json:"children,omitempty"`
-	History    []TaskEvent `json:"history"`
-	Acceptance *Acceptance `json:"acceptance,omitempty"`
+	Task          Task        `json:"task"`
+	Parties       Parties     `json:"parties"`
+	ByName        string      `json:"by_name,omitempty"` // 任务分派人的名字，只给带来源的（来源一行写「组织发现 · 名字」）
+	Deps          []DepState  `json:"deps"`
+	Ready         bool        `json:"ready"`
+	WaitingOn     []string    `json:"waiting_on,omitempty"`
+	Broken        []DepState  `json:"broken,omitempty"`
+	Children      *Summary    `json:"children,omitempty"`
+	History       []TaskEvent `json:"history"`
+	HistoryBefore int64       `json:"history_before,omitempty"`
+	HistoryTotal  int         `json:"history_total"`
+	Acceptance    *Acceptance `json:"acceptance,omitempty"`
 }
 
 // SetBody 是 PATCH /api/tasks/{id}：描述字段与状态可同时改。
@@ -167,7 +169,19 @@ func Routes(r *api.Router, env *app.Env) {
 			return nil, err
 		}
 		d.Children = BuildTree(sub, nil).Summary
-		d.History, err = History(q.Context(), db, id, 20)
+		limit, before, err := historyWindow(q.URL.Query().Get("history_limit"), q.URL.Query().Get("before"))
+		if err != nil {
+			return nil, err
+		}
+		d.History, err = HistoryBefore(q.Context(), db, id, limit+1, before)
+		if err != nil {
+			return nil, err
+		}
+		if len(d.History) > limit {
+			d.History = d.History[1:]
+			d.HistoryBefore = d.History[0].ID
+		}
+		err = db.QueryRowContext(q.Context(), "SELECT count(*) FROM task_events WHERE task = ?", id).Scan(&d.HistoryTotal)
 		return d, err
 	})
 	r.Handle("PATCH /api/tasks/{id}", func(q *api.Req) (any, error) {

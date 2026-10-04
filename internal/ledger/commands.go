@@ -76,7 +76,8 @@ func Commands(t *cli.Table) {
 		},
 		Run: taskList})
 	t.Add(cli.Command{Path: "task show", Args: "<tN>", Summary: "看一件任务：状态、依赖、子任务汇总、最近经历",
-		Run: taskShow})
+		Flags: []cli.Flag{{Name: "history-limit", Value: "条数", Help: "每页经历数（缺省20，上限100）；完整原文用 --json"}, {Name: "before", Value: "经历ID", Help: "读取这条经历之前的一页（下一页入口由输出给出）"}},
+		Run:   taskShow})
 	t.Add(cli.Command{Path: "task set", Args: "<tN>", Summary: "改任务的描述、依赖或状态",
 		Flags: []cli.Flag{
 			{Name: "title", Value: "文字", Help: "标题"},

@@ -934,6 +934,14 @@ func SetFacts(ctx context.Context, db *store.DB, id string, f Facts, actor strin
 
 // Record 追加一条任务经历。其他包记交付检查结论、交回原因等也用它（kind 自定，如 "gate"、"review"）。
 func Record(ctx context.Context, q store.Querier, id, kind, actor, body string) error {
+	if db, ok := q.(*store.DB); ok {
+		switch kind {
+		case "created", "edited", "enqueue", "requeue", "start", "launch", "result", "bounce", "facts":
+			var unlock func()
+			ctx, unlock = applicationLock(ctx, db)
+			defer unlock()
+		}
+	}
 	_, err := q.ExecContext(ctx, `INSERT INTO task_events (task, at, kind, actor, body) VALUES (?, ?, ?, ?, ?)`,
 		id, store.Now(), kind, actor, body)
 	return err

@@ -71,6 +71,32 @@ func TestQualityBrowser(t *testing.T) {
 			must(ledger.Record(ctx, db, task.ID, workers.ExitKind, "runtime", string(exit)))
 		}
 	}
+	// 单次任务分布隔离样本；多次拉起必须累计，各组至少五件。
+	for name, values := range map[string][]float64{"taskfull": {0, 2, 4, 6, 1000}, "taskfew": {0, 2, 4, 6}, "taskmissing": {1, 2, 3, 4, 5}, "taskcurrency": {1, 2, 3, 4, 5}, "taskzero": {0, 0, 0, 0, 0}, "taskbad": {-1, 2, 3, 4, 5}} {
+		source := "---\nmodel: " + name + "\n---\n隔离任务消耗样本"
+		_, err := workers.SaveProfile(ctx, db, "combos/codex+"+name, workers.Edit{Source: &source}, "u1")
+		must(err)
+		for index, v := range values {
+			task, err := ledger.Add(ctx, db, ledger.NewTask{Title: name}, "u1")
+			must(err)
+			for n := 1; n <= 2; n++ {
+				run, _ := json.Marshal(workers.Run{N: n, Worker: "codex+" + name, Host: "h0"})
+				output := int64(v)
+				u := workers.Usage{Cost: num(v / 2), Currency: "USD", Tokens: workers.Tokens{Output: &output}}
+				if name == "taskmissing" && n == 2 {
+					u.Cost = nil
+				}
+				if name == "taskcurrency" && index == 4 {
+					u.Currency = "CNY"
+				}
+				exit, _ := json.Marshal(workers.Exit{N: n, Outcome: workers.OutOK, Usage: u})
+				must(ledger.Record(ctx, db, task.ID, workers.RunKind, "runtime", string(run)))
+				must(ledger.Record(ctx, db, task.ID, workers.ExitKind, "runtime", string(exit)))
+			}
+			_, err = ledger.Apply(ctx, db, task.ID, ledger.Event{Kind: ledger.Set, To: ledger.Done}, "u1", "隔离任务完成")
+			must(err)
+		}
+	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	router := api.NewRouter(logger)
 	router.AddAuth(func(token string) (api.Actor, bool) {

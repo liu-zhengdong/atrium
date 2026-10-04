@@ -79,7 +79,22 @@ func ReadQuality(ctx context.Context, db store.Querier) ([]Quality, error) {
 	if err != nil {
 		return nil, err
 	}
-	return Qualities(all, wakes, statKeyOf(keys)), nil
+	rows := Qualities(all, wakes, statKeyOf(keys))
+	consumption, err := ReadTaskConsumptions(ctx, db, all, since, statKeyOf(keys))
+	if err != nil {
+		return nil, err
+	}
+	for i := range rows {
+		if rows[i].Leader {
+			continue
+		}
+		c := consumption[rows[i].Combo]
+		if c.Text == "" {
+			c.Text = c.String()
+		}
+		rows[i].TaskConsumption = &c
+	}
+	return rows, nil
 }
 
 // WakeAttempt 把一条负责人唤醒记录当成一次拉起（Task 是负责人）。

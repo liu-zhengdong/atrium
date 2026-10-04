@@ -3,6 +3,7 @@ package dispatch
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -63,7 +64,10 @@ func TestReclaimHistoricalServiceStartup(t *testing.T) {
 	}
 	t.Setenv("ATRIUM_DATA", d.env.Paths.Data)
 	t.Setenv("ATRIUM_PORT", "")
-	client := &http.Client{Timeout: time.Second}
+	// 测试独占连接池，响应读完后在停止时关闭空闲连接；不把连接留给下一轮。
+	transport := &http.Transport{}
+	t.Cleanup(transport.CloseIdleConnections)
+	client := &http.Client{Timeout: time.Second, Transport: transport}
 	for round := 1; round <= 2; round++ {
 		done := make(chan error, 1)
 		go func() { done <- service.Serve([]app.Module{Module()}, os.Getenv) }()
@@ -77,10 +81,17 @@ func TestReclaimHistoricalServiceStartup(t *testing.T) {
 			if base != "" {
 				req, _ := http.NewRequest("POST", base+"/api/service/stop", nil)
 				req.Header.Set("Authorization", "Bearer isolated-test-token")
-				if resp, err := client.Do(req); err == nil {
+				if resp, err := client.Do(req); err != nil {
+					t.Errorf("停止隔离服务：%v", err)
+				} else {
+					_, readErr := io.Copy(io.Discard, resp.Body)
 					resp.Body.Close()
+					if readErr != nil || resp.StatusCode != http.StatusOK {
+						t.Errorf("停止隔离服务响应：HTTP %d，%v", resp.StatusCode, readErr)
+					}
 				}
 			}
+			transport.CloseIdleConnections()
 			select {
 			case err := <-done:
 				if err != nil {
@@ -112,7 +123,11 @@ func TestReclaimHistoricalServiceStartup(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		_, readErr := io.Copy(io.Discard, resp.Body)
 		resp.Body.Close()
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
 		if resp.StatusCode != http.StatusOK {
 			t.Fatalf("服务不健康：%d", resp.StatusCode)
 		}

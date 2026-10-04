@@ -4,3 +4,4 @@
 *.log
 !**/testdata/**/*.log
 .DS_Store
+.commandcode/

@@ -15,6 +15,7 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/api"
 	"github.com/liu-zhengdong/atrium/internal/events"
 	"github.com/liu-zhengdong/atrium/internal/ledger"
+	"github.com/liu-zhengdong/atrium/internal/names"
 	"github.com/liu-zhengdong/atrium/internal/org"
 )
 
@@ -165,7 +166,7 @@ type DeptBrief struct {
 // PromptInput 是一次唤醒提示词的全部材料。
 type PromptInput struct {
 	Leader   org.Identity
-	Names    map[string]string // identities 名册中的负责人名字，仅供纯文本呈现
+	Names    map[string]string // 登记资料中的身份与机器名字，仅供纯文本呈现
 	Global   string            // 用户的全局原则（org.Principles 拼好的一节）；没有为空
 	Skills   string            // 技能索引（org.SkillIndex 拼好的一节）；没有为空
 	Depts    []DeptBrief
@@ -244,7 +245,7 @@ func Prompt(in PromptInput) string {
 			line += "（" + e.Dept + "）"
 		}
 		if e.Body != "" {
-			line += " " + e.Body
+			line += " " + names.EventBody(e.Kind, e.Body, in.Names)
 		}
 		w("%s", line)
 	}

@@ -14,6 +14,7 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/events"
 	"github.com/liu-zhengdong/atrium/internal/hosts"
 	"github.com/liu-zhengdong/atrium/internal/ledger"
+	"github.com/liu-zhengdong/atrium/internal/names"
 	"github.com/liu-zhengdong/atrium/internal/org"
 	"github.com/liu-zhengdong/atrium/internal/org/agenda"
 	"github.com/liu-zhengdong/atrium/internal/pause"
@@ -185,22 +186,7 @@ func (ix *orgIndex) name(id string) string {
 // loadNames 是网页上会提到的身份与机器的名字（部门名在部门树里）：用户写「你」（网页是给你看的），秘书、负责人、机器取登记的名字。
 // 页面一律经它把短号换成名字，前端拿到的是同一份（Nav.Names）。
 func loadNames(ctx context.Context, q store.Querier) (map[string]string, error) {
-	out := map[string]string{"u1": "你", org.Secretary: "秘书"}
-	leaders, err := org.Leaders(ctx, q)
-	if err != nil {
-		return nil, err
-	}
-	for _, l := range leaders {
-		out[l.ID] = l.Name
-	}
-	list, err := hosts.List(ctx, q)
-	if err != nil {
-		return nil, err
-	}
-	for _, h := range list {
-		out[h.ID] = h.Name
-	}
-	return out, nil
+	return names.Load(ctx, q)
 }
 
 // subtree 返回 id 及全部下属部门。

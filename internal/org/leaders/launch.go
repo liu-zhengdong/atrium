@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/liu-zhengdong/atrium/internal/app"
+	"github.com/liu-zhengdong/atrium/internal/names"
 	"github.com/liu-zhengdong/atrium/internal/org"
 	"github.com/liu-zhengdong/atrium/internal/platform"
 	"github.com/liu-zhengdong/atrium/internal/store"
@@ -128,13 +129,10 @@ func leaderEnv(base map[string]string, token, data, tmp string) map[string]strin
 
 func buildPrompt(ctx context.Context, q store.Querier, who org.Identity, ids []int64) (string, error) {
 	in := PromptInput{Leader: who}
-	roster, err := org.Leaders(ctx, q)
+	var err error
+	in.Names, err = names.Load(ctx, q)
 	if err != nil {
 		return "", err
-	}
-	in.Names = make(map[string]string, len(roster))
-	for _, identity := range roster {
-		in.Names[identity.ID] = identity.Name
 	}
 	ps, err := org.Parents(ctx, q)
 	if err != nil {

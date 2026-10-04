@@ -73,6 +73,10 @@ func TestTopParentPresentation(t *testing.T) {
 		calls = append(calls, req.URL.RequestURI())
 		fault := broken
 		mu.Unlock()
+		if req.URL.Path == "/api/hosts" {
+			json.NewEncoder(w).Encode(map[string]any{"ok": true, "result": []any{}})
+			return
+		}
 		if req.URL.Path == "/api/task-parties" {
 			switch fault {
 			case "missing":
@@ -114,7 +118,7 @@ func TestTopParentPresentation(t *testing.T) {
 		if code != 0 || !strings.Contains(out, want) || strings.Contains(out, "  ：子任务在做") {
 			t.Fatalf("父任务呈现错误，code=%d，期望 %q：\n%s", code, want, out)
 		}
-		if want := []string{"/api/top", "/api/leaders", "/api/task-parties?ids=" + parent.ID}; !reflect.DeepEqual(requests, want) {
+		if want := []string{"/api/top", "/api/leaders", "/api/hosts", "/api/task-parties?ids=" + parent.ID}; !reflect.DeepEqual(requests, want) {
 			t.Fatalf("只应补读父任务角色：%v", requests)
 		}
 		t.Log(out)
@@ -172,7 +176,7 @@ func TestTopParentPresentation(t *testing.T) {
 		t.Fatal(err)
 	}
 	out, code, requests = run("top", "--once")
-	if code != 0 || !reflect.DeepEqual(requests, []string{"/api/top", "/api/leaders"}) || !strings.Contains(out, "未登记负责人（a10）：子任务都结束了") {
+	if code != 0 || !reflect.DeepEqual(requests, []string{"/api/top", "/api/leaders", "/api/hosts"}) || !strings.Contains(out, "未登记负责人（a10）：子任务都结束了") {
 		t.Fatalf("子任务结束后应沿用原负责人等待、不补读角色：%d %s %v", code, out, requests)
 	}
 }

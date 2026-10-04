@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/liu-zhengdong/atrium/internal/names"
 	"github.com/liu-zhengdong/atrium/internal/watch"
 )
 
@@ -53,6 +54,9 @@ func StatusLine(v watch.View) string {
 		h := t.Holder
 		h.Who = v.HolderWho(h)
 		text := t.ID + " " + holderShort(h)
+		if h.Kind == "worker" && t.Host != "" {
+			text += "（" + names.Host(t.Host, v.Names) + "）"
+		}
 		if h := watch.Held(t.Holder.Since, v.At); h != "" && t.Holder.Kind == "worker" {
 			text += " " + h
 		}

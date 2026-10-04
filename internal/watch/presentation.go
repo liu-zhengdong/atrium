@@ -7,6 +7,7 @@ import (
 
 	"github.com/liu-zhengdong/atrium/internal/cli"
 	"github.com/liu-zhengdong/atrium/internal/ledger"
+	"github.com/liu-zhengdong/atrium/internal/names"
 	"github.com/liu-zhengdong/atrium/internal/org"
 )
 
@@ -17,13 +18,10 @@ func ReadHumanView(c *cli.Ctx) (View, error) {
 	if err := c.Call("GET", "/api/top", nil, &v); err != nil {
 		return v, err
 	}
-	var roster []org.Identity
-	if err := c.Call("GET", "/api/leaders", nil, &roster); err != nil {
+	var err error
+	v.Names, err = names.Read(c)
+	if err != nil {
 		return v, err
-	}
-	v.Names = make(map[string]string, len(roster))
-	for _, identity := range roster {
-		v.Names[identity.ID] = identity.Name
 	}
 	return v, nil
 }

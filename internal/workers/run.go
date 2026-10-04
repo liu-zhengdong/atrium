@@ -66,6 +66,25 @@ func Runs(ctx context.Context, q store.Querier, task string, limit int) ([]Run, 
 	return out, rows.Err()
 }
 
+// Launched 是拉起过这件任务的执行者（去重，按首次拉起先后，至多 100 位）。
+func Launched(ctx context.Context, q store.Querier, task string) ([]string, error) {
+	rows, err := q.QueryContext(ctx, `SELECT json_extract(body, '$.worker') AS w FROM task_events
+		WHERE task = ? AND kind = ? AND w != '' GROUP BY w ORDER BY min(id) LIMIT 100`, task, RunKind)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var w string
+		if err := rows.Scan(&w); err != nil {
+			return nil, err
+		}
+		out = append(out, w)
+	}
+	return out, rows.Err()
+}
+
 // LastRun 取最近一次拉起；从没拉起过返回 nil。
 func LastRun(ctx context.Context, q store.Querier, task string) (*Run, error) {
 	rs, err := Runs(ctx, q, task, 1)

@@ -337,6 +337,132 @@ func TestWatchQuotaMarks(t *testing.T) {
 	}
 }
 
+// 启动卡住（watch 判 worker_start 超时）：标「工具+模型@机器」一段时间并记「起不来」，换人避开，到期自动再试。
+func TestWatchStartStuckMarks(t *testing.T) {
+	env, d := setup(t)
+	ctx := context.Background()
+	bin := t.TempDir()
+	if err := os.WriteFile(filepath.Join(bin, "grok"), []byte("#!/bin/sh\nsleep 5\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
+	tk, _ := ledger.Add(ctx, env.DB, ledger.NewTask{Title: "调研"}, "u1")
+	if _, err := Enqueue(ctx, env, tk.ID, Options{Worker: "grok"}, "u1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.pump(ctx); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, env, tk.ID, func(x ledger.Task) bool { return x.Status == ledger.Running })
+	run, _ := workers.LastRun(ctx, env.DB, tk.ID)
+	if _, err := ledger.Apply(ctx, env.DB, tk.ID, ledger.Event{Kind: ledger.ExitFail}, "runtime", "启动 3 分钟没动"); err != nil {
+		t.Fatal(err)
+	}
+	if err := Requeue(ctx, env, tk.ID, watch.Why{Role: watch.RoleWorkerStart, Worker: run.Worker, Reason: "启动 3 分钟没动"}); err != nil {
+		t.Fatal(err)
+	}
+	marks, _ := workers.Marks(ctx, env.DB, store.Now())
+	if len(marks) != 1 || marks[0].Target() != run.Worker+"@"+LocalHost || marks[0].Kind != workers.SignalNoStart || marks[0].Until <= store.Now() {
+		t.Fatalf("启动卡住应标 %s nostart、到期自动再试：%+v", run.Worker, marks)
+	}
+	v, err := d.view(ctx, tk, Options{Risk: "low"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range v.Candidates {
+		if c.ID == run.Worker && (v.Recommended == c.ID || !strings.Contains(c.Waiting, "没进展")) {
+			t.Errorf("挑执行者应避开启动没进展的组合、写明在等它恢复：%+v", c)
+		}
+	}
+	if err := d.pump(ctx); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, env, tk.ID, func(x ledger.Task) bool { return x.Stage == ledger.StageGate })
+	runs, _ := workers.Runs(ctx, env.DB, tk.ID, 10)
+	if len(runs) != 2 || runs[0].Worker != run.Worker || runs[1].Worker == run.Worker {
+		t.Fatalf("启动卡住应换人重派：%+v", runs)
+	}
+	stats, err := workers.Stats(ctx, env.DB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s := stats[workers.Combo(run.Worker)]; len(s) != 1 || s[0].Outcome != workers.OutSetup {
+		t.Errorf("启动卡住这次拉起应记起不来：%+v", s)
+	}
+}
+
+// 启动卡住但日志尾部写着额度用尽（卡在额度报错上）：按额度标，不按启动没进展标。
+func TestWatchStartStuckQuotaWins(t *testing.T) {
+	env, d := setup(t)
+	ctx := context.Background()
+	bin := t.TempDir()
+	if err := os.WriteFile(filepath.Join(bin, "grok"), []byte("#!/bin/sh\necho 'Error: HTTP/1.1 429 Too Many Requests'\nsleep 5\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
+	tk, _ := ledger.Add(ctx, env.DB, ledger.NewTask{Title: "调研"}, "u1")
+	if _, err := Enqueue(ctx, env, tk.ID, Options{Worker: "grok"}, "u1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.pump(ctx); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, env, tk.ID, func(x ledger.Task) bool { return x.Status == ledger.Running })
+	run, _ := workers.LastRun(ctx, env.DB, tk.ID)
+	for i := 0; i < 100; i++ {
+		if b, _ := os.ReadFile(run.Log); strings.Contains(string(b), "429") {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if _, err := ledger.Apply(ctx, env.DB, tk.ID, ledger.Event{Kind: ledger.ExitFail}, "runtime", "启动卡住"); err != nil {
+		t.Fatal(err)
+	}
+	if err := Requeue(ctx, env, tk.ID, watch.Why{Role: watch.RoleWorkerStart, Signal: watch.SigQuota, Worker: run.Worker, Reason: "启动卡住"}); err != nil {
+		t.Fatal(err)
+	}
+	marks, _ := workers.Marks(ctx, env.DB, store.Now())
+	if len(marks) != 1 || marks[0].Target() != run.Worker+"@"+LocalHost || marks[0].Reason != "额度用尽" {
+		t.Fatalf("卡在额度报错上的启动超时应按额度标记：%+v", marks)
+	}
+	stats, err := workers.Stats(ctx, env.DB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s := stats[workers.Combo(run.Worker)]; len(s) != 1 || s[0].Outcome != workers.OutQuota {
+		t.Errorf("这次拉起应记额度失败：%+v", s)
+	}
+}
+
+// 普通失败（没额度、没启动卡住信号）只换人不标记。
+func TestWatchPlainFailNoMark(t *testing.T) {
+	env, d := setup(t)
+	ctx := context.Background()
+	bin := t.TempDir()
+	if err := os.WriteFile(filepath.Join(bin, "grok"), []byte("#!/bin/sh\nsleep 5\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
+	tk, _ := ledger.Add(ctx, env.DB, ledger.NewTask{Title: "调研"}, "u1")
+	if _, err := Enqueue(ctx, env, tk.ID, Options{Worker: "grok"}, "u1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.pump(ctx); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, env, tk.ID, func(x ledger.Task) bool { return x.Status == ledger.Running })
+	run, _ := workers.LastRun(ctx, env.DB, tk.ID)
+	if _, err := ledger.Apply(ctx, env.DB, tk.ID, ledger.Event{Kind: ledger.ExitFail}, "runtime", "其他失败"); err != nil {
+		t.Fatal(err)
+	}
+	if err := Requeue(ctx, env, tk.ID, watch.Why{Worker: run.Worker, Reason: "其他失败"}); err != nil {
+		t.Fatal(err)
+	}
+	if marks, _ := workers.Marks(ctx, env.DB, store.Now()); len(marks) != 0 {
+		t.Fatalf("普通失败不应标记任何组合：%+v", marks)
+	}
+}
+
 // 执行者报没登录：标记本机的这个工具，直接换人并避开它。
 func TestFlowLoginRequeue(t *testing.T) {
 	env, d := setup(t)

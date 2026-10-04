@@ -326,6 +326,7 @@ function renderWorker(d) {
     ${rules.endpoint ? `<dt>端点</dt><dd>${esc(rules.endpoint)}（${esc(rules.endpoint_api || "")}）</dd>` : ""}</dl>
     <section class="worker-section"><h4>拉起</h4><p class="quiet">${st.launches ? `近 ${st.launches} 次：交付 ${st.ok} · 被交回 ${st.bounce} · 额度 ${st.quota} · 起不来 ${st.setup} · 其他失败 ${st.fail}` : "还没有拉起记录"}</p>
     <p class="quiet">${esc(d.timing)}</p>
+    ${d.quality?.cost_text ? `<p class="quiet">近 30 天花费：${esc(d.quality.cost_text)}</p>` : ""}
     ${outcomePips((d.attempts || []).map(a => a.outcome))}
     <div class="worker-runs">${(d.attempts || []).map(a => `<div><div class="run-ref"><span class="quiet">${date(a.at)} ${clock(a.at)}</span><a href="#today/${esc(a.task)}">${esc(a.task)}</a> 第 ${a.n} 次 ${esc(a.worker)}（${esc(objectName(a.host))}）${a.model ? `（${esc(a.model)}）` : ""}</div><span class="run-outcome ${a.outcome === "ok" ? "quiet" : "mark"}">${esc(outName[a.outcome])}</span>${a.reason && a.outcome !== "ok" ? `<div class="run-reason mark">${esc(a.reason)}</div>` : ""}</div>`).join("")}</div></section>
     <section class="worker-section"><h4>正文</h4>${r.body ? `<article class="doc worker-body">${mdBlock(r.body, () => renderWorker(d), r.id)}</article>` : `<p class="quiet">没有正文</p>`}</section>

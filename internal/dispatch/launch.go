@@ -259,8 +259,8 @@ func startLocal(tool string, req workers.Request, extra map[string]string, c con
 		return nil, 0, nil, err
 	}
 	return func() int {
-		defer redact.Close()
 		defer logf.Close()
+		defer redact.Close()
 		if err := platform.WaitSession(cmd, tempDir); err != nil {
 			var exit *exec.ExitError
 			if cmd.ProcessState == nil || !errors.As(err, &exit) {

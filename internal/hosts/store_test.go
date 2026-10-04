@@ -3,84 +3,38 @@ package hosts
 import (
 	"context"
 	"path/filepath"
-	"sync"
 	"testing"
 
 	"github.com/liu-zhengdong/atrium/internal/store"
 )
 
-// 自检先写 clis、启动刷新后跑：刷新必须保留 clis（t933 同类，EnsureLocal 原先整体写 info 会抹掉）。
-func TestEnsureLocalKeepsCLIs(t *testing.T) {
+// 启动刷新清掉上一进程留下的 clis：可用事实已过期，必须等本轮自检重报，
+// 不能拿旧的「已安装」把任务在自检前派出去（dispatch 的 TestStartupProbeAutoDispatch
+// 从分派侧钉同一个语义；这里从存储侧钉）。EnsureLocal 与自检在装配顺序上先后分明
+// （serve.go 先跑完各模块 Routes 再起 Run），不构成 t933 那类并发覆盖。
+func TestEnsureLocalRefreshClearsStaleCLIs(t *testing.T) {
 	ctx := context.Background()
 	db, err := store.Open(filepath.Join(t.TempDir(), "db"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	if err := EnsureLocal(ctx, db, Info{Hostname: "mac", OS: "darwin"}); err != nil {
+	// 上一进程的自检结论：startupfake 可用。
+	if err := setCLIs(ctx, db, Local, map[string]CLI{"startupfake": {Installed: true}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := setCLIs(ctx, db, Local, map[string]CLI{"go": {Version: "1.24", Installed: true}}); err != nil {
-		t.Fatal(err)
-	}
-	if err := EnsureLocal(ctx, db, Info{Hostname: "mac", OS: "darwin", CPUs: 8, Version: "v2"}); err != nil {
+	// 本轮启动刷新：不带 clis，整体写 info。
+	if err := EnsureLocal(ctx, db, Info{Hostname: "mac", OS: "darwin", CPUs: 8}); err != nil {
 		t.Fatal(err)
 	}
 	h, err := Get(ctx, db, Local)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if h.Info == nil || h.Info.CLIs["go"].Version != "1.24" {
-		t.Fatalf("启动刷新抹掉了自检的 clis：%+v", h.Info)
-	}
-	if h.Info.CPUs != 8 || h.Info.Version != "v2" {
-		t.Fatalf("启动刷新没生效：%+v", h.Info)
-	}
-}
-
-// EnsureLocal 与 setCLIs 交错并发：数据库事务串行加上各自字段级写，终态 clis 与刷新字段都应在。
-func TestEnsureLocalRaceSelfCheck(t *testing.T) {
-	ctx := context.Background()
-	db, err := store.Open(filepath.Join(t.TempDir(), "db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	if err := EnsureLocal(ctx, db, Info{Hostname: "mac"}); err != nil {
-		t.Fatal(err)
-	}
-	const rounds = 20
-	errc := make(chan error, 2*rounds)
-	for i := 0; i < rounds; i++ {
-		var wg sync.WaitGroup
-		wg.Add(2)
-		go func() {
-			defer wg.Done()
-			errc <- setCLIs(ctx, db, Local, map[string]CLI{"go": {Version: "1.24", Installed: true}})
-		}()
-		go func() {
-			defer wg.Done()
-			errc <- EnsureLocal(ctx, db, Info{Hostname: "mac", CPUs: 8})
-		}()
-		wg.Wait()
-	}
-	for i := 0; i < 2*rounds; i++ {
-		if err := <-errc; err != nil {
-			t.Fatal(err)
-		}
-	}
-	h, err := Get(ctx, db, Local)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if h.Info == nil {
-		t.Fatal("机器 info 丢了")
-	}
-	cli, ok := h.Info.CLIs["go"]
-	if !ok || cli.Version != "1.24" {
-		t.Fatalf("并发后 clis 丢了：%+v", h.Info)
+	if h.Info == nil || len(h.Info.CLIs) != 0 {
+		t.Fatalf("启动刷新应清掉过期的 clis，留下：%+v", h.Info)
 	}
 	if h.Info.CPUs != 8 {
-		t.Fatalf("并发后启动字段丢了：%+v", h.Info)
+		t.Fatalf("启动刷新没生效：%+v", h.Info)
 	}
 }

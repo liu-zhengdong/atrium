@@ -118,14 +118,19 @@ func hostRows(ctx context.Context, q store.Querier) ([]hostRow, error) {
 }
 
 // EnsureLocal 登记本机（第一次启动时发到 h1），之后每次启动刷新机器信息。
-// 刷新与自检（setCLIs）会并发，clis 只归自检写，刷新走 touch 保留库里的。
+// 刷新整体写 info、清掉 clis 是有意的：服务启动时装配顺序保证它先于自检循环
+// （serve.go 先跑完各模块 Routes 再起 Run），两者不并发；上一进程留下的可用事实
+// 已经过期，必须清掉等本轮自检重报（dispatch 的 TestStartupProbeAutoDispatch 钉住
+// 这个语义），不能沿用过期的「已安装」结论把任务提前派出去。所以这里不走 touch
+// 的 clis 合并——那是给远程行 hello 与自检同时到用的。
 func EnsureLocal(ctx context.Context, db *store.DB, info Info) error {
 	raw, _ := json.Marshal(info)
 	return db.Tx(ctx, func(tx *sql.Tx) error {
 		var id string
 		err := tx.QueryRowContext(ctx, `SELECT id FROM hosts WHERE kind = 'local'`).Scan(&id)
 		if err == nil {
-			return touch(ctx, tx, id, &info, nil)
+			_, err = tx.ExecContext(ctx, `UPDATE hosts SET info = ?, last_seen_at = ? WHERE id = ?`, string(raw), store.Now(), id)
+			return err
 		}
 		if !store.IsNotFound(err) {
 			return err

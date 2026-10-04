@@ -404,17 +404,20 @@ func (a *Agent) launch(ctx context.Context, as Assignment) (int, string, error) 
 	if err != nil {
 		return 0, "", err
 	}
-	defer f.Close()
-	spec.ManagedTree = true
-	spec.Stdout, spec.Stderr, spec.Detached = f, f, true
+	// 日志由本进程的拷贝 goroutine 经 redact 写入，退出回收时（下方 goroutine）才关；不能 defer（函数返回时进程还在跑）。
 	if spec.Dir == "" {
 		spec.Dir = cwd
 	}
 	if spec.Env == nil {
 		spec.Env = env
 	}
+	spec.ManagedTree = true
+	redact := platform.RedactLog(f, spec.Env)
+	spec.Stdout, spec.Stderr, spec.Detached = redact, redact, true
 	cmd, err := platform.Start(spec)
 	if err != nil {
+		redact.Close()
+		f.Close()
 		return 0, "", err
 	}
 	st := &runState{rec: runRecord{RunRef: RunRef{as.Task, as.Run}, PID: cmd.Process.Pid, Log: logPath}, done: make(chan struct{})}
@@ -438,6 +441,8 @@ func (a *Agent) launch(ctx context.Context, as Assignment) (int, string, error) 
 		} else if err != nil {
 			code = -1
 		}
+		redact.Close()
+		f.Close()
 		if err := workers.AfterExit(as.Tool, logPath, spec.Env); err != nil {
 			a.Log.Error("执行者退出后补记用量失败", "task", as.Task, "err", err)
 		}

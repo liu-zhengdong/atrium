@@ -283,7 +283,8 @@ func TestAgentLaunchLogExit(t *testing.T) {
 	}
 	got, _ := os.ReadFile(log)
 	s := string(got)
-	if !strings.Contains(s, "开工 a-b-t1") || !strings.Contains(s, "看到了 README") || !strings.Contains(s, "密钥 k1 标记 1 令牌 wt_t1_1_x 服务 "+a.Cfg.Server) ||
+	// 令牌打进输出也会被代理侧落盘脱敏换成占位；MY_KEY 的值太短（k1），不换。
+	if !strings.Contains(s, "开工 a-b-t1") || !strings.Contains(s, "看到了 README") || !strings.Contains(s, "密钥 k1 标记 1 令牌 "+platform.Redacted+" 服务 "+a.Cfg.Server) ||
 		!strings.Contains(s, "代理在 PATH 最前") || len(got) < 300_000 {
 		t.Fatalf("日志不全（%d 字节）：%.200s", len(got), s)
 	}

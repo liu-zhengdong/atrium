@@ -18,7 +18,7 @@ import (
 // 每个套餐（provider × 账号）一组窗口的已用百分比与重置时间。只喂派活避让与额度失败的恢复时刻，不算钱、不进展示。
 // 每台机器读自己能连到的 magpie（缺省本机 127.0.0.1:3425，ATRIUM_MAGPIE_URL 可改），读数按机器存；读不到的机器额度未知。
 
-// MagpieAccount 是 magpie 读数在 quota_cache 里的来源名；不在 Accounts 里，不进 quota 一览。
+// MagpieAccount 是 magpie 读数在 quota_cache 里的来源名；不在旧厂商 Accounts 里，仅供派活感知。
 const MagpieAccount = "magpie"
 
 // MagpieURL 是 magpie 网关的缺省地址（它缺省只听本机回环）。

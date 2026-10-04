@@ -93,7 +93,7 @@ cd ~/秘书目录 && atrium secretary bridge --install-hook   # 装一次：事�
 - **日志**：`atrium task log t1 --follow` 跟着看执行者在干什么；网页任务抽屉里是同一份日志的尾巴。
 - **多台机器**：`atrium host add` 登记一台，照回执在那台上运行 `atrium agent …` 接入，再 `atrium agent install` 装成开机自启；远程机器主动连服务，不用开端口。
 - **接其他编码 CLI**：用 `workers edit` 写 `harness/<工具>` 档案，声明 `protocol: cli`、PATH 上的命令名和参数模板。有会话 id 的工具可声明 `session_match` 与 `session_args`，补充说明会在本轮结束后继续同一会话；档案写法见 [通用 CLI 接入](internal/README.md#通用-cli-档案)。
-- **额度**：`atrium quota` 看各账号还剩多少；Atrium 自己读 Claude Code、Codex、OpenCode 的用量，其余的由 [OpenQuota](https://github.com/liu-zhengdong/OpenQuota) 补上。分派任务时按 magpie 的额度读数避开窗口将满的组合（只管模型走 magpie 的组合，读不到按未知），并给你留一份（缺省 20%，`atrium quota set --reserve` 改）。执行者撞了额度、起不来（没登录、缺运行环境，或原因不明但一步没做就出错退出）或模型名无效，那个「工具+模型@机器」会被标成不可用、换人重派；`atrium workers` 能看到，额度按报文里的恢复时刻标（报文没写的标「恢复时间未知」，和原因不明的一样到点自动再试，不按出错时长猜），其余处理好后 `atrium workers edit --clear` 解除；订阅被封、重登修不好的，`atrium workers edit --wait-subscription` 转成「等订阅恢复」，照样不派活但不再催你登录，订阅恢复后再 `--clear`。每次拉起都记一个结果（交付、被交回、额度、起不来、其他失败），`atrium workers` 按「工具+模型」列近 20 次；近 5 次里启动失败两次以上的，挑执行者时排到后面。
+- **额度**：各套餐余量在 OpenQuota/magpie 面板看。分派任务时按 magpie 的额度读数避开窗口将满的组合（只管模型走 magpie 的组合，读不到按未知），并给你留一份（缺省 20%，`atrium quota set --reserve` 改）。执行者撞了额度、起不来（没登录、缺运行环境，或原因不明但一步没做就出错退出）或模型名无效，那个「工具+模型@机器」会被标成不可用、换人重派；`atrium workers` 能看到，额度按报文里的恢复时刻标（报文没写的标「恢复时间未知」，和原因不明的一样到点自动再试，不按出错时长猜），其余处理好后 `atrium workers edit --clear` 解除；订阅被封、重登修不好的，`atrium workers edit --wait-subscription` 转成「等订阅恢复」，照样不派活但不再催你登录，订阅恢复后再 `--clear`。每次拉起都记一个结果（交付、被交回、额度、起不来、其他失败），`atrium workers` 按「工具+模型」列近 20 次；近 5 次里启动失败两次以上的，挑执行者时排到后面。
 - **数据**：都在 `~/.atrium-v2`（`ATRIUM_DATA` 可改），换机器带走这个目录即可。令牌、数据库不要提交或分享；令牌泄露了用 `atrium auth rotate` 换一个。旧版的数据用 `atrium import` 一次性导入。
 - **重启与升级**：`atrium restart` 随时可以做，`atrium update` 装最新版（`--to 版本` 装指定版本）。
 

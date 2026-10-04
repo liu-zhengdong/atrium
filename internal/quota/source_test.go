@@ -147,28 +147,7 @@ func TestSourceCacheFailureIdentity(t *testing.T) {
 	if !reflect.DeepEqual(stored.Rows[0], p) {
 		t.Fatal("失败改变旧账号事实")
 	}
-	if !agePaces([]Pace{p}, now.Add(11*time.Minute).UnixMilli())[0].Stale {
-		t.Fatal("年龄未重算")
-	}
 	t.Log("预期刷新失败保留A身份/原时刻/全窗口；实际符合，不证明B当前套餐或真实账号绑定")
 }
 
-func TestSourceQualityAge(t *testing.T) {
-	now := time.Now().UTC()
-	for _, quality := range []string{"refreshFailed", "empty", "remembered", "stale"} {
-		p := fixtureSources(t)[0]
-		p.RefreshedAt = now.Format(time.RFC3339Nano)
-		p.Stale = false
-		p.DataQuality = quality
-		if !agePaces([]Pace{p}, now.UnixMilli())[0].Stale {
-			t.Fatal("源失败/旧数被认新鲜", quality)
-		}
-	}
-	for _, at := range []string{"", now.Add(time.Minute).Format(time.RFC3339Nano)} {
-		p := fixtureSources(t)[0]
-		p.RefreshedAt = at
-		if !agePaces([]Pace{p}, now.UnixMilli())[0].Stale {
-			t.Fatal("未知/未来时刻被认新鲜")
-		}
-	}
-}
+func ptr(v float64) *float64 { return &v }

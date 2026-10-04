@@ -10,8 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/liu-zhengdong/atrium/internal/app"
-	"github.com/liu-zhengdong/atrium/internal/config"
 	"github.com/liu-zhengdong/atrium/internal/store"
 )
 
@@ -186,7 +184,7 @@ func TestViaMagpie(t *testing.T) {
 	}
 }
 
-// magpie 只在配了地址时读；读数照常经 Record 存下，但不进 quota 一览。
+// magpie 只在配了地址时读；读数照常经 Record 存下，供派活感知使用。
 func TestMagpieLocalAndStore(t *testing.T) {
 	if l := NewLocal(Deps{Now: time.Now}); len(l.accounts) != len(Builtin) {
 		t.Fatal("没配地址不读 magpie", l.accounts)
@@ -219,15 +217,6 @@ func TestMagpieLocalAndStore(t *testing.T) {
 	}
 	if sp, _ := MagpieSpare(all, "h3", "cursor", 20, now.UnixMilli()); sp.Stop == "" {
 		t.Fatal("存下的读数应能判将满", sp)
-	}
-	ov, err := Last(ctx, &app.Env{DB: db, Paths: config.Paths{Data: dir}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, line := range ov.Lines {
-		if strings.Contains(line.Account, MagpieAccount) {
-			t.Fatal("magpie 不进一览", line)
-		}
 	}
 	if err := DropHost(ctx, db, "h3"); err != nil {
 		t.Fatal(err)

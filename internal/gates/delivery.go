@@ -192,6 +192,7 @@ func (g *Gate) choiceFile(ctx context.Context, t ledger.Task) ([]byte, error) {
 
 // checkEnding 是没有改动可查的交付（message、dir）的交付检查：按执行者这一轮最后的回复里的交付结论判（ParseEnding）。
 // 没做成、受阻、没写都转受阻交处理人读回复定（受阻是等外部依赖，不算失败；其余补说明重派或收尾），不交回执行者重跑同一份提示词。
+// 受阻说明以执行者的结论开头：没有改动是这种交付的常态，不是受阻的原因（t923、t1000 曾被读成「没 diff 被拦」）。
 // 审阅任务看的是审阅结论（reviewEnding），读不出就交回审阅者，原任务不卡在审阅阶段。
 func (g *Gate) checkEnding(ctx context.Context, t ledger.Task) (checked, error) {
 	_, review, err := Last(ctx, g.DB, t.ID, KindReviewOf)
@@ -205,25 +206,25 @@ func (g *Gate) checkEnding(ctx context.Context, t ledger.Task) (checked, error) 
 	where := "没有仓库"
 	switch {
 	case t.Repo != "":
-		where = "工作树相对基线没有改动，不要 PR"
+		where = "没有代码改动"
 	case t.Dir != "":
 		where = "在工作地点原地干"
 	}
 	if reply == "" {
 		return checked{block: fmt.Sprintf("这一轮没记到执行者的回复（atrium task log %s 看原始输出）", t.ID)}, nil
 	}
-	next := fmt.Sprintf("；读执行者的回复（atrium task log %s）后补说明重派，或收尾 atrium task set %s --status done", t.ID, t.ID)
+	next := fmt.Sprintf("（%s，按交付结论判）；读执行者的回复（atrium task log %s）后补说明重派，或收尾 atrium task set %s --status done", where, t.ID, t.ID)
 	word, why, ok := Ending(reply)
 	switch {
 	case !ok:
-		return checked{block: where + "，执行者最后一行没写「交付结论：完成/没做成」" + next}, nil
+		return checked{block: "执行者最后一行没写「交付结论：完成/没做成」，读不出做没做成" + next}, nil
 	case word == "受阻":
-		return checked{block: where + "，" + blockedReason(why)}, nil
+		return checked{block: blockedReason(why) + "（" + where + "）"}, nil
 	case word != "完成":
 		if why = strings.Join(strings.Fields(why), " "); why == "" {
 			why = "没写原因"
 		}
-		return checked{block: where + "，执行者交付结论：" + word + "（" + why + "）" + next}, nil
+		return checked{block: "执行者交付结论：" + word + "（" + why + "）" + next}, nil
 	}
 	return checked{note: where + "，交付结论：完成，结论在最后的回复里"}, nil
 }

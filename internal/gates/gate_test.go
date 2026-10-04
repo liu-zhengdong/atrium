@@ -198,9 +198,9 @@ func TestGateNoChanges(t *testing.T) {
 		want  ledger.Status
 		note  string
 	}{
-		{"GitHub 仓库没有改动", false, false, ledger.Done, "没有改动"},
+		{"GitHub 仓库没有改动", false, false, ledger.Done, "没有代码改动"},
 		{"GitHub 仓库只有未提交文件", false, true, ledger.Queued, "未提交"},
-		{"本机仓库没有改动", true, false, ledger.Done, "没有改动"},
+		{"本机仓库没有改动", true, false, ledger.Done, "没有代码改动"},
 		{"本机仓库只有未提交文件", true, true, ledger.Queued, "未提交"},
 	}
 	for _, c := range cases {
@@ -229,6 +229,7 @@ func TestGateNoChanges(t *testing.T) {
 
 // 没有改动可查的交付（message、dir）按执行者这一轮最后一行的交付结论判：完成才完成；没做成、没写转受阻交处理人，
 // 不交回重跑；上一轮的回复不算这一轮的（t486 没做成、t463 停下等决定都曾被判成 done）。
+// 受阻说明以执行者的结论开头，不写成交付检查不过：没有改动不是受阻的原因（t923 交资料 m163、自报没做成，被读成「没 diff 被拦」）。
 func TestGateEnding(t *testing.T) {
 	cases := []struct {
 		name  string
@@ -238,12 +239,13 @@ func TestGateEnding(t *testing.T) {
 		want  ledger.Status
 		note  string
 	}{
-		{"没改动、完成", true, "装好了\n交付结论：完成", false, ledger.Done, "没有改动"},
-		{"没改动、没做成", true, "h3 上读不到设计稿\n交付结论：没做成", false, ledger.Blocked, "没做成（h3 上读不到设计稿）"},
-		{"没仓库、停下等决定", false, "两个方案等负责人定\n交付结论：没做成", false, ledger.Blocked, "没做成（两个方案等负责人定）"},
-		{"没仓库、未完成", false, "还差一步\n交付结论：未完成", false, ledger.Blocked, "未完成（还差一步）"},
-		{"没仓库、受阻", false, "等证书\n交付结论：受阻", false, ledger.Blocked, "受阻（等证书）"},
-		{"没仓库、没写结论", false, "没做成，没改代码也没开 PR", false, ledger.Blocked, "没写「交付结论"},
+		{"没改动、完成", true, "资料 m163\n交付结论：完成", false, ledger.Done, "没有代码改动，交付结论：完成"},
+		{"没改动、没做成", true, "h3 上读不到设计稿\n交付结论：没做成", false, ledger.Blocked, "执行者交付结论：没做成（h3 上读不到设计稿）（没有代码改动，按交付结论判）"},
+		{"没改动、受阻", true, "等 t983\n交付结论：受阻", false, ledger.Blocked, "交付结论：受阻（等 t983）：停下等外部依赖，不算失败；负责人解除后 atrium task run 继续（没有代码改动）"},
+		{"没仓库、停下等决定", false, "两个方案等负责人定\n交付结论：没做成", false, ledger.Blocked, "执行者交付结论：没做成（两个方案等负责人定）（没有仓库"},
+		{"没仓库、未完成", false, "还差一步\n交付结论：未完成", false, ledger.Blocked, "执行者交付结论：未完成（还差一步）"},
+		{"没仓库、受阻", false, "等证书\n交付结论：受阻", false, ledger.Blocked, "交付结论：受阻（等证书）"},
+		{"没仓库、没写结论", false, "没做成，没改代码也没开 PR", false, ledger.Blocked, "执行者最后一行没写「交付结论"},
 		{"没仓库、空回复", false, "", false, ledger.Blocked, "这一轮没记到执行者的回复"},
 		{"上一轮的完成不算", false, "交付结论：完成", true, ledger.Blocked, "这一轮没记到执行者的回复"},
 	}
@@ -274,6 +276,9 @@ func TestGateEnding(t *testing.T) {
 			}
 			if e.queued(task.ID) {
 				t.Fatal("没做成不该交回重跑")
+			}
+			if note := e.lastNote(task.ID); strings.Contains(note, "交付检查未通过") || strings.Contains(note, "不要 PR") {
+				t.Fatalf("按交付结论停下不是交付检查不过：%s", note)
 			}
 			if c.reply == "" || c.stale {
 				if note := e.lastNote(task.ID); !strings.Contains(note, "这一轮没记到执行者的回复（atrium task log "+task.ID+" 看原始输出）") {

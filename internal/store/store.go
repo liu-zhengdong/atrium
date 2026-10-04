@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -23,6 +24,7 @@ var schema string
 type DB struct {
 	*sql.DB
 	ChoicesSkipped *ChoicesSkipped
+	ApplicationMu  sync.Mutex
 }
 
 // Querier 是 *sql.DB 与 *sql.Tx 的共同部分；只读函数收它，调用方决定在不在事务里。

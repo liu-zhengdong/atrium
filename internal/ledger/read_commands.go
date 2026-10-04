@@ -103,6 +103,9 @@ func taskShow(c *cli.Ctx) error {
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s「%s」\n状态：%s  优先级：%s\n", t.ID, t.Title, stateLabel(t), t.Priority)
+	if a := d.Acceptance; a != nil {
+		fmt.Fprintf(&b, "验收决定：%s；决策人 %s\n", a.Reason, a.Actor)
+	}
 	if h.Holder.Text != "" {
 		fmt.Fprintf(&b, "现在：%s\n", h.Holder.Text)
 	}

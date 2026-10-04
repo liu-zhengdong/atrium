@@ -66,7 +66,9 @@ type State struct {
 
 // Event 是推动状态的事。Kind 之外的字段只对特定 Kind 有意义。
 type Event struct {
-	Kind EventKind
+	Kind  EventKind
+	Epoch int64  // 验收对应的交付经历
+	Head  string // 验收对应的 PR head
 	// To：Set 的目标状态。
 	To Status
 	// NeedReview：GatePass 后是否先审阅。
@@ -202,7 +204,7 @@ func Transition(from State, e Event) (State, error) {
 		}
 		return State{Cancelled, st}, nil
 	case Deliver:
-		if s != Todo && s != Failed && s != Blocked {
+		if s != Todo && s != Failed && s != Blocked && !(delivering && st.Landing() && e.AcceptBy != "") {
 			return reject("任务当前 %s，不能放进应用（只有 todo、failed、blocked 能放）", s)
 		}
 		if e.AcceptBy == "" && e.Land == "" {

@@ -229,3 +229,22 @@ func TestBuildTreeReady(t *testing.T) {
 		t.Errorf("没走到：%v", want)
 	}
 }
+
+func TestReturnApplicationToAcceptance(t *testing.T) {
+	for _, tc := range []struct {
+		stage  Stage
+		accept string
+		ok     bool
+	}{
+		{StageMerge, "leader", true}, {StageMerged, "leader", true}, {StageMerge, "", false},
+		{StageGate, "leader", false}, {StageReview, "leader", false}, {StageAccept, "leader", false},
+	} {
+		got, err := Transition(State{Running, tc.stage}, Event{Kind: Deliver, AcceptBy: tc.accept, Land: StageMerge})
+		if (err == nil) != tc.ok {
+			t.Fatalf("%+v: %+v %v", tc, got, err)
+		}
+		if tc.ok && got != (State{Running, StageAccept}) {
+			t.Fatalf("没有转回验收：%+v", got)
+		}
+	}
+}

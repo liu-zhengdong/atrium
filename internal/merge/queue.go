@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/liu-zhengdong/atrium/internal/api"
 	"github.com/liu-zhengdong/atrium/internal/gates"
 	"github.com/liu-zhengdong/atrium/internal/ledger"
 	"github.com/liu-zhengdong/atrium/internal/pause"
@@ -154,6 +155,9 @@ func (q *Queue) Merge(ctx context.Context, t ledger.Task) error {
 	if err != nil {
 		return err
 	}
+	if ok, err := q.applicationReady(ctx, t.ID, pr.HeadID); err != nil || !ok {
+		return err
+	}
 	switch pr.State {
 	case "MERGED":
 		return q.merged(ctx, t, repo, pr.URL, pr.MergeCommit, "PR 已在别处合入")
@@ -249,17 +253,29 @@ func (q *Queue) Merge(ctx context.Context, t ledger.Task) error {
 		_, err := gates.Bounce(ctx, q.DB, t.ID, Actor, why)
 		return err
 	}
-	if _, err := q.R.Run(ctx, "", "gh", "pr", "merge", fmt.Sprint(pr.Number), "-R", repo, "--squash", "--match-head-commit", head); err != nil {
-		return err
-	}
-	after, err := gates.ViewPR(ctx, q.R, repo, t.PR)
-	if err != nil {
-		return err
-	}
-	if after.State != "MERGED" {
-		return fmt.Errorf("gh pr merge 返回成功，但 PR #%d 状态是 %s", pr.Number, after.State)
-	}
-	return q.merged(ctx, t, repo, after.URL, after.MergeCommit, "已合入")
+	return ledger.Application(ctx, q.DB, func(ctx context.Context) error {
+		current, err := ledger.Get(ctx, q.DB, t.ID)
+		if err != nil {
+			return err
+		}
+		if current.Status != ledger.Running || current.Stage != ledger.StageMerge {
+			return fmt.Errorf("任务已离开合入队列")
+		}
+		if ok, err := q.applicationReady(ctx, t.ID, head); err != nil || !ok {
+			return err
+		}
+		if _, err := q.R.Run(ctx, "", "gh", "pr", "merge", fmt.Sprint(pr.Number), "-R", repo, "--squash", "--match-head-commit", head); err != nil {
+			return err
+		}
+		after, err := gates.ViewPR(ctx, q.R, repo, t.PR)
+		if err != nil {
+			return err
+		}
+		if after.State != "MERGED" {
+			return fmt.Errorf("gh pr merge 返回成功，但 PR #%d 状态是 %s", pr.Number, after.State)
+		}
+		return q.merged(ctx, t, repo, after.URL, after.MergeCommit, "已合入")
+	})
 }
 
 func (q *Queue) merged(ctx context.Context, t ledger.Task, repo, url, commit, note string) error {
@@ -327,4 +343,17 @@ func (q *Queue) clone(ctx context.Context, repo string) (string, error) {
 		return "", err
 	}
 	return dir, nil
+}
+
+// 交付变化或等候期间新增暂缓，回现有验收阶段，保留本任务与决定。
+func (q *Queue) applicationReady(ctx context.Context, id, head string) (bool, error) {
+	if err := ledger.CheckApplication(ctx, q.DB, id, head); err != nil {
+		var conflict *api.Error
+		if !errors.As(err, &conflict) || conflict.Code != "conflict" {
+			return false, err
+		}
+		_, err := ledger.Apply(ctx, q.DB, id, ledger.Event{Kind: ledger.Deliver, AcceptBy: "leader"}, Actor, err.Error())
+		return false, err
+	}
+	return true, nil
 }

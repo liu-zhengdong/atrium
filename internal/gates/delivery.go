@@ -10,7 +10,6 @@ import (
 
 	"github.com/liu-zhengdong/atrium/internal/api"
 	"github.com/liu-zhengdong/atrium/internal/ledger"
-	"github.com/liu-zhengdong/atrium/internal/org"
 	"github.com/liu-zhengdong/atrium/internal/org/agenda"
 	"github.com/liu-zhengdong/atrium/internal/store"
 	"github.com/liu-zhengdong/atrium/internal/workers"
@@ -142,7 +141,7 @@ func Origin(ctx context.Context, r Runner, repo string) (string, error) {
 }
 
 // deliveryOf 查齐事实（本机仓库的 origin、工作目录根的 choice.json，交付检查时再查工作树有没有改动）后按 pick 选交付方式。
-// 过了交付检查还在走的（审阅、验收）都有改动：没改动的按 message 交，没有这两步。
+// 任务级验收也覆盖零 diff：这类交付没有登记 PR，验收时仍按工作树事实选 message。
 func (g *Gate) deliveryOf(ctx context.Context, t ledger.Task, atGate bool) (Delivery, error) {
 	// 审阅只交服务已记下的回复，不查执行者机器上的工作树或 choice.json。
 	if _, review, err := Last(ctx, g.DB, t.ID, KindReviewOf); err != nil || review {
@@ -152,7 +151,7 @@ func (g *Gate) deliveryOf(ctx context.Context, t ledger.Task, atGate bool) (Deli
 	case t.Repo != "":
 		origin, err := Origin(ctx, g.R, t.Repo)
 		changed := true
-		if err == nil && atGate {
+		if err == nil && (atGate || t.Stage == ledger.StageAccept && t.PR == "") {
 			changed, err = g.changed(ctx, t, origin)
 		}
 		return pick(t.Repo, "", origin, changed, false), err
@@ -395,107 +394,4 @@ func (g *Gate) landPR(ctx context.Context, t ledger.Task) (landed, error) {
 		return landed{bounce: strings.Join(reasons, "；")}, nil
 	}
 	return landed{stage: ledger.StageMerge, note: "进合入队列"}, nil
-}
-
-// acceptBy 是这件任务过了交付检查、审阅之后要等谁验收：部门的验收人（沿树继承），auto 为空。
-// 没有应用的交付方式（dir、message）和运行时自己建的审阅任务不等人验收。
-func acceptBy(ctx context.Context, q store.Querier, t ledger.Task, d Delivery) (string, error) {
-	if d.land == nil {
-		return "", nil
-	}
-	if _, review, err := Last(ctx, q, t.ID, KindReviewOf); err != nil || review {
-		return "", err
-	}
-	who, _, err := org.Acceptor(ctx, q, t.Org)
-	if err != nil || who == org.AcceptAuto {
-		return "", err
-	}
-	return who, nil
-}
-
-var acceptLabel = map[string]string{org.AcceptUser: "你", org.AcceptLeader: "负责人"}
-
-// pass 过了交付检查或审阅：要等验收（acceptBy）就停在等验收；否则当场应用。
-func (g *Gate) pass(ctx context.Context, t ledger.Task, d Delivery, kind ledger.EventKind, note string) error {
-	by, err := acceptBy(ctx, g.DB, t, d)
-	if err != nil {
-		return err
-	}
-	if by != "" {
-		note += fmt.Sprintf("；等%s验收：atrium task accept %s，或 atrium task reject %s --reason 原因", acceptLabel[by], t.ID, t.ID)
-		_, err := ledger.Apply(ctx, g.DB, t.ID, ledger.Event{Kind: kind, AcceptBy: by}, Actor, note)
-		return err
-	}
-	return g.land(ctx, t, d, kind, Actor, note)
-}
-
-// land 做交付方式应用的第一步并记录结果：有后续步骤进那一步，没有任务完成；无法应用交回原执行者。
-func (g *Gate) land(ctx context.Context, t ledger.Task, d Delivery, kind ledger.EventKind, actor, note string) error {
-	var l landed
-	if d.land != nil {
-		var err error
-		if l, err = d.land(g, ctx, t); err != nil {
-			return err
-		}
-	}
-	if l.bounce != "" {
-		_, err := Bounce(ctx, g.DB, t.ID, actor, note+"；应用交付结果失败："+l.bounce)
-		return err
-	}
-	if l.block != "" {
-		_, err := Block(ctx, g.DB, t.ID, note+"；"+l.block)
-		return err
-	}
-	if l.note != "" {
-		note += "；" + l.note
-	}
-	_, err := ledger.Apply(ctx, g.DB, t.ID, ledger.Event{Kind: kind, Land: l.stage}, actor, note)
-	return err
-}
-
-// awaiting 取等验收的任务并核对 actor 能不能判：用户与秘书都能；负责人不能代用户验收（管辖由负责人权限另判）。
-func (g *Gate) awaiting(ctx context.Context, id, actor string) (ledger.Task, error) {
-	t, err := ledger.Get(ctx, g.DB, id)
-	if err != nil {
-		return t, err
-	}
-	if t.Status != ledger.Running || t.Stage != ledger.StageAccept {
-		return t, api.Conflict("%s 不在等验收（当前 %s/%s）", id, t.Status, t.Stage).WithNext("atrium task show " + id)
-	}
-	who, _, err := org.Acceptor(ctx, g.DB, t.Org)
-	if err != nil {
-		return t, err
-	}
-	if !org.MayAccept(actor, who) {
-		return t, api.Forbidden("%s 所在部门的验收人是用户，%s 不能代验；需要就上报", id, actor).
-			WithNext("atrium leader escalate <说明> --kind beyond --task " + id)
-	}
-	return t, nil
-}
-
-// Accept 是 task accept：验收通过，做交付方式应用的第一步（pr 进合入队列，local 合进本机主分支，choice 登记选项单）。
-func (g *Gate) Accept(ctx context.Context, id, actor string) (ledger.Task, error) {
-	t, err := g.awaiting(ctx, id, actor)
-	if err != nil {
-		return t, err
-	}
-	d, err := g.deliveryOf(ctx, t, false)
-	if err != nil {
-		return t, err
-	}
-	if err := g.land(ctx, t, d, ledger.Accept, actor, "验收通过（"+actor+"）"); err != nil {
-		return t, err
-	}
-	return ledger.Get(ctx, g.DB, id)
-}
-
-// Reject 是 task reject：验收打回，交回原执行者照原因改（与交付检查未通过同一套计次，第 3 次转受阻）。
-func (g *Gate) Reject(ctx context.Context, id, actor, reason string) (ledger.Task, error) {
-	if strings.TrimSpace(reason) == "" {
-		return ledger.Task{}, api.Usage("--reason: 不能为空（写清哪里不行，执行者照它改）")
-	}
-	if _, err := g.awaiting(ctx, id, actor); err != nil {
-		return ledger.Task{}, err
-	}
-	return Bounce(ctx, g.DB, id, actor, "验收打回（"+actor+"）："+Clip(reason, 2000))
 }

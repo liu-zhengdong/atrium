@@ -20,7 +20,6 @@ func showCmd(c *cli.Ctx, name string) error {
 	r := d.Resolved
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s  trust=%s  max_risk=%s\n", r.ID, r.Rules.EffectiveTrust(), r.Rules.EffectiveMaxRisk())
-	fmt.Fprintf(&b, "额度：%s\n", quotaText(*d.Quota))
 	writeMarks(&b, d.Marks)
 	if r.CLIModel != "" {
 		fmt.Fprintf(&b, "交给工具的模型：%s\n", r.CLIModel)

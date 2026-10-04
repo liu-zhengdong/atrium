@@ -17,7 +17,6 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/org"
 	"github.com/liu-zhengdong/atrium/internal/org/agenda"
 	"github.com/liu-zhengdong/atrium/internal/pause"
-	"github.com/liu-zhengdong/atrium/internal/quota"
 	"github.com/liu-zhengdong/atrium/internal/store"
 	"github.com/liu-zhengdong/atrium/internal/watch"
 	"github.com/liu-zhengdong/atrium/internal/workers"
@@ -830,27 +829,11 @@ func ownRules(ctx context.Context, q store.Querier, id, name string) ([]Rule, er
 	return out, nil
 }
 
-// Legion 是执行者页：额度（后台存下的读数）、机器、执行者目录。
+// Legion 是执行者页：机器、执行者目录；额度余量不在这里展示。
 type Legion struct {
-	Quota
 	Hosts   []Host        `json:"hosts"`
 	Workers []workers.Row `json:"workers"`
 	Window  int           `json:"window"` // 结果统计近几次拉起
-}
-
-// Quota 是执行者页的额度一块。
-type Quota struct {
-	Accounts []Account `json:"accounts"`
-	Reserve  int       `json:"reserve"`
-}
-
-// Account 是一个账号的额度。Left 是剩下的百分比（没读数为 nil）；At 是读数的时刻（毫秒，没读数为 0），Stale 读数旧了。
-type Account struct {
-	Name  string `json:"name"`
-	Left  *int   `json:"left"`
-	Note  string `json:"note"`
-	At    int64  `json:"at"`
-	Stale bool   `json:"stale"`
 }
 
 // Host 是一台机器与它的空位；Paused 是这台机器（或全局）暂停着，到点不在它上面分派任务。
@@ -867,12 +850,7 @@ type Host struct {
 
 func loadLegion(ctx context.Context, env *app.Env, now int64) (Legion, error) {
 	db := env.DB
-	out := Legion{Quota: quotaOf(quota.Overview{}), Hosts: []Host{}, Workers: []workers.Row{}, Window: workers.StatWindow}
-	ov, err := quota.Last(ctx, env)
-	if err != nil {
-		return out, err
-	}
-	out.Quota = quotaOf(ov)
+	out := Legion{Hosts: []Host{}, Workers: []workers.Row{}, Window: workers.StatWindow}
 	list, err := hosts.List(ctx, db)
 	if err != nil {
 		return out, err
@@ -899,14 +877,6 @@ func loadLegion(ctx context.Context, env *app.Env, now int64) (Legion, error) {
 		return out, err
 	}
 	return out, nil
-}
-
-func quotaOf(ov quota.Overview) Quota {
-	out := Quota{Accounts: []Account{}, Reserve: ov.Reserve}
-	for _, l := range ov.Lines {
-		out.Accounts = append(out.Accounts, account(l))
-	}
-	return out
 }
 
 func runningByHost(ctx context.Context, q store.Querier) (map[string]int, error) {

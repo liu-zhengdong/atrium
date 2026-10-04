@@ -4,9 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"path/filepath"
+	"strings"
 	"testing"
 
-	"github.com/liu-zhengdong/atrium/internal/api"
 	"github.com/liu-zhengdong/atrium/internal/app"
 	"github.com/liu-zhengdong/atrium/internal/config"
 	"github.com/liu-zhengdong/atrium/internal/quota"
@@ -14,7 +14,8 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/workers"
 )
 
-func TestLegionRetiredQuota(t *testing.T) {
+// 额度余量在 OpenQuota 与 magpie 看：存着读数时执行者页的数据和页面都不带余量。
+func TestLegionShowsNoQuota(t *testing.T) {
 	data := t.TempDir()
 	db, err := store.Open(filepath.Join(data, "atrium.db"))
 	if err != nil {
@@ -22,46 +23,51 @@ func TestLegionRetiredQuota(t *testing.T) {
 	}
 	defer db.Close()
 	env := &app.Env{DB: db, Paths: config.Paths{Data: data}}
-	old := quota.DisabledAccounts
-	defer func() { quota.DisabledAccounts = old }()
-	workers.Routes(api.NewRouter(nil), env)
 	ctx := context.Background()
 	now := store.Now()
-	// 下架账号即使仍有自带成功读数与 OpenQuota 读数，也不能占格子。
 	if err := quota.Record(ctx, db, quota.LocalHost, []quota.Reading{
 		{Account: "claude", OK: true, ReadAt: now, Windows: []quota.Window{{ID: "week", Used: 25, ResetsAt: now + 3600_000, Period: 3600}}},
-		{Account: "opencode", Reason: "临时读不到", ReadAt: now},
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.ExecContext(ctx, "INSERT INTO quota_cache (account, tool, body, read_at) VALUES (?, ?, ?, ?)", "openquota", "openquota", `{"rows":[{"providerId":"claude","usedPercent":30}]}`, now); err != nil {
+	if _, err := db.ExecContext(ctx, "INSERT INTO quota_cache (account, tool, body, read_at) VALUES (?, ?, ?, ?)", "openquota", "openquota", `{"rows":[{"providerId":"codex","usedPercent":85}]}`, now); err != nil {
 		t.Fatal(err)
 	}
-	for _, enabled := range []bool{false, true, false} {
-		src := "---\nauto: false\n---\n"
-		if enabled {
-			src = "---\nauto: true\n---\n"
+	src := "---\nauto: true\n---\n"
+	if _, err := workers.SaveProfile(ctx, db, "harness/claude", workers.Edit{Source: &src}, "u1"); err != nil {
+		t.Fatal(err)
+	}
+	legion, err := loadLegion(ctx, env, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := json.Marshal(legion)
+	var keys map[string]json.RawMessage
+	if err := json.Unmarshal(body, &keys); err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range []string{"accounts", "reserve", "quota"} {
+		if _, ok := keys[k]; ok {
+			t.Errorf("执行者页数据不应带 %s：%s", k, body)
 		}
-		if _, err := workers.SaveProfile(ctx, db, "harness/claude", workers.Edit{Source: &src}, "u1"); err != nil {
-			t.Fatal(err)
+	}
+
+	js, err := staticFS.ReadFile("static/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := strings.Index(string(js), "function renderLegion(")
+	end := strings.Index(string(js), "\nconst outName")
+	if start < 0 || end < start {
+		t.Fatal("app.js 里找不到 renderLegion")
+	}
+	render := string(js[start:end])
+	for _, gone := range []string{"<h2>额度", "d.accounts", "d.reserve", "brandMark"} {
+		if strings.Contains(render, gone) {
+			t.Errorf("执行者页不应再画额度：仍有 %q", gone)
 		}
-		legion, err := loadLegion(ctx, env, now)
-		if err != nil {
-			t.Fatal(err)
-		}
-		found, failed := false, false
-		for _, a := range legion.Accounts {
-			if a.Name == "claude" {
-				found = true
-			}
-			if a.Name == "opencode" {
-				failed = a.Left == nil && a.Note != ""
-			}
-		}
-		if found != enabled || !failed || legion.Reserve != 20 {
-			t.Fatalf("enabled=%v：%+v", enabled, legion.Quota)
-		}
-		body, _ := json.Marshal(legion.Quota)
-		t.Logf("app.js renderLegion 对应数据 auto=%v：%s", enabled, body)
+	}
+	if !strings.Contains(render, "分派任务按额度富余自动避让；各套餐余量在 OpenQuota 面板和 magpie 图形界面看。") {
+		t.Error("执行者页顶部要指引到 OpenQuota 与 magpie")
 	}
 }

@@ -26,7 +26,6 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/org"
 	"github.com/liu-zhengdong/atrium/internal/org/agenda"
 	"github.com/liu-zhengdong/atrium/internal/pause"
-	"github.com/liu-zhengdong/atrium/internal/quota"
 	"github.com/liu-zhengdong/atrium/internal/store"
 	"github.com/liu-zhengdong/atrium/internal/watch"
 	"github.com/liu-zhengdong/atrium/internal/workers"
@@ -173,20 +172,7 @@ func TestNest(t *testing.T) {
 	}
 }
 
-func TestAccountAndSlots(t *testing.T) {
-	used, reset := 37.6, 30.0
-	a := account(quota.Line{Pace: quota.Pace{Account: "claude", UsedPercent: &used, HoursToReset: &reset}})
-	if a.Left == nil || *a.Left != 62 || a.Note != "1 天后重置" {
-		t.Errorf("有读数：%+v %v", a, *a.Left)
-	}
-	a = account(quota.Line{Pace: quota.Pace{Account: "codex"}, Note: "没登录"})
-	if a.Left != nil || a.Note != "没登录" {
-		t.Errorf("没读数：%+v", a)
-	}
-	a = account(quota.Line{Pace: quota.Pace{Account: "x", UsedPercent: &used, Stale: true, RefreshedAt: "2026-09-29T08:00:00Z"}})
-	if a.Note != "" || !a.Stale || a.At != time.Date(2026, 9, 29, 8, 0, 0, 0, time.UTC).UnixMilli() {
-		t.Errorf("旧数带读的时刻，由页面写出来：%+v", a)
-	}
+func TestSlots(t *testing.T) {
 	for want, h := range map[int]hosts.Host{4: {MaxRunning: 4, Info: &hosts.Info{MaxWorkers: 6}}, 6: {Info: &hosts.Info{MaxWorkers: 6}}, 1: {}} {
 		if got := slots(h); got != want {
 			t.Errorf("空位：%d 想要 %d", got, want)
@@ -312,8 +298,8 @@ func TestRoutes(t *testing.T) {
 	}
 	var legion Legion
 	read("legion", &legion)
-	if legion.Accounts == nil || legion.Hosts == nil || len(legion.Workers) != len(workers.Tools) {
-		t.Errorf("空的额度与机器应是空数组，不是 null；还没结果的拉起不计：%+v", legion)
+	if legion.Hosts == nil || len(legion.Workers) != len(workers.Tools) {
+		t.Errorf("空的机器应是空数组，不是 null；还没结果的拉起不计：%+v", legion)
 	}
 	// 表现与 atrium workers 同一份统计（workers.Stats）：拉起有了结果才计；不可用标记挂在它挡住的组合下。
 	exit, _ := json.Marshal(workers.Exit{N: 1, Outcome: workers.OutOK})

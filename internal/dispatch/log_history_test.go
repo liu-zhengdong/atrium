@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -64,10 +65,13 @@ func TestHistoricalLogCLI(t *testing.T) {
 	table := cli.NewTable("atrium", "")
 	ledger.Commands(table)
 	Commands(table)
-	call := func(args ...string) (string, int) {
+	callTo := func(dst io.Writer, args ...string) (string, int) {
 		t.Helper()
 		var out, stderr bytes.Buffer
-		code := table.Main(ctx, append([]string{"task", "log", task.ID}, args...), cli.Env{Stdout: &out, Stderr: &stderr, Getenv: func(k string) string {
+		if dst == nil {
+			dst = &out
+		}
+		code := table.Main(ctx, append([]string{"task", "log", task.ID}, args...), cli.Env{Stdout: dst, Stderr: &stderr, Getenv: func(k string) string {
 			switch k {
 			case "ATRIUM_WORKER":
 				return "1"
@@ -80,7 +84,13 @@ func TestHistoricalLogCLI(t *testing.T) {
 		}})
 		return out.String() + stderr.String(), code
 	}
-	out, code := call("--raw")
+	call := func(args ...string) (string, int) { return callTo(nil, args...) }
+	out, code := callTo(failedLogWriter{errors.New("output disk full")}, "--run", "1", "--raw", "--all")
+	if code == 0 || !strings.Contains(out, "output disk full") {
+		t.Fatalf("写入失败被当成完整导出：code=%d %s", code, out)
+	}
+	t.Logf("隔离CLI失败Writer：退出码%d，错误明确显示", code)
+	out, code = call("--raw")
 	if code != 0 || !strings.Contains(out, "最后一轮") || !strings.Contains(out, "--run 3 --raw --all") {
 		t.Fatalf("%d %s", code, out)
 	}

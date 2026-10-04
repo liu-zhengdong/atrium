@@ -36,6 +36,8 @@ type Mark struct {
 	Evidence string `json:"evidence,omitempty"`
 	Until    int64  `json:"until"` // 到这个时刻自动恢复；0 等人处理后 workers edit --clear
 	Since    int64  `json:"since"`
+	// OpenEnded：报文没写恢复时刻（如 grok 402 balance exhausted），Until 只是到期自动再试的上限，不是恢复时刻，不展示成「恢复」。
+	OpenEnded bool `json:"open_ended,omitempty"`
 }
 
 // Target 是「工具[+模型]@机器」。
@@ -49,7 +51,11 @@ func (m Mark) Covers(s Spec) bool { return m.Tool == s.Tool && (m.Model == "" ||
 // Text 是给人看的一句：原因与什么时候恢复（等人处理的写怎么处理）。
 func (m Mark) Text() string {
 	if m.Until > 0 {
-		return m.Reason + "，" + time.UnixMilli(m.Until).Local().Format("01-02 15:04") + " 恢复"
+		when := time.UnixMilli(m.Until).Local().Format("01-02 15:04")
+		if m.OpenEnded {
+			return m.Reason + "，报文没写恢复时刻；" + when + " 起自动再试"
+		}
+		return m.Reason + "，" + when + " 恢复"
 	}
 	return m.Reason + "，" + m.Fix()
 }
@@ -67,7 +73,8 @@ func (m Mark) Fix() string {
 	return "登录、装好或升级运行环境后 atrium workers edit --clear " + m.Target()
 }
 
-// MarkOf 把退出信号翻成不可用标记（纯函数）：额度用尽标「工具+模型」到报文里的恢复时刻（读不出按 Hold）；
+// MarkOf 把退出信号翻成不可用标记（纯函数）：额度用尽标「工具+模型」到报文里的恢复时刻（报文没写的标「恢复时间未知」，
+// Hold 后到点自动再试，不拿 Hold 冒充恢复时刻）；
 // 零步骤出错退出标「工具+模型」Hold 这么久（同工具别的模型可能是好的；原因不明，可能是临时故障，到期再试）；
 // 起不来（没登录、缺运行环境、工具版本过旧）标这台上的整个工具；模型名无效标「工具+模型」，后两种等人处理。其余信号不标。
 func MarkOf(sig Signal, s Spec, host string, now time.Time) (Mark, bool) {
@@ -76,7 +83,7 @@ func MarkOf(sig Signal, s Spec, host string, now time.Time) (Mark, bool) {
 	case SignalQuota:
 		m.Reason, m.Until = "额度用尽", sig.ResetAt
 		if m.Until == 0 {
-			m.Until = now.Add(Hold).UnixMilli()
+			m.Until, m.OpenEnded = now.Add(Hold).UnixMilli(), true
 		}
 	case SignalNoStart:
 		m.Reason, m.Until = sig.Reason, now.Add(Hold).UnixMilli()
@@ -112,9 +119,9 @@ func setMark(ctx context.Context, q store.Querier, m Mark) error {
 	}
 	var prev *Mark
 	var p Mark
-	err := q.QueryRowContext(ctx, `SELECT tool, model, host, kind, reason, evidence, until, since FROM worker_marks
+	err := q.QueryRowContext(ctx, `SELECT tool, model, host, kind, reason, evidence, until, since, open_ended FROM worker_marks
 		WHERE tool = ? AND model = ? AND host = ?`, m.Tool, m.Model, m.Host).
-		Scan(&p.Tool, &p.Model, &p.Host, &p.Kind, &p.Reason, &p.Evidence, &p.Until, &p.Since)
+		Scan(&p.Tool, &p.Model, &p.Host, &p.Kind, &p.Reason, &p.Evidence, &p.Until, &p.Since, &p.OpenEnded)
 	switch {
 	case err == nil:
 		prev = &p
@@ -125,10 +132,11 @@ func setMark(ctx context.Context, q store.Querier, m Mark) error {
 	if !write {
 		return nil
 	}
-	if _, err := q.ExecContext(ctx, `INSERT INTO worker_marks (tool, model, host, kind, reason, evidence, until, since)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (tool, model, host) DO UPDATE SET kind = excluded.kind,
-		reason = excluded.reason, evidence = excluded.evidence, until = excluded.until, since = excluded.since`,
-		m.Tool, m.Model, m.Host, m.Kind, m.Reason, m.Evidence, m.Until, m.Since); err != nil {
+	if _, err := q.ExecContext(ctx, `INSERT INTO worker_marks (tool, model, host, kind, reason, evidence, until, since, open_ended)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (tool, model, host) DO UPDATE SET kind = excluded.kind,
+		reason = excluded.reason, evidence = excluded.evidence, until = excluded.until, since = excluded.since,
+		open_ended = excluded.open_ended`,
+		m.Tool, m.Model, m.Host, m.Kind, m.Reason, m.Evidence, m.Until, m.Since, m.OpenEnded); err != nil {
 		return err
 	}
 	if !fresh {
@@ -176,7 +184,7 @@ func SyncProbes(ctx context.Context, db *store.DB, host string, failed []Mark, n
 
 // Marks 是此刻有效的标记（按工具、模型、机器排）。
 func Marks(ctx context.Context, q store.Querier, now int64) ([]Mark, error) {
-	rows, err := q.QueryContext(ctx, `SELECT tool, model, host, kind, reason, evidence, until, since FROM worker_marks
+	rows, err := q.QueryContext(ctx, `SELECT tool, model, host, kind, reason, evidence, until, since, open_ended FROM worker_marks
 		WHERE until = 0 OR until > ? ORDER BY tool, model, host LIMIT 500`, now)
 	if err != nil {
 		return nil, err
@@ -185,7 +193,7 @@ func Marks(ctx context.Context, q store.Querier, now int64) ([]Mark, error) {
 	out := []Mark{}
 	for rows.Next() {
 		var m Mark
-		if err := rows.Scan(&m.Tool, &m.Model, &m.Host, &m.Kind, &m.Reason, &m.Evidence, &m.Until, &m.Since); err != nil {
+		if err := rows.Scan(&m.Tool, &m.Model, &m.Host, &m.Kind, &m.Reason, &m.Evidence, &m.Until, &m.Since, &m.OpenEnded); err != nil {
 			return nil, err
 		}
 		out = append(out, m)

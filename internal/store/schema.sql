@@ -333,14 +333,15 @@ CREATE TABLE IF NOT EXISTS worker_profiles (
 -- model 为空表示这台上这个工具的全部模型；until 为 0 等人处理（workers edit --clear），否则到点自动恢复。
 -- kind：quota setup model nostart（退出信号）、probe（自检不过）、subscription（等订阅恢复，workers edit --wait-subscription 转来，不进「等你」）。
 CREATE TABLE IF NOT EXISTS worker_marks (
-  tool     TEXT NOT NULL,
-  model    TEXT NOT NULL,
-  host     TEXT NOT NULL,
-  kind     TEXT NOT NULL,
-  reason   TEXT NOT NULL,
-  evidence TEXT NOT NULL,
-  until    INTEGER NOT NULL,
-  since    INTEGER NOT NULL,
+  tool       TEXT NOT NULL,
+  model      TEXT NOT NULL,
+  host       TEXT NOT NULL,
+  kind       TEXT NOT NULL,
+  reason     TEXT NOT NULL,
+  evidence   TEXT NOT NULL,
+  until      INTEGER NOT NULL,
+  since      INTEGER NOT NULL,
+  open_ended INTEGER NOT NULL DEFAULT 0, -- 报文没写恢复时刻，until 只是到期自动再试的上限
   PRIMARY KEY (tool, model, host)
 );
 

@@ -473,6 +473,13 @@ func TestClassify(t *testing.T) {
 		{"负载均衡器不算余额", 1, "Error: load balancer exhausted retries\n", SignalTransient, time.Time{}},
 		{"单词里的 hit 不算", 1, "Error: whitelist quota config missing\n", SignalTransient, time.Time{}},
 		{"agy 结果事件里的额度", 1, `{"event":"result","result":{"status":"ERROR","error":"RESOURCE_EXHAUSTED (code 429): Individual quota reached. Resets in 12m"}}`, SignalQuota, now.Add(12 * time.Minute)},
+		// t865 现场 h1 上 codex 的真实报文：报文自带绝对恢复时刻「try again at Oct 10th, 2026 9:14 AM」
+		{"codex 额度带绝对恢复时刻", 1, `{"type":"error","message":"You’ve hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at Oct 10th, 2026 9:14 AM."}` + "\n" +
+			`{"type":"turn.failed","error":{"message":"You’ve hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at Oct 10th, 2026 9:14 AM."}}`,
+			SignalQuota, time.Date(2026, 10, 10, 9, 14, 0, 0, time.UTC)},
+		// t942 现场 h1 上 kimi 的真实报文：报文声明 5 小时窗口、没写具体时刻，按窗口算恢复
+		{"kimi 额度五小时窗口", 1, "error: failed to run prompt: provider.api_error: 403 You've reached your 5-hour usage limit. Your quota will reset when the current 5-hour window ends. To continue now, purchase extra usage or upgrade your plan: https://www.kimi.com/membership/subscription?tab=quota\n" +
+			"See log: C:/Users/CPCli/.kimi-code/logs/kimi-code.log\n", SignalQuota, now.Add(5 * time.Hour)},
 		// t342 现场 agy 不认不带强度的模型名的原文（#563）
 		{"agy 模型名无效", 1, `invalid model selection (--model "gemini-3.8-flash" --effort "")` + "\n", SignalModel, time.Time{}},
 		{"claude 模型不存在", 1, `{"type":"result","is_error":true,"result":"There's an issue with the selected model (claude-nope). It may not exist or you may not have access to it."}`, SignalModel, time.Time{}},
@@ -756,27 +763,41 @@ func TestMarkOf(t *testing.T) {
 	agy := Spec{Tool: "agy", Model: "claude-opus-4-6-thinking", Effort: "high"}
 	reset := now.Add(3 * time.Hour).UnixMilli()
 	cases := []struct {
-		name   string
-		sig    Signal
-		ok     bool
-		target string
-		until  int64
+		name      string
+		sig       Signal
+		ok        bool
+		target    string
+		until     int64
+		openEnded bool
 	}{
-		{"额度用尽按报文恢复", Signal{Kind: SignalQuota, ResetAt: reset}, true, "agy+claude-opus-4-6-thinking@h3", reset},
-		{"额度用尽读不出恢复时刻", Signal{Kind: SignalQuota}, true, "agy+claude-opus-4-6-thinking@h3", now.Add(Hold).UnixMilli()},
-		{"没登录标整个工具、等人处理", Signal{Kind: SignalSetup, Reason: "没登录"}, true, "agy@h3", 0},
-		{"缺运行环境标整个工具、等人处理", Signal{Kind: SignalSetup, Reason: "缺运行环境"}, true, "agy@h3", 0},
-		{"模型名无效等人处理", Signal{Kind: SignalModel}, true, "agy+claude-opus-4-6-thinking@h3", 0},
-		{"临时错误不标", Signal{Kind: SignalTransient}, false, "", 0},
-		{"零步骤出错退出标工具+模型、到期解除", Signal{Kind: SignalNoStart, Reason: "零步骤出错退出（退出码 1，原因不明）"}, true, "agy+claude-opus-4-6-thinking@h3", now.Add(Hold).UnixMilli()},
-		{"思考耗尽不标", Signal{Kind: SignalThinking}, false, "", 0},
-		{"等订阅恢复不由退出信号判", Signal{Kind: MarkSubscription, Reason: "订阅已封号"}, false, "", 0},
+		{"额度用尽按报文恢复", Signal{Kind: SignalQuota, ResetAt: reset}, true, "agy+claude-opus-4-6-thinking@h3", reset, false},
+		{"额度用尽读不出恢复时刻", Signal{Kind: SignalQuota}, true, "agy+claude-opus-4-6-thinking@h3", now.Add(Hold).UnixMilli(), true},
+		{"没登录标整个工具、等人处理", Signal{Kind: SignalSetup, Reason: "没登录"}, true, "agy@h3", 0, false},
+		{"缺运行环境标整个工具、等人处理", Signal{Kind: SignalSetup, Reason: "缺运行环境"}, true, "agy@h3", 0, false},
+		{"模型名无效等人处理", Signal{Kind: SignalModel}, true, "agy+claude-opus-4-6-thinking@h3", 0, false},
+		{"临时错误不标", Signal{Kind: SignalTransient}, false, "", 0, false},
+		{"零步骤出错退出标工具+模型、到期解除", Signal{Kind: SignalNoStart, Reason: "零步骤出错退出（退出码 1，原因不明）"}, true, "agy+claude-opus-4-6-thinking@h3", now.Add(Hold).UnixMilli(), false},
+		{"思考耗尽不标", Signal{Kind: SignalThinking}, false, "", 0, false},
+		{"等订阅恢复不由退出信号判", Signal{Kind: MarkSubscription, Reason: "订阅已封号"}, false, "", 0, false},
 	}
 	for _, c := range cases {
 		m, ok := MarkOf(c.sig, agy, "h3", now)
-		if ok != c.ok || (ok && (m.Target() != c.target || m.Until != c.until || m.Reason == "" || (c.sig.Reason != "" && m.Reason != c.sig.Reason))) {
+		if ok != c.ok || (ok && (m.Target() != c.target || m.Until != c.until || m.Reason == "" || (c.sig.Reason != "" && m.Reason != c.sig.Reason) || m.OpenEnded != c.openEnded)) {
 			t.Errorf("%s：%v %+v", c.name, ok, m)
 		}
+	}
+}
+
+// 标记的一句话：报文写了恢复时刻的说「恢复」，没写的（OpenEnded）明说「报文没写恢复时刻、到点自动再试」，不拿 Hold 冒充恢复时刻。
+func TestMarkText(t *testing.T) {
+	now := time.Date(2026, 10, 3, 16, 17, 0, 0, time.Local)
+	known := Mark{Tool: "codex", Host: "h1", Kind: SignalQuota, Reason: "额度用尽", Until: now.Add(4 * 24 * time.Hour).UnixMilli()}
+	if got := known.Text(); got != "额度用尽，10-07 16:17 恢复" {
+		t.Errorf("带恢复时刻：%q", got)
+	}
+	unknown := Mark{Tool: "grok", Host: "h3", Kind: SignalQuota, Reason: "额度用尽", Until: now.Add(Hold).UnixMilli(), OpenEnded: true}
+	if got := unknown.Text(); got != "额度用尽，报文没写恢复时刻；10-03 20:17 起自动再试" {
+		t.Errorf("无恢复信息：%q", got)
 	}
 }
 

@@ -44,7 +44,22 @@ with tempfile.TemporaryDirectory(prefix="atrium-acceptance-", dir=os.environ["TM
             assert time.monotonic() < deadline, "假执行者自检超时"
             time.sleep(0.2)
         task = call("task", "add", "t852形状：阶段完成，目标暂缓")["id"]
+        call("task", "note", task, "旧决定：目标未完成，不合入")
+        for n in range(25):
+            call("task", "note", task, f"后续进展 {n}")
+        detail = call("task", "show", task, "--history-limit", "10")
+        assert "acceptance" not in detail, "历史文字不应自动变成决定"
+        seen = []
+        while True:
+            seen = detail["history"] + seen
+            before = detail.get("history_before")
+            if not before:
+                break
+            detail = call("task", "show", task, "--history-limit", "10", "--before", str(before))
+        assert any(e.get("body") == "旧决定：目标未完成，不合入" for e in seen)
+        assert len({e["id"] for e in seen}) == len(seen)
         call("task", "set", task, "--accept", "hold", "--note", "目标未完成，不合入")
+        log("有界翻页核对旧决定 → 原决策人明确 hold 登记；未猜测转换：PASS")
         call("task", "run", task, "--worker", "fakesh")
         got = call("task", "wait", task, "--timeout", "30")["task"]
         assert (got["status"], got["stage"]) == ("running", "accept"), got

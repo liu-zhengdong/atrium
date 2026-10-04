@@ -23,7 +23,7 @@ func (r *holdDuringCI) Run(ctx context.Context, dir, name string, args ...string
 }
 
 func TestTaskAcceptanceActualMerge(t *testing.T) {
-	for _, mode := range []string{"hold_in_queue", "hold_during_ci", "head_change", "rebase", "conflict"} {
+	for _, mode := range []string{"hold_in_queue", "hold_during_ci", "head_change", "rebase", "redelivery_rebase", "conflict"} {
 		t.Run(mode, func(t *testing.T) {
 			e := setup(t, nil)
 			files := map[string]string{"a.go": "package a\n"}
@@ -45,9 +45,26 @@ func TestTaskAcceptanceActualMerge(t *testing.T) {
 					t.Fatal("队列暂缓没有转验收")
 				}
 			}
-			if mode == "head_change" || mode == "rebase" || mode == "conflict" {
+			if mode == "head_change" || mode == "rebase" || mode == "redelivery_rebase" || mode == "conflict" {
 				if _, err := g.Accept(e.ctx, task.ID, "u1"); err != nil {
 					t.Fatal(err)
+				}
+				if mode == "redelivery_rebase" {
+					for _, ev := range []ledger.Event{{Kind: ledger.Bounce}, {Kind: ledger.Start}, {Kind: ledger.ExitOK}, {Kind: ledger.GatePass, Land: ledger.StageMerge}} {
+						if _, err := ledger.Apply(e.ctx, e.db, task.ID, ev, "runtime", "阶段修复重派"); err != nil {
+							t.Fatal(err)
+						}
+					}
+					if err := ledger.Record(e.ctx, e.db, task.ID, "result", "runtime", "目标未完成，阶段不合入\n交付结论：完成"); err != nil {
+						t.Fatal(err)
+					}
+					e.drain()
+					if got := e.get(task.ID); got.Stage != ledger.StageAccept || e.gh.PRs[0].State != "OPEN" {
+						t.Fatalf("重派完成末行绕过决定：%+v", got)
+					}
+					if _, err := g.Accept(e.ctx, task.ID, "u1"); err != nil {
+						t.Fatal(err)
+					}
 				}
 				if mode == "head_change" {
 					e.gh.Must(e.gh.Work, "fetch", "origin")

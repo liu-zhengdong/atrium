@@ -7,7 +7,7 @@
 //   - dispatch 在 Routes 里 watch.Use(Hooks{Requeue: …})：卡住、额度用尽或思考耗尽时重新入队（可换人、标记额度）；
 //   - workers 在 Routes 里 watch.Use(Hooks{Signal: …})：从日志尾部读出思考耗尽、额度用尽与收尾。
 //
-// watch 自己改状态（ExitOK、ExitFail、Block）一律先 ledger.Apply 再结束进程树；拉起者在进程退出后
+// watch 改执行者状态（ExitOK、ExitFail、Block）经 ledger.Apply；终止执行者统一由 dispatch.reap 处理。拉起者在进程退出后
 // 再 Apply 会得到 conflict（任务已不在 running），按「已由 watch 收尾」忽略即可。
 package watch
 

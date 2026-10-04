@@ -430,12 +430,8 @@ func TestTickStartStuckRetriesThenBlocks(t *testing.T) {
 	if requeued[0].Role != RoleWorkerStart {
 		t.Fatalf("Requeue 应带上启动角色，好让分派标记不可用：%+v", requeued[0])
 	}
-	deadline := time.Now().Add(5 * time.Second)
-	for platform.Alive(pid) && time.Now().Before(deadline) {
-		time.Sleep(50 * time.Millisecond)
-	}
-	if platform.Alive(pid) {
-		t.Fatal("进程树没被结束")
+	if !platform.Alive(pid) {
+		t.Fatal("watch 不应重复结束归 dispatch 管理的执行者")
 	}
 	rows, err := events.Pending(ctx, env.DB, "a2", false, 10)
 	if err != nil {
@@ -460,6 +456,23 @@ func TestTickStartStuckRetriesThenBlocks(t *testing.T) {
 	}
 	if s := status(t, env, task2.ID); s.Status != ledger.Blocked {
 		t.Fatalf("运行卡住应转受阻：%+v", s)
+	}
+}
+
+func TestWatchStillTerminatesCheck(t *testing.T) {
+	env, ctx := setup(t)
+	pid := sleeper(t)
+	task := running(t, env, ctx, Proc{Role: "check", PID: pid})
+	f := Facts{Proc: &Proc{Role: "check", PID: pid}, Owner: "a2"}
+	if err := perform(ctx, env, Hooks{}, task, f, Holder{Role: RoleCheck}, Obs{Alive: true}, KillIt, store.Now()); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for platform.Alive(pid) && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if platform.Alive(pid) {
+		t.Fatal("检查进程仍应由 watch 结束")
 	}
 }
 

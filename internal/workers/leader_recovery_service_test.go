@@ -199,38 +199,35 @@ func TestLeaderRecoveryServiceEntry(t *testing.T) {
 				leaders.SetLauncher(nil)
 			})
 			if mode == "known-pool" || mode == "different-account" || mode == "cached-exhausted" {
+				// magpie 模型里账号在网关后面路由，Atrium 只见 provider：同 provider 即同池，另一 provider 即另一批账号。
 				ResolveExecution = func(_ context.Context, _ *app.Env, r Resolved, host string) (Resolved, error) {
 					if r.Spec.Tool != "pi" || (r.Spec.Model != "aaa" && r.Spec.Model != "bbb" && r.Spec.Model != "ccc") {
 						return r, nil
 					}
-					account := "account-A"
-					if r.Spec.Model == "bbb" && mode == "different-account" {
-						account = "account-B"
+					provider := "fake"
+					switch {
+					case mode == "known-pool" && r.Spec.Model == "ccc",
+						mode == "different-account" && r.Spec.Model != "aaa",
+						mode == "cached-exhausted" && r.Spec.Model == "bbb":
+						provider = "fake2"
 					}
-					if r.Spec.Model == "ccc" {
-						account = "account-C"
-					}
-					r.QuotaBinding = &ExecutionBinding{Worker: r.ID, Host: host, Provider: "fake", Card: account, Source: "synthetic-resolver", Account: quota.AccountIdentity{Kind: "accountHash", Value: account, Source: "synthetic-account"}, Scope: &quota.SharedScope{ID: "pool", Source: "synthetic-pool", WindowIDs: []string{"month"}}, WindowIDs: []string{"month"}}
+					r.QuotaBinding = &ExecutionBinding{Worker: r.ID, Host: host, Provider: provider}
 					return r, nil
 				}
 			}
 			if mode == "cached-exhausted" {
-				used := 100.0
-				now := time.Now().UTC().Format(time.RFC3339Nano)
-				row := quota.Pace{Account: "account-A", RefreshedAt: now, SourceFacts: quota.SourceFacts{Quotas: []quota.SourceWindow{{ID: "month", Format: "percent", UsedPercent: &used}}, ValueMetrics: []json.RawMessage{}, QuotaCount: 1, QuotaLimit: 64, ValueMetricLimit: 64, AccountIdentity: &quota.AccountIdentity{Kind: "accountHash", Value: "account-A", Source: "synthetic-account"}, SharedScope: &quota.SharedScope{ID: "pool", Source: "synthetic-pool", WindowIDs: []string{"month"}}, CacheIdentityMatch: "matched", DataQuality: "live", RefreshOutcome: "live"}}
-				raw, _ := json.Marshal(map[string]any{"rows": []quota.Pace{row}})
-				if _, err := db.ExecContext(ctx, `INSERT INTO quota_cache VALUES ('openquota','openquota',?,?)`, string(raw), store.Now()); err != nil {
+				// 缓存层耗尽只覆盖同 provider（magpie 后面同一批账号）；替代档走另一 provider 不被连坐。
+				body, err := json.Marshal(quota.Stored{Host: quota.LocalHost, Reading: quota.Reading{
+					Account: quota.MagpieAccount, OK: true, ReadAt: store.Now(),
+					Plans: []quota.MagpiePlan{{Provider: "fake", Plan: "pro", Windows: []quota.Window{{ID: "month", Label: "month", Used: 100}}}},
+				}})
+				if err != nil {
 					t.Fatal(err)
 				}
-				// 替代档使用另一账号，不能被 A 月耗尽连坐。
-				prior := ResolveExecution
-				ResolveExecution = func(ctx context.Context, e *app.Env, r Resolved, h string) (Resolved, error) {
-					r, err := prior(ctx, e, r, h)
-					if r.Spec.Model == "bbb" {
-						r.QuotaBinding.Account.Value = "account-B"
-						r.QuotaBinding.Card = "account-B"
-					}
-					return r, err
+				if _, err := db.ExecContext(ctx, `INSERT INTO quota_cache (account, tool, body, read_at) VALUES (?, ?, ?, ?)
+      ON CONFLICT (account) DO UPDATE SET body = excluded.body, read_at = excluded.read_at`,
+					quota.LocalHost+":"+quota.MagpieAccount, quota.MagpieAccount, string(body), store.Now()); err != nil {
+					t.Fatal(err)
 				}
 			}
 			who, err := org.AddLeader(ctx, db, org.NewLeader{Name: "隔离负责人", Workers: []string{"pi+aaa"}})

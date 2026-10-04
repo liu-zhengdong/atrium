@@ -19,6 +19,7 @@ import (
 )
 
 // launch 签发令牌、组提示词、经 Launcher 与 platform 拉起，等到退出或超时；令牌在返回时作废。
+// 进程起来就先记任务「被唤醒」经历：会话进行中 task show 与网页即可见，不等会话结束（t1066）。
 func (h *hub) launch(ctx context.Context, env *app.Env, p Pending, attempt *Attempt) (wakeRun, error) {
 	var run wakeRun
 	who, err := org.GetIdentity(ctx, env.DB, p.Leader)
@@ -90,6 +91,10 @@ func (h *hub) launch(ctx context.Context, env *app.Env, p Pending, attempt *Atte
 		return run, err
 	}
 	run.started = true
+	// 不带取消：就算服务在这时停下，「被唤醒」也已发生，经历照记。
+	if terr := recordTaskWakes(context.WithoutCancel(ctx), env.DB, p); terr != nil {
+		env.Log.With("leader", p.Leader).Warn("记负责人唤醒经历失败", "err", terr)
+	}
 	err = waitLimited(ctx, cmd, tmp, h.timeout)
 	redact.Close()
 	run.end = store.Now()

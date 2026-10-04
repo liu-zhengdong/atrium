@@ -529,7 +529,7 @@ step "有仓库但没改代码（装工具、调研）：工作树相对基线�
 out=$(json task add 装工具 --repo "$site"); nochg=$(jq -r .result.id <<<"$out")
 json task run "$nochg" --worker fakesh >/dev/null
 out=$(json task wait "$nochg" --timeout 30); has '.result.task.status == "done"'
-out=$(json task show "$nochg"); has '(.result.history|map(select(.kind == "gate_pass"))[0].body|contains("没有改动")) and (.result.history|map(.kind)|index("bounce")) == null'
+out=$(json task show "$nochg"); has '(.result.history|map(select(.kind == "gate_pass"))[0].body|contains("没有代码改动")) and (.result.history|map(.kind)|index("bounce")) == null'
 grep -q "交付结论：没做成" "$ATRIUM_DATA/tasks/$nochg/prompt-1.md" || fail "提示词应要求最后一行写交付结论"
 
 step "没改动且执行者自称没做成（停下等人定）：按交付结论转受阻交处理人，不判完成、不交回重跑"
@@ -547,7 +547,7 @@ wait_tool fakestop
 out=$(json task add 改页面 --repo "$site"); stop=$(jq -r .result.id <<<"$out")
 json task run "$stop" --worker fakestop >/dev/null
 out=$(json task wait "$stop" --timeout 30); has '.result.task.status == "blocked"'
-out=$(json task show "$stop"); has '(.result.history|map(select(.kind == "block"))[0].body|contains("交付结论：没做成")) and (.result.history|map(.kind)|index("bounce")) == null'
+out=$(json task show "$stop"); has '(.result.history|map(select(.kind == "block"))[0].body|fromjson|.note|startswith("执行者交付结论：没做成") and (contains("交付检查未通过")|not) and (contains("不要 PR")|not)) and (.result.history|map(.kind)|index("bounce")) == null'
 
 step "工作地点：普通文件夹（不是 git 仓库）→ 假执行者原地写文件 → 交付检查 → 完成；不建工作树"
 mkdir -p "$work/notes"; place=$(cd "$work/notes" && pwd)   # 规范路径：TMPDIR 可能带尾部斜杠

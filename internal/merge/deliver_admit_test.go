@@ -44,6 +44,18 @@ func TestDeliverRefusesDraftAndNotDone(t *testing.T) {
 		t.Fatal("没做成不该进合入队列")
 	}
 
+	if err := ledger.Record(e.ctx, e.db, task.ID, gates.KindResult, "u1", "等 #806 合入\n交付结论：受阻"); err != nil {
+		t.Fatal(err)
+	}
+	_, err = merge.Deliver(e.ctx, e.db, e.gh, task.ID, body, "u1")
+	t.Logf("受阻：%v", err)
+	if ae, ok := err.(*api.Error); !ok || !strings.Contains(ae.Message, "交付结论：受阻（等 #806 合入）") {
+		t.Fatalf("受阻应拦住：%v", err)
+	}
+	if got := e.get(task.ID); got.Stage == ledger.StageMerge {
+		t.Fatal("受阻不该进合入队列")
+	}
+
 	if err := ledger.Record(e.ctx, e.db, task.ID, gates.KindResult, "u1", "写完了\n交付结论：完成"); err != nil {
 		t.Fatal(err)
 	}

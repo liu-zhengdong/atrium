@@ -353,30 +353,37 @@ var (
 	endingLine = regexp.MustCompile(`交付结论\s*[:：]\s*\**\s*(未完成|没做成|受阻|完成)`)
 )
 
-// lastLine 按最后一行非空文字读结论：last 匹配 re 时返回第一个分组，之前的文字留末尾 n 个字作说明；匹配不上 ok=false，不猜。
-func lastLine(text string, re *regexp.Regexp, n int) (got, before string, ok bool) {
+// lastLine 按最后一行非空文字读结论：last 匹配 re 时返回第一个分组，之前的文字留末尾 n 个字作说明，
+// 结论词之后同一行的剩余文字作 after（如「受阻：<原因>」）；匹配不上 ok=false，不猜。
+func lastLine(text string, re *regexp.Regexp, n int) (got, before, after string, ok bool) {
 	lines := strings.Split(strings.TrimRight(strings.ReplaceAll(text, "\r\n", "\n"), " \n\t"), "\n")
-	m := re.FindStringSubmatch(strings.TrimSpace(lines[len(lines)-1]))
+	last := strings.TrimSpace(lines[len(lines)-1])
+	m := re.FindStringSubmatch(last)
 	if m == nil {
-		return "", "", false
+		return "", "", "", false
 	}
 	before = strings.TrimSpace(strings.Join(lines[:len(lines)-1], "\n"))
 	if r := []rune(before); len(r) > n {
 		before = "…" + string(r[len(r)-n:])
 	}
-	return m[1], before, true
+	after = strings.TrimSpace(strings.TrimLeft(last[len(m[0]):], "：:* \t"))
+	return m[1], before, after, true
 }
 
 // ParseReview 从审阅者的收尾文字读结论：最后一行必须是「审阅结论：通过/打回」，之前的文字作意见。
 func ParseReview(text string) (pass bool, notes string, ok bool) {
-	got, notes, ok := lastLine(text, verdictLine, 1500)
+	got, notes, _, ok := lastLine(text, verdictLine, 1500)
 	return got == "通过", notes, ok
 }
 
 // Ending 从执行者最后的回复读交付结论那一个词：最后一行必须是「交付结论：完成 / 没做成 / 未完成 / 受阻」。
-// 读不出 ok=false，不猜。之前的文字留末尾作原因。
+// 读不出 ok=false，不猜。原因取结论行上面的文字；没有就取结论词后同一行的文字（受阻：<原因>）。
 func Ending(text string) (word, why string, ok bool) {
-	return lastLine(text, endingLine, 300)
+	word, why, after, ok := lastLine(text, endingLine, 300)
+	if ok && why == "" {
+		why = after
+	}
+	return word, why, ok
 }
 
 // ParseEnding 从执行者最后的回复读交付结论。完成才算做成。

@@ -242,6 +242,7 @@ func TestGateEnding(t *testing.T) {
 		{"没改动、没做成", true, "h3 上读不到设计稿\n交付结论：没做成", false, ledger.Blocked, "没做成（h3 上读不到设计稿）"},
 		{"没仓库、停下等决定", false, "两个方案等负责人定\n交付结论：没做成", false, ledger.Blocked, "没做成（两个方案等负责人定）"},
 		{"没仓库、未完成", false, "还差一步\n交付结论：未完成", false, ledger.Blocked, "未完成（还差一步）"},
+		{"没仓库、受阻", false, "等证书\n交付结论：受阻", false, ledger.Blocked, "受阻（等证书）"},
 		{"没仓库、没写结论", false, "没做成，没改代码也没开 PR", false, ledger.Blocked, "没写「交付结论"},
 		{"没仓库、空回复", false, "", false, ledger.Blocked, "这一轮没记到执行者的回复"},
 		{"上一轮的完成不算", false, "交付结论：完成", true, ledger.Blocked, "这一轮没记到执行者的回复"},

@@ -1,5 +1,5 @@
 // Package gates 是交付检查与验收：执行者退出后运行时自己查事实（PR、提交、推送、改动规模、PR 正文），
-// 按档案 checks 判过或不过。执行者自称完成不算数；自称没做成、未完成或受阻照信，交回。
+// 按档案 checks 判过或不过。执行者自称完成不算数；自称受阻即停车交处理人（转受阻），自称没做成、未完成照信，交回重做。
 // 高风险或低信任的交付先另派不同工具、不同模型的审阅者；
 // 部门的验收人是 leader、user 时停在等验收，由 task accept / task reject 判。
 //
@@ -244,7 +244,7 @@ func (g *Gate) gate(ctx context.Context, t ledger.Task) error {
 		return err
 	}
 	if c.block != "" {
-		_, err := Block(ctx, g.DB, t.ID, "交付检查未通过："+c.block)
+		_, err := Block(ctx, g.DB, t.ID, c.block)
 		return err
 	}
 

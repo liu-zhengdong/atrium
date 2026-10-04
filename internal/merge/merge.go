@@ -151,10 +151,15 @@ func Deliver(ctx context.Context, db *store.DB, r gates.Runner, id string, in Bo
 	if pr.State != "OPEN" {
 		return t, api.Conflict("PR #%d 状态是 %s，不是开着的", pr.Number, pr.State)
 	}
-	if block, err := gates.QueueBlock(ctx, db, &pr.PR, id); err != nil {
+	reasons, blocked, err := gates.QueueBlock(ctx, db, &pr.PR, id)
+	if err != nil {
 		return t, err
-	} else if block != "" {
-		return t, api.Conflict("%s", block).WithNext("按原因改完后再 atrium task merge " + id)
+	}
+	if blocked != "" {
+		return t, api.Conflict("%s", blocked).WithNext("atrium task show " + id)
+	}
+	if len(reasons) > 0 {
+		return t, api.Conflict("%s", strings.Join(reasons, "；")).WithNext("按原因改完后再 atrium task merge " + id)
 	}
 	if repo != own {
 		if _, err := ledger.Edit(ctx, db, id, ledger.Patch{Repo: &repo}, actor); err != nil {

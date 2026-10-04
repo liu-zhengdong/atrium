@@ -1,6 +1,7 @@
 package events
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -51,8 +52,15 @@ func SecretaryAct(kind string, body any) bool {
 }
 
 // KeyOf 是事件的缺省去重键：同一件任务的状态变化合并成最新一条，交给负责人去拆（连同之后的补充说明）也合并成最新一条；
-// 同一部门同一项上限合并；其余不合并。
+// 同一部门同一项上限、同一负责人同任务同正文上报合并；其余不合并。
 func KeyOf(e Event) string {
+	if e.Kind == LeaderEscalate && field(e.Body, "from") != "" {
+		raw, err := json.Marshal(e.Body)
+		if err == nil {
+			return fmt.Sprintf("escalate:%s:%s:%x", e.Task, e.Dept, sha256.Sum256(raw))
+		}
+	}
+
 	if e.Kind == TaskStatus && e.Task != "" {
 		return "task:" + e.Task
 	}

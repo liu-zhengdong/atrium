@@ -634,3 +634,33 @@ func TestPrune(t *testing.T) {
 		t.Errorf("删了 %d 条，应为 %d", n, want)
 	}
 }
+
+func TestEscalateTargetAndLease(t *testing.T) {
+	db := openDB(t)
+	ctx := context.Background()
+	e := Event{Kind: LeaderEscalate, Target: "secretary", Body: map[string]any{"from": "a1", "kind": "stuck", "note": "同一故障"}}
+	emit(t, db, e)
+	e.Target = "a2"
+	emit(t, db, e)
+	rows, err := Pending(ctx, db, "secretary", false, 50)
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("接收者隔离：%+v %v", rows, err)
+	}
+	if _, err := Take(ctx, db, "secretary", false); err != nil {
+		t.Fatal(err)
+	}
+	e.Target = "secretary"
+	emit(t, db, e)
+	if _, err := Ack(ctx, db, []int64{rows[0].ID}, "", "u1"); err != nil {
+		t.Fatal(err)
+	}
+	rows, err = Pending(ctx, db, "secretary", false, 50)
+	if err != nil || len(rows) != 1 || rows[0].Count != 1 {
+		t.Fatalf("租约中另送，确认旧内容不得丢新事件：%+v %v", rows, err)
+	}
+	other, err := Pending(ctx, db, "a2", false, 50)
+	if err != nil || len(other) != 1 {
+		t.Fatalf("不同接收者保留：%+v %v", other, err)
+	}
+	t.Log("不同接收者、租约中不覆盖及确认旧内容后新事件保留通过")
+}

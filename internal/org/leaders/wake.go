@@ -488,7 +488,7 @@ func forwardUp(ctx context.Context, db *store.DB, leader string, ids []int64) ([
 				if err := events.Emit(ctx, tx, events.Event{
 					Kind: events.LeaderEscalate, Target: org.Secretary, Level: events.Act,
 					Body: map[string]any{"from": leader, "kind": "stuck", "label": kindLabel("stuck"),
-						"note": fmt.Sprintf("连续 %d 次没处理完，%d 条事件转来", MaxFails, len(ids))},
+						"events": byTarget[to], "note": fmt.Sprintf("连续 %d 次没处理完，%d 条事件转来", MaxFails, len(byTarget[to]))},
 				}); err != nil {
 					return err
 				}

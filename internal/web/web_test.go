@@ -827,7 +827,7 @@ func TestReceiptsComplete(t *testing.T) {
 	const n = 21 // 超过旧的 20 条上限
 	for i := 0; i < n; i++ {
 		if err := events.Emit(ctx, db, events.Event{Kind: events.LeaderEscalate, Target: org.Secretary,
-			Body: map[string]any{"from": "a1", "kind": "cross", "label": "需要别的部门配合", "note": "收尾确认"}}); err != nil {
+			Body: map[string]any{"from": "a1", "kind": "cross", "label": "需要别的部门配合", "note": "第 " + strconv.Itoa(i) + " 件收尾确认"}}); err != nil {
 			t.Fatal(err)
 		}
 	}

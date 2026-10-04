@@ -952,3 +952,93 @@ func TestNotifyCLI(t *testing.T) {
 		t.Fatalf("非法 kind 未拒绝：%d %s", code, output)
 	}
 }
+
+func TestEscalateCoalescesFault(t *testing.T) {
+	env, hub, srv := fixture(t)
+	ctx := context.Background()
+	send := func(leader, note, task string) {
+		t.Helper()
+		token, err := hub.issue(leader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		client := &api.Client{Base: srv.URL, Token: token}
+		if err := client.Do(ctx, "POST", "/api/escalations", EscalateIn{Kind: "stuck", Note: note, Task: task}, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	send("a1", "API 断线", "t1")
+	send("a1", "API 断线", "t1")
+	rows, err := events.Pending(ctx, env.DB, org.Secretary, false, 50)
+	if err != nil || len(rows) != 1 || rows[0].Count != 2 {
+		t.Fatalf("同故障应合并：%+v %v", rows, err)
+	}
+	t.Log(events.Line(rows[0], nil))
+	id := rows[0].ID
+	send("a1", "GitHub 断线", "t1")
+	send("a1", "API 断线", "")
+	send("a2", "API 断线", "t1")
+	rows, err = events.Pending(ctx, env.DB, org.Secretary, false, 50)
+	if err != nil || len(rows) != 3 {
+		t.Fatalf("不同故障/任务不能合并：%+v %v", rows, err)
+	}
+	if _, err = events.Ack(ctx, env.DB, []int64{id}, "", "u1"); err != nil {
+		t.Fatal(err)
+	}
+	send("a1", "API 断线", "t1")
+	rows, err = events.Pending(ctx, env.DB, org.Secretary, false, 50)
+	if err != nil || len(rows) != 3 {
+		t.Fatalf("确认后必须重新送达：%+v %v", rows, err)
+	}
+	t.Log("不同故障、任务、负责人及确认后新事件送达通过")
+}
+
+func TestForwardUpCoalescesSameEvents(t *testing.T) {
+	env, _, _ := fixture(t)
+	ctx := context.Background()
+	if err := events.Emit(ctx, env.DB, events.Event{Kind: events.TaskAssigned, Task: "t1", Dept: "o1", Target: "a1"}); err != nil {
+		t.Fatal(err)
+	}
+	var id int64
+	if err := env.DB.QueryRow(`SELECT id FROM events ORDER BY id DESC LIMIT 1`).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	forward := func() {
+		t.Helper()
+		if _, _, err := forwardUp(ctx, env.DB, "a1", []int64{id}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	forward()
+	if _, err := events.Retarget(ctx, env.DB, []int64{id}, org.Secretary, "a1"); err != nil {
+		t.Fatal(err)
+	}
+	forward()
+	rows, err := events.Pending(ctx, env.DB, org.Secretary, false, 50)
+	var reports []events.Row
+	for _, r := range rows {
+		if r.Kind == events.LeaderEscalate {
+			reports = append(reports, r)
+		}
+	}
+	if err != nil || len(reports) != 1 || reports[0].Count != 2 {
+		t.Fatalf("同负责人同原事件应合并：%+v %v", reports, err)
+	}
+	t.Log(events.Line(reports[0], nil))
+	// 同样一条事件、同样失败次数，但原故障不同，必须另送。
+	if err := events.Emit(ctx, env.DB, events.Event{Kind: events.TaskStatus, Task: "t1", Dept: "o1", Target: "a1", Body: map[string]any{"to": "blocked"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := env.DB.QueryRow(`SELECT id FROM events ORDER BY id DESC LIMIT 1`).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	forward()
+	var n int
+	if err := env.DB.QueryRow(`SELECT count(*) FROM events WHERE kind=? AND target=? AND acked_at IS NULL`, events.LeaderEscalate, org.Secretary).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 2 {
+		t.Fatalf("不同原事件不应合并，得到%d", n)
+	}
+	t.Log("自动转交同原事件合并、不同原事件分别送达通过")
+}

@@ -327,14 +327,15 @@ func perform(ctx context.Context, env *app.Env, hk Hooks, t ledger.Task, f Facts
 	return overdue(ctx, db, target, t.ID, t.Org, h, Level(h, now), now, t.Title)
 }
 
-// overdue 发一条到期事件；同一次等待同一轮只发一回。
+// overdue 发一条到期事件；同一次等待同一轮只发一回，未领取的跨轮提醒合并。
 func overdue(ctx context.Context, db *store.DB, target, task, dept string, h Holder, lv int, now int64, title string) error {
 	key := fmt.Sprintf("overdue:%s:%s:%s:%d:%d", task, h.Who, h.Role, h.Since, lv)
+	mergeKey := fmt.Sprintf("overdue:%s:%s:%s:%d", task, h.Who, h.Role, h.Since)
 	next := h.Next
 	if next == "" && task != "" {
 		next = "atrium task show " + task
 	}
-	body := map[string]any{"holder": h.Who, "role": h.Role, "held_ms": now - h.Since, "next": next, "text": h.Text}
+	body := map[string]any{"round": lv, "holder": h.Who, "role": h.Role, "held_ms": now - h.Since, "next": next, "text": h.Text}
 	if title != "" {
 		body["title"] = title
 	}
@@ -344,6 +345,14 @@ func overdue(ctx context.Context, db *store.DB, target, task, dept string, h Hol
 		if err != nil || seen {
 			return err
 		}
-		return events.Emit(ctx, tx, events.Event{Kind: events.Overdue, Task: task, Dept: dept, Target: target, Key: key, Body: body})
+		// 旧版轮次键仍作为已提醒凭据；新键按等待合并，正文保留最高轮次。
+		var sent bool
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM events WHERE key = ? AND json_extract(body, '$.round') >= ?)`, mergeKey, lv).Scan(&sent); err != nil {
+			return err
+		}
+		if sent {
+			return nil
+		}
+		return events.Emit(ctx, tx, events.Event{Kind: events.Overdue, Task: task, Dept: dept, Target: target, Key: mergeKey, Body: body})
 	})
 }

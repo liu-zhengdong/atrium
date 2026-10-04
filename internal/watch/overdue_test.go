@@ -226,3 +226,55 @@ func TestOverdueConcurrent(t *testing.T) {
 		t.Fatalf("并发应仅一条，得到%d", n)
 	}
 }
+
+func TestOverdueCoalescesRounds(t *testing.T) {
+	env, ctx := setup(t)
+	first, err := ledger.Add(ctx, env.DB, ledger.NewTask{Title: "第一件", Org: "o2"}, "u1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := ledger.Add(ctx, env.DB, ledger.NewTask{Title: "第二件", Org: "o2"}, "u1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := Holder{Who: "a1", Role: RoleLeader, Since: 100 * minute}
+	send := func(task, target string, holder Holder, round int) {
+		t.Helper()
+		if err := overdue(ctx, env.DB, target, task, "o2", holder, round, holder.Since+int64(round)*30*minute, "测试"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	send(first.ID, "secretary", h, 1)
+	send(first.ID, "secretary", h, 2)
+	rows, err := events.Pending(ctx, env.DB, "secretary", false, 50)
+	if err != nil || len(rows) != 1 || rows[0].Count != 2 {
+		t.Fatalf("跨轮应合并一次：%+v %v", rows, err)
+	}
+	if line := events.Line(rows[0], nil); !strings.Contains(line, "合并 2 次") || !strings.Contains(line, "已 60 分钟") {
+		t.Fatal(line)
+	} else {
+		t.Log(line)
+	}
+	send(second.ID, "secretary", h, 1)
+	send(first.ID, "a2", h, 3)
+	other, err := events.Pending(ctx, env.DB, "a2", false, 50)
+	if err != nil || len(other) != 1 || other[0].Count != 1 {
+		t.Fatalf("不同接收者应单独送达：%+v %v", other, err)
+	}
+	h.Since++
+	send(first.ID, "secretary", h, 1)
+	rows, err = events.Pending(ctx, env.DB, "secretary", false, 50)
+	if err != nil || len(rows) != 3 {
+		t.Fatalf("不同任务/等待不能合并：%+v %v", rows, err)
+	}
+	h.Since--
+	if _, err := events.Ack(ctx, env.DB, []int64{rows[0].ID}, "", "u1"); err != nil {
+		t.Fatal(err)
+	}
+	send(first.ID, "secretary", h, 4)
+	rows, err = events.Pending(ctx, env.DB, "secretary", false, 50)
+	if err != nil || len(rows) != 3 {
+		t.Fatalf("确认后新轮必须送达：%+v %v", rows, err)
+	}
+	t.Log("不同任务、等待、接收者及确认后新轮送达通过")
+}

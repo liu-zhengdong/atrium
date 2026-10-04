@@ -22,7 +22,7 @@ type Fact struct {
 	Refusal     string // 档案是否接受自动分派任务（workers.Rules.Refusal）
 	Problem     string // 档案写得不对、模型与强度不搭
 	Unavailable string // 没有符合任务条件的可用主机，或隔离实例不允许
-	Waiting     string // 主机暂未就绪；仍符合条件，等待后再派
+	Waiting     string // 主机暂未就绪或标了不可用（会到期或被解除）；仍符合条件，等待后再派
 	Exclusive   bool
 	Preferred   int           // 技能里的优先顺序（1 起）；0 不是
 	Prefer      bool          // 档案标了 prefer：技能偏好之后、其余之前
@@ -62,7 +62,8 @@ type Candidate struct {
 	Eligible     bool                `json:"eligible"`
 	Refusals     []string            `json:"refusals,omitempty"`
 	Busy         bool                `json:"busy,omitempty"`
-	Spare        *float64            `json:"spare,omitempty"` // 富余百分点（与 atrium quota 同一个数）；没数据为空
+	Waiting      string              `json:"waiting,omitempty"` // 能接但这会儿接不了（机器没就绪、标了不可用），等什么
+	Spare        *float64            `json:"spare,omitempty"`   // 富余百分点（与 atrium quota 同一个数）；没数据为空
 	TokenWindows []quota.TokenWindow `json:"token_windows,omitempty"`
 	Rank         int                 `json:"rank,omitempty"`  // 能接的里排第几（1 起）
 	Fails        int                 `json:"fails,omitempty"` // 近 ShakyWindow 次拉起里启动失败几次
@@ -141,6 +142,7 @@ func Pick(in PickInput) PickView {
 			}
 		}
 		c.Busy = f.Exclusive && in.Busy[f.Tool]
+		c.Waiting = f.Waiting
 		c.Eligible = len(c.Refusals) == 0
 		pref := f.Preferred
 		if pref == 0 {

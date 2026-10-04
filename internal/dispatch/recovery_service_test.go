@@ -281,16 +281,16 @@ func TestRecoveryServiceEntry(t *testing.T) {
 					t.Fatalf("窗口有余时应推荐经 magpie 的 pi：%+v", v)
 				}
 				v := preview(92)
-				refused := ""
+				waiting := ""
 				for _, c := range v.Candidates {
-					if c.ID == "pi+cursor/quota" && !c.Eligible {
-						refused = strings.Join(c.Refusals, "、")
+					if c.ID == "pi+cursor/quota" {
+						waiting = c.Waiting
 					}
 				}
-				if v.Recommended != "zzz-free" || !strings.Contains(refused, "额度将满") {
-					t.Fatalf("窗口将满应换组合：recommended=%s refused=%q", v.Recommended, refused)
+				if v.Recommended != "zzz-free" || !strings.Contains(waiting, "额度将满") {
+					t.Fatalf("窗口将满应换组合：recommended=%s waiting=%q", v.Recommended, waiting)
 				}
-				t.Logf("窗口将满：pi+cursor/quota 拒绝原因=%s；推荐=%s", refused, v.Recommended)
+				t.Logf("窗口将满：pi+cursor/quota 等=%s；推荐=%s", waiting, v.Recommended)
 				delete(body, "worker")
 			}
 			call("POST", "/api/tasks/"+tk.ID+"/run", body, nil)

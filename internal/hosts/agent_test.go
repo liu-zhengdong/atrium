@@ -409,8 +409,8 @@ func TestReconnectReconcile(t *testing.T) {
 	}
 }
 
-// 这台上标了不可用的「工具+模型」：挑机器不再派给它，同一工具的别的模型照派；到期的不算。
-// 用本机 h1，并提供假的实测结果，结果不随测试机器装了什么而变。
+// 这台上标了不可用的「工具+模型」：挑机器不再派给它、排队等标记到期（不拒绝，拒绝会让任务转受阻），
+// 同一工具的别的模型照派；到期的不算。用本机 h1，并提供假的实测结果，结果不随测试机器装了什么而变。
 func TestPickSkipsMarked(t *testing.T) {
 	g := newRig(t)
 	ctx := context.Background()
@@ -428,11 +428,14 @@ func TestPickSkipsMarked(t *testing.T) {
 		}
 	}
 	c, err := Pick(ctx, g.env, Need{Tool: "grok", Model: "grok-4.6"}, host)
-	if err != nil || c.Kind != "refuse" || !strings.HasPrefix(c.Reason, host+" 上的 grok+grok-4.6 不可用：额度用尽，") {
+	if err != nil || c.Kind != "queue" || !strings.HasPrefix(c.Reason, host+" 上的 grok+grok-4.6 不可用：额度用尽，") {
 		t.Fatalf("%+v %v", c, err)
 	}
+	if c, err := Pick(ctx, g.env, Need{Tool: "grok", Model: "grok-4.6"}, ""); err != nil || c.Kind != "queue" {
+		t.Fatalf("不指定机器时同样排队：%+v %v", c, err)
+	}
 	for _, model := range []string{"grok-5", "grok-old"} {
-		if c, err := Pick(ctx, g.env, Need{Tool: "grok", Model: model}, host); err != nil || c.Kind == "refuse" {
+		if c, err := Pick(ctx, g.env, Need{Tool: "grok", Model: model}, host); err != nil || c.Kind != "run" {
 			t.Errorf("%s 不该被挡：%+v %v", model, c, err)
 		}
 	}

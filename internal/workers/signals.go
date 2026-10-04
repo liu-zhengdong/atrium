@@ -377,7 +377,7 @@ func resetAt(text string, now time.Time) (time.Time, bool) {
 			}
 		}
 		t := time.Date(year, mon, day, h, min, 0, 0, now.Location())
-		return t, h < 24 && min < 60 && t.After(now)
+		return t, h < 24 && min < 60 && t.Day() == day && t.After(now)
 	}
 	if m := minutesRE.FindStringSubmatch(text); m != nil {
 		n, _ := strconv.Atoi(m[1])

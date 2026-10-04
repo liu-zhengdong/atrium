@@ -2,7 +2,7 @@
 # 额度避让演练：一条命令起假 magpie（本机临时端口）、隔离实例（数据目录全在 $TMPDIR）与假执行者（bash），
 # 跑三个场景并断言 magpie 窗口读数怎样影响派活：
 #   一、窗口 40%：经 magpie 的候选照常可选，照常派它；
-#   二、窗口 92%：该组合不可用，拒绝原因含「额度将满」，实际派活落在别的组合，task log 与经历可见；
+#   二、窗口 92%：该组合标了不可用、仍是可选（eligible），等的原因含「额度将满」，实际派活落在别的组合，task log 与经历可见；
 #   三、假 magpie 不可达：读数按未知，照常派。
 # 只服务演练：不读真实额度、不碰用户在跑的服务与 ~/.atrium-v2；隔离数据与临时进程用完即停。
 set -euo pipefail
@@ -141,7 +141,7 @@ printf '  读数 40%%：dry-run 推荐 %s\n' "$rec"
 evidence "$t1"
 stop_instance
 
-step "场景二：窗口 92%，该组合不可用、换别的组合"
+step "场景二：窗口 92%，该组合标了不可用、改等它，换别的组合"
 d2="$work/s2"; mkdir -p "$d2/data"
 echo '{"object":"list","data":[{"provider":"cursor","plan":"Pro","kind":"subscription","windows":[{"name":"7d","used":92,"resetsAt":"2099-01-01T00:00:00Z"}]}]}' >"$d2/reading.json"
 mp=$(magpie "$d2/reading.json" "$d2/hits")
@@ -149,16 +149,16 @@ start_instance "$d2/data" "$mp"
 write_profiles "$d2" "$mp"
 wait_hit "$d2/hits"
 out=$(j task add 额度演练二); t2=$(jq -r .result.id <<<"$out")
-wait_dry "$t2" '[.result.pick.candidates[]|select(.id=="mag+cursor/auto")][0].eligible == false'
-refusal=$(jq -r '[.result.pick.candidates[]|select(.id=="mag+cursor/auto")][0].refusals|join("；")' <<<"$out")
+wait_dry "$t2" '[.result.pick.candidates[]|select(.id=="mag+cursor/auto")][0].eligible == true'
+refusal=$(jq -r '[.result.pick.candidates[]|select(.id=="mag+cursor/auto")][0].waiting' <<<"$out")
 recommend=$(jq -r '.result.pick.recommended' <<<"$out")
 has '.result.pick.recommended == "plain"'
-has '([.result.pick.candidates[]|select(.id=="mag+cursor/auto")][0].refusals|join("；")) as $r | ($r|test("额度将满")) and ($r|test("cursor Pro：7d 已用 92.0%")) and ($r|test("须给用户留 20%"))'
+has '([.result.pick.candidates[]|select(.id=="mag+cursor/auto")][0].waiting) as $r | ($r|test("额度将满")) and ($r|test("cursor Pro：7d 已用 92.0%")) and ($r|test("须给用户留 20%"))'
 out=$(j task run "$t2"); has '.result.queued'
 out=$(j task wait "$t2" --timeout 30); has '.result.task.status == "done"'
 out=$(j task log "$t2"); has '(.result.text|contains("组合=plain")) and (.result.text|contains("组合=mag")|not)'
 out=$(j task show "$t2"); has '.result.history|map(select(.kind=="launch"))|last|.body|fromjson|.worker == "plain"'
-printf '  读数 92%%：拒绝 mag+cursor/auto：%s；dry-run 推荐 %s\n' "$refusal" "$recommend"
+printf '  读数 92%%：等 mag+cursor/auto：%s；dry-run 推荐 %s\n' "$refusal" "$recommend"
 evidence "$t2"
 stop_instance
 

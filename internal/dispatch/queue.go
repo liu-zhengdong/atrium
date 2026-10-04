@@ -23,7 +23,8 @@ type Options struct {
 	Risk    string   `json:"risk,omitempty"`   // 缺省 low
 	Host    string   `json:"host,omitempty"`   // 空表示自动挑
 	Secrets []string `json:"secrets,omitempty"`
-	Avoid   []string `json:"avoid,omitempty"` // 自动挑时避开的执行者（watch 换人时给）
+	Avoid   []string `json:"avoid,omitempty"`  // 自动挑时避开的执行者（换人放回队列时给）
+	Switch  bool     `json:"switch,omitempty"` // 换人放回队列的：下一次拉起记 switch，换人次数接着这一轮数
 }
 
 var secretNameRE = regexp.MustCompile(`^[A-Z_][A-Z0-9_]{0,63}$`)
@@ -205,6 +206,15 @@ func Enqueue(ctx context.Context, env *app.Env, id string, o Options, actor stri
 		}
 		o.Worker = r.ID
 	}
+	note := summary(o)
+	if len(waiting) > 0 {
+		note += "；等依赖 " + strings.Join(waiting, "、") + " 完成后派"
+	}
+	return putRow(ctx, db, id, o, ledger.Enqueue, actor, note)
+}
+
+// putRow 写队列行并经 Apply 转 queued（Enqueue 是 task run，Requeue 是换人时放回队列）；Apply 被拒连行删掉。
+func putRow(ctx context.Context, db *store.DB, id string, o Options, kind ledger.EventKind, actor, note string) (ledger.Task, error) {
 	raw, _ := json.Marshal(o)
 	if err := db.Tx(ctx, func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx, `INSERT INTO queue (task, enqueued_at, opts, by) VALUES (?, ?, ?, ?)
@@ -216,13 +226,9 @@ func Enqueue(ctx context.Context, env *app.Env, id string, o Options, actor stri
 		// 交付检查按经历 risk 判要不要审阅（gates.Risk）。
 		return ledger.Record(ctx, tx, id, gates.KindRisk, actor, o.Risk)
 	}); err != nil {
-		return t, err
+		return ledger.Task{}, err
 	}
-	note := summary(o)
-	if len(waiting) > 0 {
-		note += "；等依赖 " + strings.Join(waiting, "、") + " 完成后派"
-	}
-	t, err = ledger.Apply(ctx, db, id, ledger.Event{Kind: ledger.Enqueue}, actor, note)
+	t, err := ledger.Apply(ctx, db, id, ledger.Event{Kind: kind}, actor, note)
 	if err != nil {
 		if e := dropRow(ctx, db, id); e != nil {
 			return t, e

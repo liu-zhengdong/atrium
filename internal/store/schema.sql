@@ -169,12 +169,12 @@ CREATE TABLE IF NOT EXISTS queue (
   by          TEXT NOT NULL DEFAULT ''
 );
 
--- 定时任务：到点在部门下生成一件普通任务（kind：task patrol research）。
--- every_ms 周期，0 是一次性的（next_at 触发一次，生成任务后删掉这条）；at_minute 本机钟点（当天第几分钟，只给整天的周期）；skips 累计跳过轮数，last_note 最近一笔。
+-- 定时任务：到点在部门下生成一件普通任务（kind：task patrol research；wake 自唤醒只提醒负责人，不建任务）。
+-- every_ms 周期，0 是一次性的（next_at 触发一次，到点后删掉这条）；at_minute 本机钟点（当天第几分钟，只给整天的周期）；skips 累计跳过轮数，last_note 最近一笔。
 CREATE TABLE IF NOT EXISTS schedules (
   id          TEXT PRIMARY KEY,
   department  TEXT NOT NULL REFERENCES departments (id),
-  kind        TEXT NOT NULL CHECK (kind IN ('task', 'patrol', 'research')),
+  kind        TEXT NOT NULL CHECK (kind IN ('task', 'patrol', 'research', 'wake')),
   every_ms    INTEGER NOT NULL,
   at_minute   INTEGER,
   title       TEXT NOT NULL,

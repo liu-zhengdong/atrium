@@ -497,7 +497,7 @@ function renderChoice(c) {
 /* 定时任务抽屉：下一轮的完整时刻、每轮做什么、最近几轮（点开是那件任务）、最近一笔记录，详述折起；一次性的没有「最近几轮」（生成后这条就删了） */
 const kindDoes = { "调研": "写一张选项单给你挑", "体验巡检": "把主路径走一遍，能修的开 PR" };
 function renderSchedule(s) {
-  const w = ahead(s.next_at), next = new Date(s.next_at);
+  const w = ahead(s.next_at), next = new Date(s.next_at), wake = s.kind === "自唤醒";
   const when = s.paused ? `暂停中：到点不生成，恢复后${s.once ? "补这一次" : "只补一轮"}`
     : /^\d\d-/.test(w) ? `${w} ${clock(s.next_at)}` : `${/^\d\d:/.test(w) ? "今天 " : ""}${w}（${pad(next.getMonth() + 1)}-${pad(next.getDate())}）`;
   const facts = [[s.once ? "做什么" : "每轮", kindDoes[s.kind] || firstPara(s.detail)], ["技能", s.skill]].filter(x => x[1]);
@@ -506,7 +506,7 @@ function renderSchedule(s) {
       <p class="sub-t">${esc([s.cadence, s.kind].filter(Boolean).join(" · "))} · ${esc(s.by_label)} ${esc(date(s.created_at))} 建</p>
       <div class="holder"><b>${s.once ? "到点" : "下一轮"}</b>　${esc(when)}</div>
       ${facts.length ? `<dl class="facts">${facts.map(f => `<dt>${f[0]}</dt><dd>${esc(f[1])}</dd>`).join("")}</dl>` : ""}
-      ${s.once ? `<div class="quiet-line">到点生成一件任务并派发，之后这条自动删除</div>` : `<div class="jh"><b>最近几轮</b>${s.skips ? `<span>跳过过 ${s.skips} 轮</span>` : ""}</div>
+      ${s.once ? `<div class="quiet-line">到点${wake ? "提醒负责人" : "生成一件任务并派发"}，之后这条自动删除</div>` : wake ? "" : `<div class="jh"><b>最近几轮</b>${s.skips ? `<span>跳过过 ${s.skips} 轮</span>` : ""}</div>
       ${s.rounds.length ? `<div class="rows">${s.rounds.map(r => taskRow({ ...r, title: day(r) ? day(r) + " 这一轮" : r.title })).join("")}</div>` : `<div class="quiet-line">还没跑过</div>`}`}
       ${s.note ? `<p class="status-line${s.trouble ? " warn" : ""}">${esc(s.note)}</p>` : ""}
       ${s.detail ? `<details class="full"><summary>${icon.chev}详述</summary><div class="result">${md(s.detail.trim())}</div></details>` : ""}`);

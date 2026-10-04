@@ -36,6 +36,7 @@ const (
 	LimitFull    = "limit.full"         // 刚到或超了上限（watch 巡检发）；Body: {"key","what","used","max","unit","fix","next","text"}
 	WorkerDown   = "worker.down"        // 新出现一条等人处理的执行者不可用标记（workers 发，投秘书，要处理，去重键按「工具[+模型]@机器」）；Body: {"target","reason","next"}
 	ScheduleFail = "schedule.failed"    // 定时任务建任务失败（org/agenda 发，要处理）；Body: {"schedule","note"}
+	ScheduleWake = "schedule.wake"      // 自唤醒定时任务到点（org/agenda 发，投部门负责人，要处理，只叫醒负责人不建任务不派活）；Body: {"schedule","title","detail","note"}
 	HostRecord   = "host.record_failed" // 远程机器记录失败（hosts 发，投秘书，要处理）；Body: {"host","note"}
 )
 

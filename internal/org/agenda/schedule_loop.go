@@ -77,7 +77,11 @@ func Tick(ctx context.Context, env *app.Env, now int64, loc *time.Location) erro
 				return err
 			}
 		case "run":
-			task, err := runRound(ctx, env, x, v.Next, day+" 到点生成"+missed, now, loc)
+			note := day + " 到点生成" + missed
+			if x.Kind == "wake" {
+				note = day + " 到点提醒" + missed
+			}
+			task, err := runRound(ctx, env, x, v.Next, note, now, loc)
 			if err != nil && task.ID != "" {
 				return ledger.EachTask(ctx, env.DB, "agenda.enqueue", []ledger.Task{task}, func(t ledger.Task) string { return t.ID }, func(ledger.Task) error { return err })
 			}

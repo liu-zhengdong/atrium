@@ -44,7 +44,7 @@ func SecretaryAct(kind string, body any) bool {
 	case TaskStatus:
 		to := field(body, "to")
 		return field(body, "accept_by") != "" || to == "failed" || to == "blocked"
-	case ChoiceOpen, Overdue, WorkerDown, LimitFull, OnlineFailed, ScheduleFail, HostRecord, TaskAssigned:
+	case ChoiceOpen, Overdue, WorkerDown, LimitFull, OnlineFailed, ScheduleFail, ScheduleWake, HostRecord, TaskAssigned:
 		return true
 	}
 	return false
@@ -188,6 +188,12 @@ func Summary(r Row, names map[string]string) string {
 		line := clip(s("text"), 80)
 		if n := s("next"); n != "" {
 			line += " · " + n
+		}
+		return line
+	case ScheduleWake:
+		line := "自唤醒「" + clip(s("title"), 40) + "」到点（这是给负责人的闹钟，做后续动作，不派活）"
+		if d := s("detail"); d != "" {
+			line += "：" + clip(d, 80)
 		}
 		return line
 	}

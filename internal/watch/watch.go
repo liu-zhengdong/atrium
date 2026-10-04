@@ -34,6 +34,7 @@ type Why struct {
 	Reason string `json:"reason"`
 	Signal Signal `json:"signal,omitempty"`
 	Worker string `json:"worker,omitempty"`
+	Role   Role   `json:"role,omitempty"` // 触发时的等待角色：worker_start 启动超时也要按 nostart 标记不可用
 }
 
 // Hooks 是 watch 要别的包提供的判定与动作；没接上的留 nil。

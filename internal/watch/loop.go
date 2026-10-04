@@ -290,7 +290,7 @@ func perform(ctx context.Context, env *app.Env, hk Hooks, t ledger.Task, f Facts
 		}
 		kill()
 		if act == Retry && hk.Requeue != nil {
-			if err := hk.Requeue(ctx, t.ID, Why{Reason: reason, Signal: o.Signal, Worker: t.Worker}); err != nil {
+			if err := hk.Requeue(ctx, t.ID, Why{Reason: reason, Signal: o.Signal, Worker: t.Worker, Role: h.Role}); err != nil {
 				env.Log.Warn("重新入队失败", "task", t.ID, "err", err)
 			}
 		}

@@ -164,8 +164,9 @@ func hook(env *app.Env) {
 	}
 }
 
-// Requeue 给 watch：失败后换人重新入队（额度用尽、思考耗尽、启动后没进展都换人，不原样重派同一位）；额度先标不可用；
-// 沿用这一轮的换人上限，满了转受阻。被标记的组合由标记管退避，其他试过的避开；被停的任务不再派。
+// Requeue 给 watch：失败后换人重新入队（额度用尽、思考耗尽、启动后没进展都换人，不原样重派同一位）；额度用尽与启动后
+// 没进展都标不可用（额度优先：卡在额度报错上的启动超时也标账号），后续任务避开被标记的组合，其他试过的避开；沿用
+// 这一轮的换人上限，满了转受阻；被停的任务不再派。
 func Requeue(ctx context.Context, env *app.Env, id string, why watch.Why) error {
 	t, err := ledger.Get(ctx, env.DB, id)
 	if err != nil {
@@ -179,9 +180,19 @@ func Requeue(ctx context.Context, env *app.Env, id string, why watch.Why) error 
 		return err
 	}
 	if run != nil {
-		outcome := workers.OutFail
-		if why.Signal == watch.SigQuota {
+		outcome, sig := workers.OutFail, workers.Signal{}
+		switch {
+		case why.Signal == watch.SigQuota:
 			outcome = workers.OutQuota
+			log, err := workers.Tail(run.Log, workers.TailBytes)
+			if err != nil && !os.IsNotExist(err) {
+				return err
+			}
+			sig = workers.Classify(1, run.Worker, log, time.Now())
+		case why.Role == watch.RoleWorkerStart:
+			// 启动后没进展（watch 判）：与零步骤退出、静默空转同类（都没干起来），标 nostart 避开一段时间，到期自动再试。
+			outcome = workers.OutSetup
+			sig = workers.Signal{Kind: workers.SignalNoStart, Reason: "启动后没进展", Evidence: why.Reason}
 		}
 		head, err := readHead(run.Log, 64*1024)
 		if err != nil && !os.IsNotExist(err) {
@@ -191,13 +202,7 @@ func Requeue(ctx context.Context, env *app.Env, id string, why watch.Why) error 
 		if err := recordExit(ctx, env.DB, id, *run, exit); err != nil {
 			return err
 		}
-	}
-	if why.Signal == watch.SigQuota && run != nil {
-		log, err := workers.Tail(run.Log, workers.TailBytes)
-		if err != nil && !os.IsNotExist(err) {
-			return err
-		}
-		marked, err := markUnavailable(ctx, env.DB, *run, workers.Classify(1, run.Worker, log, time.Now()))
+		marked, err := markUnavailable(ctx, env.DB, *run, sig)
 		if err != nil {
 			return err
 		}

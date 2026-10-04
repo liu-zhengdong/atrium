@@ -427,6 +427,9 @@ func TestTickStartStuckRetriesThenBlocks(t *testing.T) {
 	if len(requeued) != 1 {
 		t.Fatalf("应调一次 Requeue：%+v", requeued)
 	}
+	if requeued[0].Role != RoleWorkerStart {
+		t.Fatalf("Requeue 应带上启动角色，好让分派标记不可用：%+v", requeued[0])
+	}
 	deadline := time.Now().Add(5 * time.Second)
 	for platform.Alive(pid) && time.Now().Before(deadline) {
 		time.Sleep(50 * time.Millisecond)

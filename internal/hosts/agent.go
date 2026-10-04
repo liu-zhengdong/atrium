@@ -438,6 +438,9 @@ func (a *Agent) launch(ctx context.Context, as Assignment) (int, string, error) 
 		} else if err != nil {
 			code = -1
 		}
+		if err := workers.AfterExit(as.Tool, logPath, spec.Env); err != nil {
+			a.Log.Error("执行者退出后补记用量失败", "task", as.Task, "err", err)
+		}
 		a.markExit(st, &code)
 	}()
 	go a.follow(st)

@@ -49,10 +49,9 @@ func qualities(attempts []Attempt, leader bool, key func(string) string) []Quali
 			if a.Outcome == OutBounce {
 				q.BounceReasons[a.Reason]++
 			}
-			u := a.Usage
-			if u.Cost != nil && u.Currency == "USD" && len(u.Missing) == 0 && *u.Cost >= 0 && !math.IsNaN(*u.Cost) && !math.IsInf(*u.Cost, 0) {
+			if v := a.Usage.InUSD(); v != nil && len(a.Usage.Missing) == 0 && *v >= 0 && !math.IsNaN(*v) && !math.IsInf(*v, 0) {
 				q.CostSamples++
-				total += *u.Cost
+				total += *v
 			}
 		}
 		q.DeliveryRate = float64(q.OK) / float64(q.Launches)
@@ -103,7 +102,7 @@ func (q Quality) Name() string {
 
 func (q Quality) costText() string {
 	if q.CostPerDeliveryUSD == nil {
-		return fmt.Sprintf("未知（USD 完整读数 %d/%d）", q.CostSamples, q.Launches)
+		return fmt.Sprintf("未知（能折成 USD 的完整读数 %d/%d）", q.CostSamples, q.Launches)
 	}
 	return fmt.Sprintf("USD %.6g", *q.CostPerDeliveryUSD)
 }

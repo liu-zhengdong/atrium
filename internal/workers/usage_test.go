@@ -91,6 +91,31 @@ func TestCharge(t *testing.T) {
 	}
 }
 
+// 非 USD 花费按结算那一刻的 usd_rate 折成 USD 存下；币种对不上、没写汇率就不折，USD 花费不另存。
+func TestChargeUSD(t *testing.T) {
+	cny := Rules{Billing: "metered", Prices: &Prices{Currency: "CNY", USDRate: price(.14), Input: price(6), Output: price(30)}}
+	u := Charge(Usage{Tokens: Tokens{Input: token(1e6), Output: token(1e6)}}, cny)
+	if u.Currency != "CNY" || *u.Cost != 36 || u.USD == nil || math.Abs(*u.USD-5.04) > 1e-9 || u.InUSD() != u.USD || !strings.Contains(u.String(), "约 USD 5.04") {
+		t.Fatal(u, u.String())
+	}
+	noRate := cny
+	noRate.Prices = &Prices{Currency: "CNY", Input: price(6), Output: price(30)}
+	if u := Charge(Usage{Tokens: Tokens{Input: token(1e6), Output: token(1e6)}}, noRate); u.USD != nil || u.InUSD() != nil {
+		t.Fatal("没写汇率不能折合", u)
+	}
+	if u := Charge(Usage{Cost: price(2), Currency: "EUR", USD: price(99)}, cny); u.USD != nil || u.InUSD() != nil {
+		t.Fatal("工具报的货币与档案单价币种不同不能折合，旧值也要清掉", u)
+	}
+	usd := Charge(Usage{Cost: price(2), Currency: "USD"}, cny)
+	if usd.USD != nil || *usd.InUSD() != 2 {
+		t.Fatal(usd)
+	}
+	raw, _ := json.Marshal(usd)
+	if strings.Contains(string(raw), `"usd"`) {
+		t.Fatal("USD 花费不另存折合值", string(raw))
+	}
+}
+
 func TestUsageAggregation(t *testing.T) {
 	claude := NewParser("claude")
 	claude.Feed(`{"type":"result","usage":{"input_tokens":10,"output_tokens":20,"cache_read_input_tokens":0,"cache_creation_input_tokens":0},"total_cost_usd":1}
@@ -145,6 +170,10 @@ func TestBillingProfile(t *testing.T) {
 		{"prices: {currency: USD, input: 2}", true},
 		{"billing: metered\nprices: {currency: usd, input: 2}", false},
 		{"billing: metered\nprices: {currency: USD, input: -1}", false},
+		{"billing: metered\nprices: {currency: CNY, usd_rate: 0.14, input: 6}", true},
+		{"billing: metered\nprices: {currency: CNY, usd_rate: 0, input: 6}", false},
+		{"billing: metered\nprices: {currency: CNY, usd_rate: -0.14, input: 6}", false},
+		{"billing: metered\nprices: {currency: USD, usd_rate: 1, input: 6}", false},
 	} {
 		keys, _, err := SplitSource("---\n" + c.src + "\n---\n")
 		if err != nil {

@@ -257,11 +257,6 @@ func (h *hub) wake(ctx context.Context, env *app.Env, p Pending) {
 			log.Warn("负责人唤醒失败", "err", err)
 		}
 		bg := context.WithoutCancel(ctx)
-		if run.started {
-			if terr := recordTaskWakes(bg, env.DB, p); terr != nil {
-				log.Warn("记负责人唤醒经历失败", "err", terr)
-			}
-		}
 		left, lerr := unacked(bg, env.DB, p.Leader, p.IDs)
 		if lerr != nil {
 			log.Error("查这批事件是否确认失败", "err", lerr)

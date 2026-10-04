@@ -819,6 +819,42 @@ func TestWakeTimeout(t *testing.T) {
 	}
 }
 
+// 会话进行中「被唤醒」经历就要可查：进程起来即落库，不等会话结束（t1066）。
+// 假 launcher 即时返回分不清开始与结束（之前的缺陷它测不出来），这里用真 sleep
+// 会话在中间轮询；若经历退回会话结束才写，sleep 内查不到就会超时失败。
+func TestWakeExperienceDuringSession(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("用 sleep 模拟进行中的会话")
+	}
+	env, h, _ := fixture(t)
+	ctx := context.Background()
+	f := &fakeLauncher{h: h, db: env.DB, ack: true, cmd: "sleep 1"}
+	SetLauncher(f.launch)
+	t.Cleanup(func() { SetLauncher(nil) })
+	events.Emit(ctx, env.DB, events.Event{Kind: events.TaskStatus, Task: "t1", Dept: "o2", Target: "a2", Level: events.Act})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		h.wake(ctx, env, Pending{Leader: "a2", IDs: []int64{1}})
+	}()
+	// 轮询上限 700ms 小于 sleep 1s：经历若在会话结束才写，这里必超时。
+	deadline := time.Now().Add(700 * time.Millisecond)
+	for {
+		his, err := ledger.History(ctx, env.DB, "t1", 50)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if n := len(his); n > 0 && his[n-1].Kind == WakeKind && his[n-1].Actor == "a2" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("会话进行中查不到「被唤醒」经历")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	<-done
+}
+
 // 唤醒循环一起来就删过期记录；ReadWakes 只读 since 之后的，清理没跑到也不多算。
 func TestWakeRetention(t *testing.T) {
 	env, h, _ := fixture(t)

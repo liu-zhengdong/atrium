@@ -219,14 +219,16 @@ func (g *rig) waitOnline(host string) {
 func waitCLIs(t *testing.T, env *app.Env, host string) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
+	var h Host
+	var err error
 	for time.Now().Before(deadline) {
-		h, err := Get(context.Background(), env.DB, host)
+		h, err = Get(context.Background(), env.DB, host)
 		if err == nil && h.Info != nil && h.Info.CLIs != nil {
 			return
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	t.Fatalf("%s 自检没报上", host)
+	t.Fatalf("%s 自检 5 秒没报上，最后读到 info=%+v err=%v", host, h.Info, err)
 }
 
 func waitExit(t *testing.T, env *app.Env, task string, run int) Exit {
@@ -412,7 +414,7 @@ func TestPickSkipsMarked(t *testing.T) {
 	g := newRig(t)
 	ctx := context.Background()
 	host := "h1"
-	if err := touch(ctx, g.env.DB, host, &Info{CLIs: map[string]CLI{"grok": {Installed: true}}}, nil); err != nil {
+	if err := setCLIs(ctx, g.env.DB, host, map[string]CLI{"grok": {Installed: true}}); err != nil {
 		t.Fatal(err)
 	}
 	now := time.Now()

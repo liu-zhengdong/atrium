@@ -124,7 +124,12 @@ func TestRecoveryServiceEntry(t *testing.T) {
 				t.Fatal(closeErr)
 			}
 			linkGit(t, bin)
-			t.Setenv("PATH", bin+string(os.PathListSeparator)+filepath.Dir(exe))
+			path := bin + string(os.PathListSeparator) + filepath.Dir(exe)
+			if runtime.GOOS != "windows" {
+				// EndSession 在 unix 上要调系统 ps 读会话环境，不能把系统工具目录挡在 PATH 外。
+				path += string(os.PathListSeparator) + "/usr/bin" + string(os.PathListSeparator) + "/bin"
+			}
+			t.Setenv("PATH", path)
 			db, err := store.Open(filepath.Join(dir, "atrium.db"))
 			if err != nil {
 				t.Fatal(err)

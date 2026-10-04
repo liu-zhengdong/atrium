@@ -133,7 +133,12 @@ func TestLeaderRecoveryServiceEntry(t *testing.T) {
 			if cerr != nil {
 				t.Fatal(cerr)
 			}
-			t.Setenv("PATH", bin+string(os.PathListSeparator)+filepath.Dir(exe))
+			path := bin + string(os.PathListSeparator) + filepath.Dir(exe)
+			if runtime.GOOS != "windows" {
+				// EndSession 在 unix 上要调系统 ps 读会话环境，不能把系统工具目录挡在 PATH 外。
+				path += string(os.PathListSeparator) + "/usr/bin" + string(os.PathListSeparator) + "/bin"
+			}
+			t.Setenv("PATH", path)
 			paths := config.Paths{Data: dir}
 			db, err := store.Open(paths.DB())
 			if err != nil {

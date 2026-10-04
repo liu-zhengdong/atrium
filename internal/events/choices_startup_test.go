@@ -3,6 +3,7 @@ package events_test
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"testing"
@@ -60,7 +61,10 @@ UPDATE departments SET leader='a1' WHERE id='o1';`); err != nil {
 					return ""
 				})
 			}()
-			client := &http.Client{Timeout: 5 * time.Second}
+			// 每个隔离服务独占连接池，避免共享 DefaultTransport 的连接留到下一轮。
+			transport := &http.Transport{}
+			t.Cleanup(transport.CloseIdleConnections)
+			client := &http.Client{Timeout: 5 * time.Second, Transport: transport}
 			var info config.ServiceInfo
 			deadline := time.Now().Add(5 * time.Second)
 			for {
@@ -98,7 +102,10 @@ UPDATE departments SET leader='a1' WHERE id='o1';`); err != nil {
 			}
 			t.Cleanup(func() {
 				res := call("POST", "/api/service/stop")
+				io.Copy(io.Discard, res.Body)
 				res.Body.Close()
+				// 先结束测试客户端的连接，再等服务排空；不延长停机超时。
+				transport.CloseIdleConnections()
 				select {
 				case err := <-done:
 					if err != nil {
@@ -109,6 +116,7 @@ UPDATE departments SET leader='a1' WHERE id='o1';`); err != nil {
 				}
 			})
 			res := call("GET", "/health")
+			io.Copy(io.Discard, res.Body)
 			res.Body.Close()
 			if res.StatusCode != 200 {
 				t.Fatal(res.Status)
@@ -123,6 +131,7 @@ UPDATE departments SET leader='a1' WHERE id='o1';`); err != nil {
 				Result []events.Row `json:"result"`
 			}
 			err = json.NewDecoder(res.Body).Decode(&receipt)
+			io.Copy(io.Discard, res.Body)
 			res.Body.Close()
 			expected := 1
 			if kind == "empty-decision" {

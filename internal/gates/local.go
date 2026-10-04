@@ -32,7 +32,7 @@ func (g *Gate) checkLocal(ctx context.Context, t ledger.Task) (checked, error) {
 		return checked{}, err
 	}
 	v := Judge([]string{CheckCommitted}, facts)
-	if err := record(ctx, g.DB, t.ID, KindGate, gateRecord{v, facts}); err != nil {
+	if err := record(ctx, g.DB, t.ID, KindGate, gateRecord{Verdict: v, Facts: facts}); err != nil {
 		return checked{}, err
 	}
 	if !v.Pass {

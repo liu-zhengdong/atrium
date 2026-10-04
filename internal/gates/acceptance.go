@@ -41,6 +41,19 @@ func (g *Gate) pass(ctx context.Context, t ledger.Task, d Delivery, kind ledger.
 	if err != nil {
 		return err
 	}
+	if d.Name == "pr" && t.PR != "" {
+		repo, e := Slug(ctx, g.R, t.Repo)
+		if e != nil {
+			return e
+		}
+		pr, e := ViewPR(ctx, g.R, repo, t.PR)
+		if e != nil {
+			return e
+		}
+		if pr.State == "MERGED" && !ReleaseAuthorized(t.Detail) && by == "" {
+			by = org.AcceptLeader
+		}
+	}
 	if by != "" {
 		note += fmt.Sprintf("；等%s验收：atrium task accept %s，或 atrium task reject %s --reason 原因", acceptLabel[by], t.ID, t.ID)
 		_, err := ledger.Apply(ctx, g.DB, t.ID, ledger.Event{Kind: kind, AcceptBy: by}, Actor, note)
@@ -176,7 +189,7 @@ func (g *Gate) deliveryHead(ctx context.Context, t ledger.Task, d Delivery) (str
 	if err != nil {
 		return "", err
 	}
-	if pr.State != "OPEN" || pr.HeadID == "" {
+	if (pr.State != "OPEN" && pr.State != "MERGED") || pr.HeadID == "" {
 		return "", api.Conflict("验收要求开着的 PR 与有效 head")
 	}
 	return pr.HeadID, nil

@@ -59,7 +59,15 @@ jobs:
         run: brew install jq ffmpeg
       - name: Windows 冒烟依赖
         if: runner.os == 'Windows'
-        run: choco install jq ffmpeg --yes --no-progress
+        run: |
+          # choco 部分失败（如社区源 504）仍可能返回 0，装完立即核对，缺了当场报，不拖到 smoke.sh 才发现。
+          choco install jq ffmpeg --yes --no-progress
+          for tool in jq ffmpeg; do
+            command -v "$tool" >/dev/null 2>&1 || {
+              echo "::error::Windows 冒烟依赖未装上：找不到 ${tool}，安装报错见上方 choco install 的输出（常见为社区源临时不可用，重跑本 job 即可）"
+              exit 1
+            }
+          done
       - name: 平台包测试
         # check 只在 Linux 跑测试；权限、进程这类按平台分文件的测试要在各自平台上跑。
         run: go test ./internal/platform/

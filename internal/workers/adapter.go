@@ -64,18 +64,22 @@ type Endpoint struct {
 
 // Launch 是算好的进程调用。Exe 是 PATH 上的程序名，由拉起方按子进程环境 LookPath。
 type Launch struct {
-	Exe       string            `json:"exe"`
-	Args      []string          `json:"args"`
-	Dir       string            `json:"dir"`
-	StdinFile string            `json:"stdin_file,omitempty"` // 接到标准输入的文件；空表示不接
-	StdinData string            `json:"stdin_data,omitempty"` // 工具要求结构化标准输入时的内容
-	Live      bool              `json:"live,omitempty"`       // 标准输入是消息流：先写 StdinFile 内容作第一条消息，之后写补充说明
-	Env       map[string]string `json:"env,omitempty"`        // 白名单环境之上额外设的变量（不放密钥）
-	Files     map[string]string `json:"files,omitempty"`      // 拉起前写好的文件：绝对路径 → 内容（不放密钥）
+	Exe        string            `json:"exe"`
+	Args       []string          `json:"args"`
+	Dir        string            `json:"dir"`
+	StdinFile  string            `json:"stdin_file,omitempty"`  // 接到标准输入的文件；空表示不接
+	StdinData  string            `json:"stdin_data,omitempty"`  // 工具要求结构化标准输入时的内容
+	Live       bool              `json:"live,omitempty"`        // 标准输入是消息流：先写 StdinFile 内容作第一条消息，之后写补充说明
+	Env        map[string]string `json:"env,omitempty"`         // 白名单环境之上额外设的变量（不放密钥）
+	LocalState []string          `json:"local_state,omitempty"` // 工具自动生成的文件，在 linked worktree 做本地排除
+	Files      map[string]string `json:"files,omitempty"`       // 拉起前写好的文件：绝对路径 → 内容（不放密钥）
 }
 
 // WriteFiles 写出 Launch.Files；本机与远程拉起前都调。
 func (l Launch) WriteFiles() error {
+	if err := l.excludeLocalState(); err != nil {
+		return err
+	}
 	for path, src := range l.Files {
 		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 			return err
@@ -438,7 +442,7 @@ func commandCodeAdapter() *Driver {
 		if in.Model != "" {
 			args = append(args, "--model", in.Model)
 		}
-		return Launch{Exe: a.Exe, Args: args, Dir: in.Dir}, nil
+		return Launch{Exe: a.Exe, Args: args, Dir: in.Dir, LocalState: []string{".commandcode/taste/taste.md"}}, nil
 	}
 	return a
 }

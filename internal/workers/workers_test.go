@@ -15,6 +15,7 @@ import (
 
 	"github.com/liu-zhengdong/atrium/internal/events"
 	"github.com/liu-zhengdong/atrium/internal/platform"
+	"github.com/liu-zhengdong/atrium/internal/quota"
 	"github.com/liu-zhengdong/atrium/internal/store"
 )
 
@@ -28,11 +29,19 @@ func TestParseWorker(t *testing.T) {
 		{in: "claude:high", want: Spec{Tool: "claude", Effort: "high"}},
 		{in: "claude+opus", want: Spec{Tool: "claude", Model: "opus"}},
 		{in: "opencode+opencode-go/mimo-v2.6-flash:low", want: Spec{Tool: "opencode", Model: "opencode-go/mimo-v2.6-flash", Effort: "low"}},
+		{in: "claude+zcode/GLM-5.3[1m]", want: Spec{Tool: "claude", Model: "zcode/GLM-5.3[1m]"}},
+		{in: "claude+GLM-5.3[1m]:high", want: Spec{Tool: "claude", Model: "GLM-5.3[1m]", Effort: "high"}},
 		{in: "Claude", bad: true},
 		{in: "claude+", bad: true},
 		{in: "claude+a b", bad: true},
 		{in: "claude+../x", bad: true},
 		{in: "claude:HIGH", bad: true},
+		// 方括号档位后缀只在段尾、至多一个，里面不嵌方括号。
+		{in: "claude+glm[1m", bad: true},
+		{in: "claude+glm[1m][2m]", bad: true},
+		{in: "claude+[1m]glm", bad: true},
+		{in: "claude+glm[]", bad: true},
+		{in: "claude+glm[1[m]]", bad: true},
 	}
 	for _, c := range cases {
 		got, err := ParseWorker(c.in)
@@ -330,6 +339,8 @@ func TestProfileEdit(t *testing.T) {
 		{"harness/claude", Edit{Set: map[string]string{"endpoint": "ftp://x", "endpoint_api": "openai"}}, "http(s)"},
 		{"combos/claude", Edit{Set: map[string]string{"trust": "low"}}, "只有 combos 层"},
 		{"skills/x", Edit{Set: map[string]string{"trust": "low"}}, "档案名应为"},
+		{"combos/claude+glm[1m", Edit{Set: map[string]string{"trust": "low"}}, "档案名应为"},
+		{"combos/claude+glm[1m][2m]", Edit{Set: map[string]string{"trust": "low"}}, "档案名应为"},
 		{"harness/claude", Edit{Unset: []string{"trust"}}, "没有 trust"},
 	}
 	for _, c := range bad {
@@ -387,6 +398,23 @@ func TestResolveAndRefusal(t *testing.T) {
 	if ids, _ := List(ctx, db); slices.ContainsFunc(ids, func(r Row) bool { return r.ID == "opencode+deepseek-v4.1-flash" }) {
 		t.Errorf("目录里还有不带前缀的那行：%+v", ids)
 	}
+	// magpie 组合：模型名带方括号档位后缀（GLM-5.3[1m]），标识带不带 provider 前缀都归同一身份；
+	// 额度绑定按 magpie 路由名第一段（zcode），回环端点只派本机。
+	must("combos/claude+GLM-5.3[1m]", "---\nmodel: zcode/GLM-5.3[1m]\nendpoint: http://127.0.0.1:3425/v1\nendpoint_api: anthropic\n---\n")
+	for _, id := range []string{"claude+GLM-5.3[1m]", "claude+zcode/GLM-5.3[1m]"} {
+		r, err := Resolve(ctx, db, id)
+		if err != nil || r.ID != "claude+zcode/GLM-5.3[1m]" || r.CLIModel != "zcode/GLM-5.3[1m]" {
+			t.Errorf("%s：%+v %v", id, r, err)
+			continue
+		}
+		b := MagpieBinding(r, "h1", quota.MagpieURL)
+		if b == nil || b.Provider != "zcode" || b.Host != "h1" || b.Worker != r.ID {
+			t.Errorf("%s 额度绑定：%+v", id, b)
+		}
+		if r.LocalOnly() == "" {
+			t.Errorf("%s 回环端点应只派本机：%q", id, r.LocalOnly())
+		}
+	}
 	// 只写工具：模型取 harness 的 model。
 	r, _ = Resolve(ctx, db, "claude")
 	if r.ID != "claude+sonnet" || r.Rules.EffectiveMaxRisk() != "low" {
@@ -410,12 +438,16 @@ func TestResolveAndRefusal(t *testing.T) {
 		t.Fatal("未知工具应拒绝")
 	}
 	ids, _ := Catalog(ctx, db)
-	if ids[0] != "claude+opus" || ids[len(ids)-1] != "mytool" {
+	if !slices.Contains(ids, "claude+GLM-5.3[1m]") || ids[len(ids)-1] != "mytool" {
 		t.Fatalf("目录：%v", ids)
 	}
 	rows, err := List(ctx, db)
-	if err != nil || rows[0].ID != "claude+opus" || rows[0].Trust != "medium" {
-		t.Fatalf("列表：%+v %v", rows, err)
+	if err != nil {
+		t.Fatal(err)
+	}
+	i := slices.IndexFunc(rows, func(r Row) bool { return r.ID == "claude+opus" })
+	if i < 0 || rows[i].Trust != "medium" {
+		t.Fatalf("列表：%+v", rows)
 	}
 }
 

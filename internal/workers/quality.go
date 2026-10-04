@@ -10,6 +10,7 @@ import (
 // Quality 是一个组合全部有结果的拉起；结果与用时口径复用 Count。
 // Leader 为真的是负责人唤醒：一次唤醒算一次拉起，与任务拉起口径不同，分开成行。
 type Quality struct {
+	TaskConsumption *TaskConsumption `json:"task_consumption,omitempty"`
 	Stat
 	Combo              string         `json:"combo"`
 	Leader             bool           `json:"leader"`

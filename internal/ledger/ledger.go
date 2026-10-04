@@ -960,33 +960,6 @@ func Note(ctx context.Context, db *store.DB, id, actor, text string) error {
 	})
 }
 
-type TaskEvent struct {
-	ID    int64  `json:"id"`
-	At    int64  `json:"at"`
-	Kind  string `json:"kind"`
-	Actor string `json:"actor"`
-	Body  string `json:"body,omitempty"`
-}
-
-// History 取最近 limit 条经历（按时间正序）。
-func History(ctx context.Context, q store.Querier, id string, limit int) ([]TaskEvent, error) {
-	rows, err := q.QueryContext(ctx, `SELECT id, at, kind, actor, body FROM
-		(SELECT * FROM task_events WHERE task = ? ORDER BY id DESC LIMIT ?) ORDER BY id`, id, limit)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := []TaskEvent{}
-	for rows.Next() {
-		var e TaskEvent
-		if err := rows.Scan(&e.ID, &e.At, &e.Kind, &e.Actor, &e.Body); err != nil {
-			return nil, err
-		}
-		out = append(out, e)
-	}
-	return out, rows.Err()
-}
-
 // Deps 取一件任务的依赖与各自状态。
 func Deps(ctx context.Context, q store.Querier, id string) ([]DepState, error) {
 	rows, err := q.QueryContext(ctx, `SELECT t.id, t.status FROM task_deps d JOIN tasks t ON t.id = d.depends_on

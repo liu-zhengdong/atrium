@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/liu-zhengdong/atrium/internal/api"
 	"github.com/liu-zhengdong/atrium/internal/cli"
 	"github.com/liu-zhengdong/atrium/internal/events"
 	"github.com/liu-zhengdong/atrium/internal/org"
@@ -78,9 +79,20 @@ func taskShow(c *cli.Ctx) error {
 	if err != nil {
 		return err
 	}
-	var d Detail
-	if err := c.Call("GET", "/api/tasks/"+url.PathEscape(id), nil, &d); err != nil {
+	limit, before, err := historyWindow(c.Str("history-limit"), c.Str("before"))
+	if err != nil {
 		return err
+	}
+	path := "/api/tasks/" + url.PathEscape(id)
+	if c.Has("history-limit") || c.Has("before") {
+		path += fmt.Sprintf("?history_limit=%d&before=%d", limit, before)
+	}
+	var d Detail
+	if err := c.Call("GET", path, nil, &d); err != nil {
+		return err
+	}
+	if (c.Has("before") || c.Has("history-limit")) && len(d.History) > 0 && d.HistoryTotal == 0 {
+		return api.Conflict("服务尚未支持经历分页；不能把最近20条当完整历史")
 	}
 	t := d.Task
 	// 没结束的任务问 watch「现在在等谁」（当前等待对象判定只有一份，在 watch）。
@@ -133,7 +145,11 @@ func taskShow(c *cli.Ctx) error {
 		fmt.Fprintf(&b, "\n%s\n", t.Detail)
 	}
 	if len(d.History) > 0 {
-		b.WriteString("\n经历：\n")
+		fmt.Fprintf(&b, "\n经历：本页 %d / 共 %d 条（每页上限100；原文用 --json）\n", len(d.History), d.HistoryTotal)
+		if d.HistoryBefore > 0 {
+			fmt.Fprintf(&b, "更早经历：atrium task show %s --before %d --history-limit %d\n", id, d.HistoryBefore, limit)
+		}
+		b.WriteString("历史日志：atrium task log " + id + " --run <轮次> --raw --all（终态本机日志保留14天）\n")
 		for _, e := range d.History {
 			text, err := historyText(e)
 			if err != nil {

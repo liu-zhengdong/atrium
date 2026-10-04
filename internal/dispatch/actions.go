@@ -95,54 +95,16 @@ func Tell(ctx context.Context, env *app.Env, id, text, by string) (TellResult, e
 
 // LogChunk 是 task log 的一段：日志原文（到最后一个完整行）与下一次从哪读。
 type LogChunk struct {
-	Usage   workers.Usage `json:"usage"`
-	Task    string        `json:"task"`
-	Run     int           `json:"run"`
-	Worker  string        `json:"worker"`
-	Text    string        `json:"text"`
-	Offset  int64         `json:"offset"`
-	Running bool          `json:"running"`
-}
-
-// ReadLog 读最近一次拉起的日志：offset < 0 读末尾一段；否则从 offset 读，wait 时没有新内容就等（有新内容、执行者退出或超时）。
-func ReadLog(ctx context.Context, env *app.Env, id string, offset int64, wait time.Duration) (LogChunk, error) {
-	d := get(env)
-	if _, err := ledger.Get(ctx, env.DB, id); err != nil {
-		return LogChunk{}, err
-	}
-	run, err := workers.LastRun(ctx, env.DB, id)
-	if err != nil {
-		return LogChunk{}, err
-	}
-	if run == nil {
-		return LogChunk{}, api.NotFound("%s 还没拉起过执行者", id).WithNext("atrium task run " + id)
-	}
-	c := LogChunk{Task: id, Run: run.N, Worker: run.Worker}
-	deadline := time.Now().Add(wait)
-	for {
-		p := d.procOf(id)
-		c.Running = p != nil && p.run.N == run.N
-		if !c.Running {
-			c.Usage, err = workers.ExitUsage(ctx, env.DB, id, run.N)
-			if err != nil {
-				return c, err
-			}
-		}
-		text, next, err := workers.ReadLog(run.Log, offset)
-		if err != nil {
-			return c, err
-		}
-		if text != "" || !c.Running || time.Now().After(deadline) {
-			c.Text, c.Offset = text, next
-			return c, nil
-		}
-		select {
-		case <-ctx.Done():
-			return c, ctx.Err()
-		case <-p.done:
-		case <-time.After(300 * time.Millisecond):
-		}
-	}
+	From     int64         `json:"from"`
+	Size     int64         `json:"size"`
+	Complete bool          `json:"complete"`
+	Usage    workers.Usage `json:"usage"`
+	Task     string        `json:"task"`
+	Run      int           `json:"run"`
+	Worker   string        `json:"worker"`
+	Text     string        `json:"text"`
+	Offset   int64         `json:"offset"`
+	Running  bool          `json:"running"`
 }
 
 // hook 接上 watch 的重新入队、定时任务与审阅任务的分派任务、改说明的补充说明（服务进程里，Routes 装配时调）。

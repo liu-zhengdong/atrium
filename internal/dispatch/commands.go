@@ -81,23 +81,7 @@ func Routes(r *api.Router, env *app.Env) {
 		}
 		return Tell(q.Context(), env, id, in.Text, q.Actor.ID)
 	})
-	r.Handle("GET /api/tasks/{id}/log", func(q *api.Req) (any, error) {
-		id, err := q.Ref("id", "t")
-		if err != nil {
-			return nil, err
-		}
-		offset := int64(-1)
-		if v := q.URL.Query().Get("offset"); v != "" {
-			if offset, err = strconv.ParseInt(v, 10, 64); err != nil || offset < 0 {
-				return nil, api.Usage("offset: 应为非负整数")
-			}
-		}
-		wait := time.Duration(0)
-		if q.URL.Query().Get("wait") == "1" {
-			wait = 25 * time.Second
-		}
-		return ReadLog(q.Context(), env, id, offset, wait)
-	})
+	r.Handle("GET /api/tasks/{id}/log", func(q *api.Req) (any, error) { return taskLogRoute(q, env) })
 }
 
 func dryRun(q *api.Req, env *app.Env, id string, o Options) (RunResult, error) {
@@ -202,30 +186,11 @@ func Commands(t *cli.Table) {
 			}
 			return c.Done(r, text, next)
 		}})
-	t.Add(cli.Command{Path: "task log", Args: "<tN>", Summary: "看执行者的经过：按它说的话分段，每条命令原文一行（✓ 成功 ✗ 出错 · 没搜到 … 在跑）；--raw 原始日志；--follow 跟到退出",
+	t.Add(cli.Command{Path: "task log", Args: "<tN>", Summary: "看执行者经过；缺省最后一轮，--run 选历史轮次；--raw --all 取完整原文。终态日志保留14天",
 		Flags: []cli.Flag{{Name: "follow", Bool: true, Help: "跟着看，直到执行者退出"},
-			{Name: "raw", Bool: true, Help: "原始日志（从末尾一段起）；日志不是 JSON 事件的工具本来就给原文"}},
-		Run: func(c *cli.Ctx) error {
-			id, err := c.Arg(0, "<tN>")
-			if err != nil {
-				return err
-			}
-			if err := c.MaxArgs(1); err != nil {
-				return err
-			}
-			path := "/api/tasks/" + url.PathEscape(id) + "/log"
-			var ch LogChunk
-			if err := c.Call("GET", path+"?offset=0", nil, &ch); err != nil {
-				return err
-			}
-			if !c.Bool("raw") && workers.Traceable(ch.Worker) {
-				return traceLog(c, id, path, ch)
-			}
-			if err := c.Call("GET", path, nil, &ch); err != nil {
-				return err
-			}
-			return rawLog(c, id, path, ch)
-		}})
+			{Name: "run", Value: "轮次", Help: "指定第几次拉起（从1开始；task show 的 launch 经历列出轮次）"},
+			{Name: "all", Bool: true, Help: "配合 --raw 从头按块读取完整日志"},
+			{Name: "raw", Bool: true, Help: "原始日志；缺省末尾64 KiB，完整原文用 --all"}}, Run: taskLog})
 }
 
 // TraceView 是 task log 按段看时的结果。
@@ -258,7 +223,7 @@ func traceLog(c *cli.Ctx, id, path string, ch LogChunk) error {
 		var next LogChunk
 		var err error
 		if more {
-			err = c.Call("GET", path+"?offset="+strconv.FormatInt(ch.Offset, 10), nil, &next)
+			err = c.Call("GET", logQuery(path, "offset=")+strconv.FormatInt(ch.Offset, 10), nil, &next)
 		} else {
 			next, err = followOnce(c, path, ch.Offset)
 		}
@@ -287,7 +252,7 @@ func traceLog(c *cli.Ctx, id, path string, ch LogChunk) error {
 // rawLog 给日志原文（末尾一段起）；--follow 跟到退出。
 func rawLog(c *cli.Ctx, id, path string, ch LogChunk) error {
 	if !c.Bool("follow") {
-		return c.Done(ch, logHeader(id, ch)+"\n"+ch.Text, logNext(id, ch))
+		return c.Done(ch, logHeader(id, ch)+fmt.Sprintf("\n原始日志：字节 %d–%d / %d；完整原文用 --raw --all\n", ch.From, ch.Offset, ch.Size)+ch.Text, logNext(id, ch))
 	}
 	var all strings.Builder
 	all.WriteString(ch.Text)
@@ -320,7 +285,7 @@ func followOnce(c *cli.Ctx, path string, offset int64) (LogChunk, error) {
 	deadline := time.Now().Add(30 * time.Second)
 	for {
 		var ch LogChunk
-		err := c.Call("GET", path+"?wait=1&offset="+strconv.FormatInt(offset, 10), nil, &ch)
+		err := c.Call("GET", logQuery(path, "wait=1&offset=")+strconv.FormatInt(offset, 10), nil, &ch)
 		var ae *api.Error
 		if err == nil || !errors.As(err, &ae) || (ae.Code != "restarting" && ae.Code != "not_running") || time.Now().After(deadline) {
 			return ch, err
@@ -334,7 +299,7 @@ func logNext(id string, ch LogChunk) string {
 	if ch.Running {
 		return "atrium task log " + id + " --follow"
 	}
-	return "atrium task show " + id
+	return fmt.Sprintf("atrium task log %s --run %d --raw --all", id, ch.Run)
 }
 
 func dryText(r RunResult) string {

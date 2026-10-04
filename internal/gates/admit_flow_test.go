@@ -53,11 +53,12 @@ func TestGateRefusesDraftAndNotDone(t *testing.T) {
 		name, reply string
 		draft       bool
 		want        []string
+		blocked     bool
 	}{
-		{"草稿 PR", "做完了\n交付结论：完成", true, []string{"PR #1 还是草稿", "gh pr ready 1 -R o/r", "或修完再交"}},
-		{"没做成", "还差测试\n交付结论：没做成", false, []string{"交付结论：没做成（还差测试）", "修完再交", "交付结论：完成"}},
-		{"未完成", "差一步\n交付结论：未完成", false, []string{"交付结论：未完成（差一步）", "修完再交"}},
-		{"受阻", "等设计稿\n交付结论：受阻", false, []string{"交付结论：受阻（等设计稿）", "修完再交"}},
+		{"草稿 PR", "做完了\n交付结论：完成", true, []string{"PR #1 还是草稿", "gh pr ready 1 -R o/r", "或修完再交"}, false},
+		{"没做成", "还差测试\n交付结论：没做成", false, []string{"交付结论：没做成（还差测试）", "修完再交", "交付结论：完成"}, false},
+		{"未完成", "差一步\n交付结论：未完成", false, []string{"交付结论：未完成（差一步）", "修完再交"}, false},
+		{"受阻停车不交回", "等设计稿\n交付结论：受阻", false, []string{"交付结论：受阻（等设计稿）", "停下等外部依赖"}, true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -68,7 +69,11 @@ func TestGateRefusesDraftAndNotDone(t *testing.T) {
 			got := e.get(task.ID)
 			note := e.lastNote(task.ID)
 			t.Logf("拦住：%s", note)
-			if got.Status != ledger.Queued || got.Stage != ledger.StageNone || e.queued(task.ID) {
+			if c.blocked {
+				if got.Status != ledger.Blocked || e.queued(task.ID) || e.count(task.ID, string(ledger.Bounce)) != 0 {
+					t.Fatalf("受阻应停下不交回：%+v queued=%v bounce=%d", got, e.queued(task.ID), e.count(task.ID, string(ledger.Bounce)))
+				}
+			} else if got.Status != ledger.Queued || got.Stage != ledger.StageNone || e.queued(task.ID) {
 				t.Fatalf("应交回且不进合入队列：%+v", got)
 			}
 			for _, w := range c.want {
@@ -77,6 +82,42 @@ func TestGateRefusesDraftAndNotDone(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// t975 实况：等外部依赖（#806 合入）、PR 保持草稿，执行者写「受阻」。
+// 关卡直接停车转 blocked、记 block 通知负责人，不交回、不重拉执行者；负责人解除后 task run 继续（现机制）。
+func TestGateBlocksOnBlockedConclusion(t *testing.T) {
+	e := setup(t)
+	task, _ := e.preparePR(true) // PR 是草稿
+	e.finishRound(task.ID, "等 #806 合入后再转 ready\n交付结论：受阻")
+	e.sweep()
+	got := e.get(task.ID)
+	note := e.lastNote(task.ID)
+	t.Logf("受阻停车：%s/%s %s", got.Status, got.Stage, note)
+	if got.Status != ledger.Blocked || got.Stage != ledger.StageGate {
+		t.Fatalf("受阻应停下转 blocked：%+v", got)
+	}
+	if e.queued(task.ID) || e.count(task.ID, string(ledger.Bounce)) != 0 {
+		t.Fatalf("受阻不该交回重拉：queued=%v bounce=%d", e.queued(task.ID), e.count(task.ID, string(ledger.Bounce)))
+	}
+	if n := e.count(task.ID, "block"); n != 1 {
+		t.Fatalf("该记一次 block：%d", n)
+	}
+	for _, w := range []string{"交付结论：受阻（等 #806 合入后再转 ready）", "停下等外部依赖", "不算失败"} {
+		if !strings.Contains(note, w) {
+			t.Errorf("备注缺 %q：%s", w, note)
+		}
+	}
+	e.sweep() // 已受阻的交付检查阶段不再被扫，不重复转状态
+	if n := e.count(task.ID, "block"); n != 1 {
+		t.Fatalf("重扫不该重复转 blocked：block %d 次", n)
+	}
+	if _, err := ledger.Apply(e.ctx, e.db, task.ID, ledger.Event{Kind: ledger.Enqueue}, "u1", ""); err != nil {
+		t.Fatalf("受阻后重派：%v", err)
+	}
+	if got := e.get(task.ID); got.Status != ledger.Queued || got.Stage != ledger.StageNone {
+		t.Fatalf("重派应回队列：%+v", got)
 	}
 }
 

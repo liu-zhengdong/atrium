@@ -34,7 +34,7 @@ type Delivery struct {
 // checked 是交付检查查完的结论。
 type checked struct {
 	reasons []string // 不过的原因，交回执行者照着改；空为过
-	block   string   // 非空：交回执行者也没用（它自称没做成、停下等人定，或没写交付结论），转受阻交处理人
+	block   string   // 非空：不交回执行者，停下等人定（结论受阻、自称没做成/未完成、没写结论），转受阻交处理人
 	note    string   // 过了记进经历的话
 	review  string   // 非空：应用前要另一个模型审阅，写明为什么
 }
@@ -44,6 +44,7 @@ type landed struct {
 	stage  ledger.Stage // 应用步骤，由别的循环接着推进（如 pr 的合入队列）；空表示当场应用完成，任务完成
 	note   string       // 记进经历
 	bounce string       // 非空：无法应用，交回原执行者照它改（如 local 合进主分支有冲突）
+	block  string       // 非空：结论是受阻，停下等人定（转受阻），不交回
 }
 
 var noRepoRules = []string{"这件活没有仓库：在当前目录干，交付物是最后一条消息里的结论（写清调查结果与依据）。"}
@@ -56,7 +57,7 @@ const (
 	releaseRule = "详述「授权（k52）」行内授权的发布动作（合入自己的 PR、打 tag、触发与等待 Actions、上传附件与更新清单）可以做；其余代码改动仍只交 PR。"
 )
 
-const endRule = "最后一行单独写 `交付结论：完成`；没做成、或停在动手前等人定，写 `交付结论：没做成`，原因写在它上面（任务详述另定了最后一行的照详述）。"
+const endRule = "最后一行单独写 `交付结论：完成`；没做成、或停在动手前等人定，写 `交付结论：没做成`，原因写在它上面。等外部依赖、要停下等人继续时写 `交付结论：受阻`，受阻原因写在它上面（或紧跟其后，`受阻：<原因>`）：交付当前成果、停下等依赖，关卡会停车并通知负责人，不算失败，依赖解除后继续（任务详述另定了最后一行的照详述）。"
 
 var (
 	// pr：在分支上开 PR；交付检查查提交、推送、改动规模与 PR 正文；应用是合入队列（merge）加可选的发版（release）。
@@ -190,7 +191,7 @@ func (g *Gate) choiceFile(ctx context.Context, t ledger.Task) ([]byte, error) {
 }
 
 // checkEnding 是没有改动可查的交付（message、dir）的交付检查：按执行者这一轮最后的回复里的交付结论判（ParseEnding）。
-// 没做成、没写都转受阻交处理人读回复定（补说明重派或收尾），不交回执行者重跑同一份提示词。
+// 没做成、受阻、没写都转受阻交处理人读回复定（受阻是等外部依赖，不算失败；其余补说明重派或收尾），不交回执行者重跑同一份提示词。
 // 审阅任务看的是审阅结论（reviewEnding），读不出就交回审阅者，原任务不卡在审阅阶段。
 func (g *Gate) checkEnding(ctx context.Context, t ledger.Task) (checked, error) {
 	_, review, err := Last(ctx, g.DB, t.ID, KindReviewOf)
@@ -216,6 +217,8 @@ func (g *Gate) checkEnding(ctx context.Context, t ledger.Task) (checked, error) 
 	switch {
 	case !ok:
 		return checked{block: where + "，执行者最后一行没写「交付结论：完成/没做成」" + next}, nil
+	case word == "受阻":
+		return checked{block: where + "，" + blockedReason(why)}, nil
 	case word != "完成":
 		if why = strings.Join(strings.Fields(why), " "); why == "" {
 			why = "没写原因"
@@ -323,16 +326,22 @@ func (g *Gate) checkPR(ctx context.Context, t ledger.Task) (checked, error) {
 		v.Pass = false
 		v.Reasons = append(v.Reasons, "pr_exists：分支 "+facts.Branch+" 没有开着的 PR，无从合入")
 	}
-	block, err := QueueBlock(ctx, g.DB, facts.PR, t.ID)
+	reasons, blocked, err := QueueBlock(ctx, g.DB, facts.PR, t.ID)
 	if err != nil {
 		return checked{}, err
 	}
-	if block != "" {
+	if blocked != "" {
 		v.Pass = false
-		v.Reasons = append(v.Reasons, block)
+		v.Reasons = append(v.Reasons, blocked)
+	} else if len(reasons) > 0 {
+		v.Pass = false
+		v.Reasons = append(v.Reasons, reasons...)
 	}
 	if err := record(ctx, g.DB, t.ID, KindGate, gateRecord{v, facts}); err != nil {
 		return checked{}, err
+	}
+	if blocked != "" {
+		return checked{block: blocked}, nil
 	}
 	if !v.Pass {
 		return checked{reasons: v.Reasons}, nil
@@ -374,12 +383,15 @@ func (g *Gate) landPR(ctx context.Context, t ledger.Task) (landed, error) {
 	if ReleaseAuthorized(cur.Detail) && info.State == "MERGED" {
 		return landed{note: "PR 已按授权合入并发布，没有要应用的"}, nil
 	}
-	block, err := QueueBlock(ctx, g.DB, &info.PR, t.ID)
+	reasons, blocked, err := QueueBlock(ctx, g.DB, &info.PR, t.ID)
 	if err != nil {
 		return landed{}, err
 	}
-	if block != "" {
-		return landed{bounce: block}, nil
+	if blocked != "" {
+		return landed{block: blocked}, nil
+	}
+	if len(reasons) > 0 {
+		return landed{bounce: strings.Join(reasons, "；")}, nil
 	}
 	return landed{stage: ledger.StageMerge, note: "进合入队列"}, nil
 }
@@ -427,6 +439,10 @@ func (g *Gate) land(ctx context.Context, t ledger.Task, d Delivery, kind ledger.
 	}
 	if l.bounce != "" {
 		_, err := Bounce(ctx, g.DB, t.ID, actor, note+"；应用交付结果失败："+l.bounce)
+		return err
+	}
+	if l.block != "" {
+		_, err := Block(ctx, g.DB, t.ID, note+"；"+l.block)
 		return err
 	}
 	if l.note != "" {

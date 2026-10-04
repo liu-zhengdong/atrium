@@ -138,8 +138,12 @@ func (a *Driver) CanResume() bool { return a.session != nil && a.Tell != TellRes
 
 const argPromptMax = 256 * 1024
 
+// modelSeg 是模型名的一段：主体后可带一个方括号档位后缀（官方命名如 GLM-5.3[1m] 的 1M 上下文档），
+// 后缀只能在段尾、至多一个、里面不嵌方括号。
+const modelSeg = `[\w.@-]+(\[[^\[\]]+\])?`
+
 var (
-	modelRE   = regexp.MustCompile(`^[\w.@-]+(/[\w.@-]+)*$`)
+	modelRE   = regexp.MustCompile(`^` + modelSeg + `(/` + modelSeg + `)*$`)
 	effortRE  = regexp.MustCompile(`^[a-z]+$`)
 	sessionRE = regexp.MustCompile(`^[0-9a-f-]{36}$`)
 	toolRE    = regexp.MustCompile(`^[a-z][a-z0-9-]{0,39}$`)

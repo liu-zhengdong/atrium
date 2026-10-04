@@ -68,6 +68,18 @@ func TestResolvedAccount(t *testing.T) {
 			}
 		}
 	}
+	// 模型带 provider 前缀就归 provider，不限工具：claude+zcode/GLM-5.3[1m] 实际走 magpie 的 zcode，不记在 claude 名下。
+	for _, tc := range []struct{ tool, model, cliModel, account string }{
+		{"claude", "zcode/GLM-5.3[1m]", "", "zcode"},
+		{"claude", "opus", "", "claude"},
+		{"codex", "openai/gpt-5.3", "", "openai"},
+		{"pi", "alias", "opencode-go/actual", "opencode-go"},
+	} {
+		r := Resolved{Spec: Spec{Tool: tc.tool, Model: tc.model}, CLIModel: tc.cliModel}
+		if got := r.Account(); got != tc.account {
+			t.Fatalf("%s：账号 %s，期望 %s", r.Spec, got, tc.account)
+		}
+	}
 }
 
 func TestQuotaDetail(t *testing.T) {

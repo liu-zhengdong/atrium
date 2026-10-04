@@ -76,16 +76,15 @@ type Resolved struct {
 	Adapter      *Driver           `json:"-"`
 }
 
-// Account 是展示使用的来源类别，不是实际账号或共享套餐身份。
-// 执行组合与 provider 分开；显式 CLI provider 保持原名，不建立别名表。
+// Account 是展示使用的来源类别，不是实际账号或共享套餐身份：模型带 provider 前缀（<provider>/<模型>）
+// 就归 provider（claude+zcode/GLM-5.3 实际走 magpie 的 zcode，不记在 claude 名下），agy 走它的套餐名，
+// 其余归工具名。执行组合与 provider 分开；显式 CLI provider 保持原名，不建立别名表。
 func (r Resolved) Account() string {
-	if r.Spec.Tool == "pi" || r.Spec.Tool == "opencode" {
-		if provider, _, ok := strings.Cut(r.CLIModel, "/"); ok {
-			return provider
-		}
-		if provider, _, ok := strings.Cut(r.Spec.Model, "/"); ok {
-			return provider
-		}
+	if provider, _, ok := strings.Cut(r.CLIModel, "/"); ok {
+		return provider
+	}
+	if provider, _, ok := strings.Cut(r.Spec.Model, "/"); ok {
+		return provider
 	}
 	if r.Spec.Tool == "agy" {
 		return "antigravity"

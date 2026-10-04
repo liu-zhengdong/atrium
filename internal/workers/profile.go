@@ -78,7 +78,8 @@ type Profile struct {
 
 var checkNameRE = regexp.MustCompile(`^[a-z_]+$`)
 
-var layerNameRE = regexp.MustCompile(`^(harness|models|combos)/([\w.@-]+(\+[\w.@-]+)?)$`)
+// 模型段用 modelSeg（见 adapter.go）：models、combos 名里的模型可带方括号档位后缀（GLM-5.3[1m]）。
+var layerNameRE = regexp.MustCompile(`^(harness|models|combos)/([\w.@-]+(\+` + modelSeg + `)?)$`)
 
 // CheckName 校验档案名：harness/<工具>、models/<模型>、combos/<工具>+<模型>（模型取最后一段，不带 provider 前缀）。
 func CheckName(name string) error {

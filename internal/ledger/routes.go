@@ -66,15 +66,16 @@ func BuildTree(tasks []Task, deps map[string][]DepState) *TreeNode {
 
 // Detail 是 task show 的内容。
 type Detail struct {
-	Task      Task        `json:"task"`
-	Parties   Parties     `json:"parties"`
-	ByName    string      `json:"by_name,omitempty"` // 任务分派人的名字，只给带来源的（来源一行写「组织发现 · 名字」）
-	Deps      []DepState  `json:"deps"`
-	Ready     bool        `json:"ready"`
-	WaitingOn []string    `json:"waiting_on,omitempty"`
-	Broken    []DepState  `json:"broken,omitempty"`
-	Children  *Summary    `json:"children,omitempty"`
-	History   []TaskEvent `json:"history"`
+	Task       Task        `json:"task"`
+	Parties    Parties     `json:"parties"`
+	ByName     string      `json:"by_name,omitempty"` // 任务分派人的名字，只给带来源的（来源一行写「组织发现 · 名字」）
+	Deps       []DepState  `json:"deps"`
+	Ready      bool        `json:"ready"`
+	WaitingOn  []string    `json:"waiting_on,omitempty"`
+	Broken     []DepState  `json:"broken,omitempty"`
+	Children   *Summary    `json:"children,omitempty"`
+	History    []TaskEvent `json:"history"`
+	Acceptance *Acceptance `json:"acceptance,omitempty"`
 }
 
 // SetBody 是 PATCH /api/tasks/{id}：描述字段与状态可同时改。
@@ -82,6 +83,7 @@ type SetBody struct {
 	Patch
 	Status *Status `json:"status,omitempty"`
 	Note   string  `json:"note,omitempty"`
+	Accept *string `json:"accept,omitempty"`
 }
 
 // WaitResult 是 task wait 的结果；Reached 为假表示等到超时。
@@ -144,6 +146,9 @@ func Routes(r *api.Router, env *app.Env) {
 			return nil, err
 		}
 		d := Detail{Task: t}
+		if d.Acceptance, err = AcceptanceOf(q.Context(), db, id); err != nil {
+			return nil, err
+		}
 		if d.Parties, err = PartiesOf(q.Context(), db, id); err != nil {
 			return nil, err
 		}
@@ -174,10 +179,16 @@ func Routes(r *api.Router, env *app.Env) {
 		if err := q.Decode(&in); err != nil {
 			return nil, err
 		}
-		if in.Patch.empty() && in.Status == nil {
+		if in.Patch.empty() && in.Status == nil && in.Accept == nil {
 			return nil, api.Usage("没有要改的字段").WithNext("atrium task set --help")
 		}
 		var t Task
+		if in.Accept != nil {
+			if !in.Patch.empty() || in.Status != nil {
+				return nil, api.Usage("--accept: 单独操作任务决定")
+			}
+			return Decide(q.Context(), db, id, *in.Accept, in.Note, q.Actor.ID)
+		}
 		if !in.Patch.empty() {
 			if t, err = Edit(q.Context(), db, id, in.Patch, q.Actor.ID); err != nil {
 				return nil, err

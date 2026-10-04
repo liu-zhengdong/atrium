@@ -110,6 +110,11 @@ func Deliver(ctx context.Context, db *store.DB, r gates.Runner, id string, in Bo
 		return t, err
 	}
 	ev := ledger.Event{Kind: ledger.Deliver, Land: ledger.StageMerge}
+	if a, err := ledger.AcceptanceOf(ctx, db, id); err != nil {
+		return t, err
+	} else if a != nil {
+		ev.AcceptBy = org.AcceptLeader
+	}
 	if who, _, err := org.Acceptor(ctx, db, t.Org); err != nil {
 		return t, err
 	} else if who != org.AcceptAuto && !org.MayAccept(actor, who) {

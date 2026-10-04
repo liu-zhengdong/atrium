@@ -396,3 +396,15 @@ CREATE TABLE IF NOT EXISTS quota_settings (
   name  TEXT PRIMARY KEY,
   value INTEGER NOT NULL
 );
+
+-- 每任务一份长期验收决定；旧库建表即可，无决定的旧任务保持原语义。
+CREATE TABLE IF NOT EXISTS task_acceptance (
+    task TEXT PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
+    actor TEXT NOT NULL,
+    department TEXT NOT NULL DEFAULT '',
+    reason TEXT NOT NULL,
+    epoch INTEGER NOT NULL DEFAULT 0,
+    head TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS task_delivery_epoch ON task_events (task, id)
+    WHERE kind IN ('created','edited','enqueue','requeue','start','launch','result','bounce','facts');

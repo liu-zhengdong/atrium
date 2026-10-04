@@ -91,7 +91,8 @@ func Commands(t *cli.Table) {
 			{Name: "class", Value: "类名", Help: "发现归的类（给空串清掉）；把写成两个名字的同一类并起来"},
 			{Name: "owner", Value: "身份", Help: "改处理人：u1、secretary 或 aN（给空串回到任务分派人），记进经历；aN 且任务待派、没有仓库与工作地点 = 交给这位负责人去拆，改好就唤醒它（草稿转待派时再唤醒）"},
 			{Name: "status", Value: "状态", Help: "人工改状态：draft（退回草稿）、todo（转待派）、done、failed、cancelled（停下用 task stop）"},
-			{Name: "note", Value: "文字", Help: "改状态的原因，记进经历"},
+			{Name: "accept", Value: "决定", Help: "hold 暂缓应用、resume 明确解除；用 --note 写原因，只有原决策人或其上级能解除"},
+			{Name: "note", Value: "文字", Help: "改状态或验收决定的原因，记进经历"},
 		},
 		Run: func(c *cli.Ctx) error {
 			id, err := c.Arg(0, "<tN>")
@@ -99,7 +100,7 @@ func Commands(t *cli.Table) {
 				return err
 			}
 			body := SetBody{Patch: Patch{Title: c.Opt("title"), Detail: c.Opt("detail"), Org: c.Opt("org"),
-				Skill: c.Opt("skill"), Repo: c.Opt("repo"), Dir: c.Opt("dir"), Owner: c.Opt("owner")}, Note: c.Str("note")}
+				Skill: c.Opt("skill"), Repo: c.Opt("repo"), Dir: c.Opt("dir"), Owner: c.Opt("owner")}, Note: c.Str("note"), Accept: c.Opt("accept")}
 			if p := c.Opt("priority"); p != nil {
 				pr := Priority(*p)
 				body.Priority = &pr

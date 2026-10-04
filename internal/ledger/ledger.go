@@ -553,6 +553,8 @@ func (p Patch) empty() bool {
 
 // Edit 改描述字段与依赖（状态用 Apply）。
 func Edit(ctx context.Context, db *store.DB, id string, p Patch, actor string) (Task, error) {
+	ctx, unlock := applicationLock(ctx, db)
+	defer unlock()
 	if p.empty() {
 		return Task{}, api.Usage("没有要改的字段")
 	}
@@ -747,6 +749,8 @@ func reachableEdges(ctx context.Context, q store.Querier, id string) (map[string
 // Apply 是改任务状态的唯一入口：按 Transition 判定、落库、记经历、发事件、唤醒等待者。
 // note 记进经历（可空）。
 func Apply(ctx context.Context, db *store.DB, id string, ev Event, actor, note string) (Task, error) {
+	ctx, unlock := applicationLock(ctx, db)
+	defer unlock()
 	t, err := apply(ctx, db, id, ev, actor, note, PartiesOf)
 	if err == nil && t.Status.Finished() {
 		err = cleanupLogs(ctx, db)
@@ -758,6 +762,9 @@ func apply(ctx context.Context, db *store.DB, id string, ev Event, actor, note s
 	err := db.Tx(ctx, func(tx *sql.Tx) error {
 		t, err := Get(ctx, tx, id)
 		if err != nil {
+			return err
+		}
+		if err := acceptanceEvent(ctx, tx, t, &ev, actor); err != nil {
 			return err
 		}
 		if ev.Kind == Bounce {
@@ -905,6 +912,8 @@ type Facts struct {
 
 // SetFacts 给 dispatch、gates 记执行者、机器与 PR。
 func SetFacts(ctx context.Context, db *store.DB, id string, f Facts, actor string) error {
+	ctx, unlock := applicationLock(ctx, db)
+	defer unlock()
 	err := db.Tx(ctx, func(tx *sql.Tx) error {
 		if _, err := Get(ctx, tx, id); err != nil {
 			return err
@@ -925,6 +934,14 @@ func SetFacts(ctx context.Context, db *store.DB, id string, f Facts, actor strin
 
 // Record 追加一条任务经历。其他包记交付检查结论、交回原因等也用它（kind 自定，如 "gate"、"review"）。
 func Record(ctx context.Context, q store.Querier, id, kind, actor, body string) error {
+	if db, ok := q.(*store.DB); ok {
+		switch kind {
+		case "created", "edited", "enqueue", "requeue", "start", "launch", "result", "bounce", "facts":
+			var unlock func()
+			ctx, unlock = applicationLock(ctx, db)
+			defer unlock()
+		}
+	}
 	_, err := q.ExecContext(ctx, `INSERT INTO task_events (task, at, kind, actor, body) VALUES (?, ?, ?, ?, ?)`,
 		id, store.Now(), kind, actor, body)
 	return err

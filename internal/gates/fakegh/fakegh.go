@@ -31,16 +31,24 @@ type Check struct {
 	Name, Bucket, Link string
 }
 
+// Release 是假 GitHub 上的一个 release（tag 要另在 bare 仓库里打好）。
+type Release struct {
+	Tag    string
+	Draft  bool
+	Assets int
+}
+
 // GH 实现 gates.Runner：git 走真的，gh 走假的。
 type GH struct {
-	T     testing.TB
-	Git   *gates.Exec
-	Repo  string // o/r
-	Bare  string
-	Work  string // 假 GitHub 自己做 squash 合并用的克隆
-	mu    sync.Mutex
-	PRs   []*PR
-	Calls []string // 收到的 gh 调用（空格连接）
+	T        testing.TB
+	Git      *gates.Exec
+	Repo     string // o/r
+	Bare     string
+	Work     string // 假 GitHub 自己做 squash 合并用的克隆
+	mu       sync.Mutex
+	PRs      []*PR
+	Releases []Release // 新的在前，同 GitHub 的 releases 接口
+	Calls    []string  // 收到的 gh 调用（空格连接）
 }
 
 // New 建一个 bare 远端（main 上一个初始提交，files 是初始文件）。
@@ -181,6 +189,13 @@ func (g *GH) Run(ctx context.Context, dir, name string, args ...string) (string,
 	}
 	if r := flag("-R"); r != "" && r != g.Repo {
 		return "", fmt.Errorf("假 gh：不认识仓库 %s", r)
+	}
+	if args[0] == "api" && strings.HasPrefix(args[1], "repos/"+g.Repo+"/releases") {
+		list := []map[string]any{}
+		for _, r := range g.Releases {
+			list = append(list, map[string]any{"tag_name": r.Tag, "draft": r.Draft, "assets": make([]struct{}, r.Assets)})
+		}
+		return out(list)
 	}
 	switch strings.Join(args[:2], " ") {
 	case "repo view":

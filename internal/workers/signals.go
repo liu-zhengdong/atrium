@@ -13,7 +13,7 @@ import (
 // 日志信号的种类。dispatch 在执行者退出时判，watch 也可以拿日志尾巴来判。
 const (
 	SignalNone      = ""
-	SignalQuota     = "quota"     // 额度用尽：标记到恢复时刻，按已知套餐范围有界换人
+	SignalQuota     = "quota"     // 额度用尽：标记到报文里的恢复时刻（没写的标恢复时间未知），按已知套餐范围有界换人
 	SignalTransient = "transient" // 做过事之后出错退出、原因不是下面几种（供应方临时错误多是这样）：同一执行者重试一次，再换人
 	SignalThinking  = "thinking"  // 思考耗尽单次输出：换执行者一次
 	SignalSetup     = "setup"     // 工具在这台起不来：标「工具@机器」，有界换人
@@ -123,7 +123,21 @@ var (
 	retryRE      = regexp.MustCompile(`(?i)retry-after:\s*(\d+)`)
 	resetsInRE   = regexp.MustCompile(`(?i)resets? in\s+((?:\d+\s*[hms]\s*)+)`)
 	resetsRE     = regexp.MustCompile(`(?i)resets\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\s*(?:\(([^()]{2,64})\))?`)
+	// codex 402 的绝对日期：「try again at Oct 10th, 2026 9:14 AM」（月份在前，可带序数后缀）；报文没写时区，按本机时区。
+	resetDateRE = regexp.MustCompile(`(?i)(?:try again at|will reset at|resets? at)\s+([A-Za-z]{3,9})\.?\s+(\d{1,2})(?:st|nd|rd|th)?[\s,]+(\d{4})\s+(\d{1,2}):(\d{2})\s*(am|pm)?`)
+	// kimi 403 的窗口声明：「reached your 5-hour usage limit … 5-hour window ends」——报文自带窗口长，恢复按窗口算（最晚不早于真实恢复）。
+	hoursWindowRE = regexp.MustCompile(`(?i)\b(\d{1,2})[-_ ]?hour (?:usage )?(?:limit|window)`)
 )
+
+// monthNames 是报文里英文月名的归一（全名与三字母缩写）。
+var monthNames = map[string]time.Month{
+	"jan": time.January, "feb": time.February, "mar": time.March, "apr": time.April,
+	"may": time.May, "jun": time.June, "jul": time.July, "aug": time.August,
+	"sep": time.September, "oct": time.October, "nov": time.November, "dec": time.December,
+	"january": time.January, "february": time.February, "march": time.March, "april": time.April,
+	"june": time.June, "july": time.July, "august": time.August,
+	"september": time.September, "october": time.October, "november": time.November, "december": time.December,
+}
 
 // errorReport 是这一轮退出的报错（纯函数）：执行者用自己的出错事件报了错，就以最后一条出错事件为准——
 // 之后的非 JSON 行多是工具退出时的收尾噪音（如 codex 的 failed to record rollout items），不能盖掉它；
@@ -339,8 +353,32 @@ func lastPlainLines(tail string, n int) string {
 	return strings.Join(keep, "\n")
 }
 
-// resetAt 从额度报文里取恢复时刻：codex 的「Try again in ~N min」、claude 的「resets 3:50pm (Zone)」、Retry-After 秒数。
+// resetAt 从额度报文里取恢复时刻：codex 的绝对日期「try again at Oct 10th, 2026 9:14 AM」、
+// 「Try again in ~N min」、kimi 的 N 小时窗口、claude 的「resets 3:50pm (Zone)」、Retry-After 秒数。
+// 读不出返回 false：报文没写恢复时刻，标记按「恢复时间未知」处理，不按出错时长猜。
 func resetAt(text string, now time.Time) (time.Time, bool) {
+	if m := resetDateRE.FindStringSubmatch(text); m != nil {
+		mon, ok := monthNames[strings.ToLower(m[1])]
+		if !ok {
+			return time.Time{}, false
+		}
+		day, _ := strconv.Atoi(m[2])
+		year, _ := strconv.Atoi(m[3])
+		h, _ := strconv.Atoi(m[4])
+		min, _ := strconv.Atoi(m[5])
+		switch strings.ToLower(m[6]) {
+		case "pm":
+			if h != 12 {
+				h += 12
+			}
+		case "am":
+			if h == 12 {
+				h = 0
+			}
+		}
+		t := time.Date(year, mon, day, h, min, 0, 0, now.Location())
+		return t, h < 24 && min < 60 && t.After(now)
+	}
 	if m := minutesRE.FindStringSubmatch(text); m != nil {
 		n, _ := strconv.Atoi(m[1])
 		return now.Add(time.Duration(n) * time.Minute), n > 0
@@ -348,6 +386,10 @@ func resetAt(text string, now time.Time) (time.Time, bool) {
 	if m := resetsInRE.FindStringSubmatch(text); m != nil {
 		d, err := time.ParseDuration(strings.Join(strings.Fields(m[1]), ""))
 		return now.Add(d), err == nil && d > 0
+	}
+	if m := hoursWindowRE.FindStringSubmatch(text); m != nil {
+		n, _ := strconv.Atoi(m[1])
+		return now.Add(time.Duration(n) * time.Hour), n > 0
 	}
 	if m := resetsRE.FindStringSubmatch(text); m != nil && (m[2] != "" || m[3] != "") {
 		h, _ := strconv.Atoi(m[1])

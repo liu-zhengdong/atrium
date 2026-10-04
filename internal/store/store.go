@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -55,6 +56,12 @@ func Open(path string) (*DB, error) {
 	if _, err := sqlDB.Exec(schema); err != nil {
 		sqlDB.Close()
 		return nil, fmt.Errorf("建表失败：%w", err)
+	}
+	// 旧库补列：open_ended 表示 until 只是到期自动再试的上限而非恢复时刻（额度用尽而报文没写恢复时刻的标记）。
+	if _, err := sqlDB.Exec(`ALTER TABLE worker_marks ADD COLUMN open_ended INTEGER NOT NULL DEFAULT 0`); err != nil &&
+		!strings.Contains(err.Error(), "duplicate column name") {
+		sqlDB.Close()
+		return nil, fmt.Errorf("迁移 worker_marks 失败：%w", err)
 	}
 	return &DB{sqlDB}, nil
 }

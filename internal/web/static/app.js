@@ -325,7 +325,8 @@ const outName = { ok: "交付", bounce: "被交回", quota: "额度", setup: "�
 const trustName = v => ({ high: "高", medium: "中", low: "低", unknown: "未评" }[v] || "未评");
 // 交付检查名（gates/judge.go 的 Check*）写成它查什么；web 引用不到 gates，名字以那边为准，没列的原样给
 const checkName = { finished: "推送了新提交", pr_exists: "开了 PR", file_growth: "单个文件新增不超上限", claims_verified: "PR 写了端到端验证" };
-const markText = m => `${objectName(m.host)} ${m.reason} · ${m.until ? day(m.until) + " " + clock(m.until) + " 恢复" : m.kind === "probe" ? "自检跑通后自动解除" : m.kind === "subscription" ? "等订阅恢复" : "等人处理"}`;
+const markWhen = m => m.until ? (m.open_ended ? `报文没写恢复时刻；${day(m.until)} ${clock(m.until)} 起自动再试` : `${day(m.until)} ${clock(m.until)} 恢复`) : m.kind === "probe" ? "自检跑通后自动解除" : m.kind === "subscription" ? "等订阅恢复" : "等人处理";
+const markText = m => `${objectName(m.host)} ${m.reason} · ${markWhen(m)}`;
 const workerMarks = marks => (marks || []).map(m => `<div class="mark" title="${esc(m.evidence || "")}">不可用 ${esc(markText(m))}</div>`).join("");
 const outcomePips = recent => `<span class="pips runs">${(recent || []).map(o => `<i class="${esc(o)}" title="${esc(outName[o])}"></i>`).join("")}</span>`;
 function comboRows(rows, window) {

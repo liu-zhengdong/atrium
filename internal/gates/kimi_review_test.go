@@ -24,8 +24,8 @@ func TestKimiReviewReply(t *testing.T) {
 		t.Fatal(err)
 	}
 	old := (&workers.Driver{}).LastReply(string(raw))
-	if _, _, ok := gates.ParseReview(old); ok {
-		t.Fatal("m150 应复演旧路径无末行结论")
+	if pass, _, ok := gates.ParseReview(old); !pass || !ok {
+		t.Fatal("m150 应复演 t877：结论后跟续接提示行仍判读出通过")
 	}
 	body, hint, found := strings.Cut(string(raw), "\nTo resume this session:")
 	if !found {
@@ -38,6 +38,8 @@ func TestKimiReviewReply(t *testing.T) {
 		pass, ok        bool
 	}{
 		{"m150通过", pass + meta, strings.TrimSpace(body), true, true},
+		// 结论后跟 CLI 续接提示行（t877 的原始形态）在同一份回复里，也判读出结论。
+		{"结论后跟续接提示", kimiMessage("assistant", "看过了\n审阅结论：通过\n\nTo resume this session: kimi -r s1"), "看过了\n审阅结论：通过\n\nTo resume this session: kimi -r s1", true, true},
 		{"最终打回", pass + kimiMessage("assistant", "问题\n审阅结论：打回") + meta, "问题\n审阅结论：打回", false, true},
 		{"无末行结论", kimiMessage("assistant", "看过了") + meta, "看过了", false, false},
 		{"同条早先通过最后打回", kimiMessage("assistant", "审阅结论：通过\n新问题\n审阅结论：打回") + meta, "审阅结论：通过\n新问题\n审阅结论：打回", false, true},
@@ -100,11 +102,8 @@ func TestKimiReviewFlow(t *testing.T) {
 			if err := ledger.SetFacts(e.ctx, e.db, ref, ledger.Facts{Worker: &w}, "dispatch"); err != nil {
 				t.Fatal(err)
 			}
-			old, err := os.ReadFile("../workers/testdata/kimi-t877.txt")
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := ledger.Record(e.ctx, e.db, ref, gates.KindResult, "dispatch", (&workers.Driver{}).LastReply(string(old))); err != nil {
+			// 预置上一轮读不出结论交回重审；t877 原样复演（结论后跟续接提示行判读出通过）在 TestKimiReviewReply。
+			if err := ledger.Record(e.ctx, e.db, ref, gates.KindResult, "dispatch", "还需核查"); err != nil {
 				t.Fatal(err)
 			}
 			e.exit(ref)

@@ -419,12 +419,13 @@ func grokAdapter() *Driver {
 
 // command-code --print --output-format json：逐行 JSON，过程事件包在 {"type":"event","event":{…}} 里（引擎同 pi），
 // 收尾一行 type=result 带 usage 与最终正文；认证用用户已有的订阅登录，不额外传凭据。
-// 权限用 --permission-mode yolo 全放行：--print 下问不到人，默认模式拒掉工具调用后以 success 收尾（t1022 首件真活的样本），
-// 被拒收尾的 stopReason=permission_denied 在 eventEnding 里当报错。
+// 权限用 --yolo 全放行：--print 下问不到人，print 模式不认 --permission-mode（t1066 实测 hook 报
+// 「Use --yolo (or --dangerously-skip-permissions) to enable file writes and shell commands in print mode」，
+// 负责人每条 atrium 命令被拒后只能靠子代理转发，一轮几分钟）；被拒收尾的 stopReason=permission_denied 在 eventEnding 里当报错。
 func commandCodeAdapter() *Driver {
 	a := &Driver{Tool: "command-code", Exe: "command-code", Tell: TellRestart, JSON: true, read: readCommandCode}
 	a.build = func(in Request) (Launch, error) {
-		args := []string{"--print", "--output-format", "json", "--permission-mode", "yolo", "请先完整读取任务说明文件 " + in.PromptFile + "，然后按文件内容执行。"}
+		args := []string{"--print", "--output-format", "json", "--yolo", "请先完整读取任务说明文件 " + in.PromptFile + "，然后按文件内容执行。"}
 		if in.Model != "" {
 			args = append(args, "--model", in.Model)
 		}

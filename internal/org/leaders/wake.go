@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -20,6 +21,7 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/app"
 	"github.com/liu-zhengdong/atrium/internal/config"
 	"github.com/liu-zhengdong/atrium/internal/events"
+	"github.com/liu-zhengdong/atrium/internal/ledger"
 	"github.com/liu-zhengdong/atrium/internal/org"
 	"github.com/liu-zhengdong/atrium/internal/pause"
 	"github.com/liu-zhengdong/atrium/internal/platform"
@@ -240,6 +242,11 @@ func (h *hub) wake(ctx context.Context, env *app.Env, p Pending) {
 		log.Warn("负责人唤醒失败", "err", err)
 	}
 	bg := context.WithoutCancel(ctx)
+	if run.started {
+		if terr := recordTaskWakes(bg, env.DB, p); terr != nil {
+			log.Warn("记负责人唤醒经历失败", "err", terr)
+		}
+	}
 	left, lerr := unacked(bg, env.DB, p.Leader, p.IDs)
 	if lerr != nil {
 		log.Error("查这批事件是否确认失败", "err", lerr)
@@ -506,6 +513,34 @@ func eventRows(ctx context.Context, q store.Querier, ids []int64) ([]Event, erro
 		out = append(out, e)
 	}
 	return out, rows.Err()
+}
+
+// recordTaskWakes 给这批事件涉及的任务各记一条「被唤醒」经历：拆派从第一步起在 task show
+// 与网页可见（t1066）。同一件任务的多条事件并成一条；没挂任务的事件不记。
+func recordTaskWakes(ctx context.Context, db *store.DB, p Pending) error {
+	rows, err := eventRows(ctx, db, p.IDs)
+	if err != nil {
+		return err
+	}
+	byTask := map[string][]string{}
+	var order []string
+	for _, e := range rows {
+		if e.Task == "" {
+			continue
+		}
+		if _, ok := byTask[e.Task]; !ok {
+			order = append(order, e.Task)
+		}
+		byTask[e.Task] = append(byTask[e.Task], "#"+strconv.FormatInt(e.ID, 10))
+	}
+	return db.Tx(ctx, func(tx *sql.Tx) error {
+		for _, task := range order {
+			if err := ledger.Record(ctx, tx, task, WakeKind, p.Leader, "事件 "+strings.Join(byTask[task], "、")); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 // unacked 返回这批里仍发给 leader、没确认的事件编号。

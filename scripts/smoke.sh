@@ -649,7 +649,7 @@ for _ in $(seq 50); do out=$(json workers fakemodel); jq -e '(.result.marks // [
 has '.result.marks[0].host == "h1" and .result.marks[0].kind == "model" and .result.marks[0].until == 0'
 out=$(json task show "$av"); has '.result.task.status == "blocked" and (.result.history|map(.body // "")|join(" ")|contains("已标记 fakemodel@h1 不可用"))'
 out=$(json workers); has '(.result|map(select(.id == "fakemodel"))|.[0].marks|length) == 1'
-out=$(json task run "$av" --dry-run); has '.result.pick.candidates|map(select(.id == "fakemodel"))|.[0]|(.eligible|not) and (.refusals|join("")|contains("不可用：模型名无效"))'
+out=$(json task run "$av" --dry-run); has '(.result.pick.candidates|map(select(.id == "fakemodel"))|.[0]|(.eligible and (.waiting|contains("不可用：模型名无效")))) and (.result.pick.recommended == "fakestop")'
 out=$(json workers edit --clear fakemodel@h1); has '.result.cleared == 1'
 out=$(json workers edit --clear fakemodel@h1 || true); has '.error.code == "not_found"'
 out=$(json workers edit --clear "bad tool" || true); has '.error.code == "usage" and (.error.message|startswith("--clear:"))'

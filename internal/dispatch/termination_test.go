@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"log/slog"
+	"os"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -19,6 +21,15 @@ import (
 func TestWatchTerminationOwnership(t *testing.T) {
 	env, d := setup(t)
 	ctx := context.Background()
+	// 启动超时要求没有输出；共享 kimi 假执行者会先输出 started，
+	// 较快机器上 observe 会把它算成进展，切换为 20 分钟超时。
+	fake, err := exec.LookPath("kimi")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(fake, []byte("#!/bin/sh\nexec sleep 30\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	var logs bytes.Buffer
 	env.Log = slog.New(slog.NewTextHandler(&logs, nil))
 	hook(env)
@@ -41,6 +52,13 @@ func TestWatchTerminationOwnership(t *testing.T) {
 	}
 	if err := watch.Tick(ctx, env); err != nil {
 		t.Fatal(err)
+	}
+	state, err := ledger.Get(ctx, env.DB, tk.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Status != ledger.Queued {
+		t.Fatalf("巡检未触发超时换人：status=%s stage=%s", state.Status, state.Stage)
 	}
 	if !platform.Alive(old.run.PID) {
 		t.Fatal("watch 重复终止了执行者")

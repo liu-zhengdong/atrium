@@ -440,6 +440,11 @@ func TestClassify(t *testing.T) {
 		{"容量不足", 1, `{"type":"turn.failed","error":{"message":"Selected model is at capacity. Please try a different model."}}`, SignalTransient, time.Time{}},
 		{"grok 没登录", 1, "Not signed in\n", SignalSetup, time.Time{}},
 		{"claude 没登录", 1, `{"type":"result","is_error":true,"result":"Invalid API key · Please run /login"}`, SignalSetup, time.Time{}},
+		// t942、t954、t970 现场 h3 上 claude 登录过期的原文：报错是一条合成的助手消息，算不得零步骤，报文也不带「请登录」
+		{"claude OAuth 过期没登录", 1, `{"type":"assistant","message":{"model":"<synthetic>","role":"assistant","content":[{"type":"text","text":"Failed to authenticate: OAuth session expired and could not be refreshed"}]},"error":"authentication_failed"}` + "\n" +
+			`{"type":"result","subtype":"success","is_error":true,"terminal_reason":"api_error","result":"Failed to authenticate: OAuth session expired and could not be refreshed"}`, SignalSetup, time.Time{}},
+		// t951 现场 h1 上 claude 登录被吊销的原文
+		{"claude OAuth 吊销没登录", 1, `{"type":"result","subtype":"success","is_error":true,"api_error_status":401,"result":"Failed to authenticate: OAuth token revoked. Please log in again or contact your administrator."}`, SignalSetup, time.Time{}},
 		// t415 现场 h3 上 kimi 没登录的原文：报错之后还跟着一行 libuv 崩溃，退出码是 Windows 的 0xC0000409
 		{"kimi 没登录", 3221226505, "error: failed to run prompt: auth.login_required: OAuth provider \"managed:kimi-code\" requires login before it can be used.\nSee log: C:/Users/CPCli/.kimi-code/logs/kimi-code.log\nAssertion failed: !(handle->flags & UV_HANDLE_CLOSING), file src\\win\\async.c, line 76\n", SignalSetup, time.Time{}},
 		{"退出码 0 不判没登录", 0, "Not signed in\n", SignalNone, time.Time{}},

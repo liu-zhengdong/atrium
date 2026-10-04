@@ -12,6 +12,7 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/cli"
 	"github.com/liu-zhengdong/atrium/internal/events"
 	"github.com/liu-zhengdong/atrium/internal/ledger"
+	"github.com/liu-zhengdong/atrium/internal/names"
 	"github.com/liu-zhengdong/atrium/internal/store"
 )
 
@@ -222,7 +223,7 @@ func Render(v View) string {
 	work := v.Working()
 	fmt.Fprintf(&b, "在干活（%d）\n", len(work))
 	for _, t := range work {
-		fmt.Fprintf(&b, "  %s  %s  %s  %s%s\n", t.ID, clip(t.Title, 30), orDash(t.Worker), orDash(t.Host), heldSuffix(t.Holder, v.At))
+		fmt.Fprintf(&b, "  %s  %s  %s  %s%s\n", t.ID, clip(t.Title, 30), orDash(t.Worker), orDash(names.Host(t.Host, v.Names)), heldSuffix(t.Holder, v.At))
 	}
 	fmt.Fprintf(&b, "\n等你：选项单 %d", v.Choices)
 	if v.Secretary.Pending > 0 {
@@ -249,7 +250,7 @@ func Render(v View) string {
 					h.Who = "未记录处理人"
 				}
 			}
-			fmt.Fprintf(&b, "  %s  %s  %s：%s%s%s\n", t.ID, clip(t.Title, 30), v.HolderWho(h), t.Holder.Text,
+			fmt.Fprintf(&b, "  %s  %s  %s：%s%s%s\n", t.ID, clip(t.Title, 30), v.HolderWho(h), names.HostText(t.Holder.Text, v.Names),
 				heldSuffix(t.Holder, v.At), mark)
 		}
 	}

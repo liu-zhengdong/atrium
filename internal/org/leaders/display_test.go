@@ -16,6 +16,14 @@ func TestWakeIdentityDisplay(t *testing.T) {
 	if err := events.Emit(ctx, env.DB, events.Event{Kind: events.TaskAssigned, Task: "t1", Dept: "o2", Target: "a2", Level: events.Act, Body: map[string]string{"title": "在 o2", "from": "a1"}}); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := env.DB.Exec(`INSERT INTO hosts(id,name,kind,created_at) VALUES ('h3','ggb','remote',0)`); err != nil {
+		t.Fatal(err)
+	}
+	for _, host := range []string{"h3", "h99"} {
+		if err := events.Emit(ctx, env.DB, events.Event{Kind: events.Overdue, Task: "t1", Dept: "o2", Target: "a2", Level: events.Act, Body: map[string]any{"host": host, "text": "执行者在做（" + host + "）", "note": "用户原文 h3", "next": "atrium task show t1"}}); err != nil {
+			t.Fatal(err)
+		}
+	}
 	f := &fakeLauncher{h: h, db: env.DB, ack: true, cmd: "exit 0"}
 	SetLauncher(f.launch)
 	t.Cleanup(func() { SetLauncher(nil) })
@@ -27,12 +35,26 @@ func TestWakeIdentityDisplay(t *testing.T) {
 		t.Fatalf("唤醒次数 %d", len(f.seen))
 	}
 	l := f.seen[0]
+	for _, want := range []string{`"host":"ggb"`, "执行者在做（ggb）", `"host":"h99"`, "执行者在做（h99）", `"note":"用户原文 h3"`} {
+		if !strings.Contains(l.Prompt, want) {
+			t.Fatalf("唤醒提示词缺少 %s：%s", want, l.Prompt)
+		}
+	}
+	for _, line := range strings.Split(l.Prompt, "\n") {
+		if strings.Contains(line, "执行者在做") {
+			t.Log(line)
+		}
+	}
+	var original string
+	if err := env.DB.QueryRow(`SELECT body FROM events WHERE id = 2`).Scan(&original); err != nil || !strings.Contains(original, `"host":"h3"`) {
+		t.Fatalf("事件原文被改：%s %v", original, err)
+	}
 	for _, line := range strings.Split(l.Prompt, "\n") {
 		if strings.HasPrefix(line, "你是 ") || strings.HasPrefix(line, "## 上报") || strings.HasPrefix(line, "3. 退出") || strings.HasPrefix(line, "2. 处理完确认") || strings.Contains(line, `"title":"在 o2"`) {
 			t.Log(line)
 		}
 	}
-	for _, want := range []string{"负责人 运行时（a2）", "发给 总部（a1）", "转交 总部（a1）", `{"from":"a1","title":"在 o2"}`, "2. 处理完确认：atrium events ack 1\n"} {
+	for _, want := range []string{"负责人 运行时（a2）", "发给 总部（a1）", "转交 总部（a1）", `{"from":"a1","title":"在 o2"}`, "2. 处理完确认：atrium events ack 1 2 3\n"} {
 		if !strings.Contains(l.Prompt, want) {
 			t.Errorf("提示词缺 %q", want)
 		}

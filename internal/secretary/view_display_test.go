@@ -1,6 +1,7 @@
 package secretary
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -27,6 +28,8 @@ func TestHumanViewDisplay(t *testing.T) {
 		switch r.URL.Path {
 		case "/api/top":
 			result = v
+		case "/api/hosts":
+			result = []map[string]string{{"id": "h3", "name": "ggb"}}
 		case "/api/leaders":
 			result = roster
 		default:
@@ -83,8 +86,26 @@ func TestHumanViewDisplay(t *testing.T) {
 			t.Fatalf("非负责人消费者语义改变：%s", id)
 		}
 	}
+	// 同一隔离 HTTP 样本走 top/statusline 的真实命令入口，命中和缺名一起核对。
+	v.Tasks = []watch.TaskRow{
+		{ID: "t4", Title: "已登记机器", Worker: "pi+model", Host: "h3", Holder: watch.Holder{Kind: "worker", Who: "pi+model", Text: "执行者在做（h3）"}},
+		{ID: "t5", Title: "缺名机器", Worker: "codex+model", Host: "h99", Holder: watch.Holder{Kind: "worker", Who: "codex+model", Text: "执行者在做（h99）"}},
+	}
+	table := cli.NewTable("atrium", "")
+	watch.Commands(table)
+	Commands(table)
+	for _, args := range [][]string{{"top", "--once"}, {"statusline"}} {
+		var out, stderr bytes.Buffer
+		code := table.Main(ctx, args, cli.Env{Stdout: &out, Stderr: &stderr, Getenv: c.Env.Getenv})
+		shown := ansi.ReplaceAllString(out.String(), "")
+		if code != 0 || !strings.Contains(shown, "ggb") || !strings.Contains(shown, "h99") || strings.Contains(shown, "h3") {
+			t.Fatalf("%v 命中/回落错误：code=%d %s %s", args, code, shown, stderr.String())
+		}
+		t.Logf("atrium %s\n%s", strings.Join(args, " "), shown)
+	}
+
 	got.Names["a1"] = strings.Repeat("长名字", 20) + "\n换行"
-	who := got.HolderWho(v.Tasks[0].Holder)
+	who := got.HolderWho(watch.Holder{Who: "a1"})
 	if who != strings.Repeat("长名字", 4)+"…（a1）" || strings.ContainsAny(who, "\r\n") {
 		t.Fatalf("长名截断损坏短号：%q", who)
 	}

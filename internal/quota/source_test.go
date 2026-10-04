@@ -7,6 +7,7 @@ import (
 	"errors"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -17,6 +18,12 @@ import (
 //
 //go:embed testdata/pace-m146.json
 var sourceFixture []byte
+
+// legacyFixture 是 OpenQuota 0.8.5 的扁平 pace 出口实样（脱敏），没有 m146 契约的
+// quotas/valueMetrics 等字段；校验必须拒绝并写明缺哪个字段，不说笼统「损坏」。
+//
+//go:embed testdata/pace-legacy.json
+var legacyFixture []byte
 
 func fixtureSources(t *testing.T) []Pace {
 	t.Helper()
@@ -112,6 +119,34 @@ func TestSourceRejectDamaged(t *testing.T) {
 		t.Fatal("重复来源未拒绝")
 	}
 	t.Log("预期损坏/超限/重复来源整轮拒绝，不接受部分结果；实际符合")
+}
+
+// TestSourceRejectNames 拒收原因写明来源与缺/坏字段（t938：旧版出口曾只报「字段损坏或超限」）。
+func TestSourceRejectNames(t *testing.T) {
+	var legacy []Pace
+	if err := json.Unmarshal(legacyFixture, &legacy); err != nil {
+		t.Fatal(err)
+	}
+	err := validateSources(legacy)
+	if err == nil || !strings.Contains(err.Error(), "缺 quotas/valueMetrics 数组") ||
+		!strings.Contains(err.Error(), "kimi") || !strings.Contains(err.Error(), "zai") ||
+		!strings.Contains(err.Error(), "未接受部分结果") {
+		t.Fatal("旧版出口未点名来源与缺失字段", err)
+	}
+	p := fixtureSources(t)[0]
+	p.Quotas[0].UsedPercent = ptr(101)
+	if err := validateSources([]Pace{p}); err == nil || !strings.Contains(err.Error(), "窗口 ") || !strings.Contains(err.Error(), "usedPercent 缺失或越界") {
+		t.Fatal("坏窗口未点名字段", err)
+	}
+	p = fixtureSources(t)[0]
+	p.Account = ""
+	if err := validateSources([]Pace{p}); err == nil || !strings.Contains(err.Error(), "缺 providerId") {
+		t.Fatal("缺 providerId 未写明", err)
+	}
+	if err := validateSources(nil); err == nil || !strings.Contains(err.Error(), "没有来源行") {
+		t.Fatal("空出口未写明", err)
+	}
+	t.Log("预期旧版扁平出口/坏窗口/缺标识都报来源名与具体字段；实际符合")
 }
 
 func TestSourceCacheFailureIdentity(t *testing.T) {

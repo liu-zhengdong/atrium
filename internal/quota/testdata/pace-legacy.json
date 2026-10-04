@@ -1,0 +1,32 @@
+[
+  {
+    "providerId": "kimi",
+    "plan": null,
+    "windowId": "weekly",
+    "windowLabel": "Weekly",
+    "usedPercent": 15.0,
+    "periodElapsedPercent": 15.1,
+    "sparePercent": 0.1,
+    "hoursToReset": 142.6,
+    "shortWindowId": "session",
+    "shortWindowUsedPercent": 74.0,
+    "refreshedAt": "2026-10-03T07:59:34Z",
+    "refreshedHoursAgo": 0.0,
+    "stale": false
+  },
+  {
+    "providerId": "zai",
+    "plan": null,
+    "windowId": null,
+    "windowLabel": null,
+    "usedPercent": null,
+    "periodElapsedPercent": null,
+    "sparePercent": null,
+    "hoursToReset": null,
+    "shortWindowId": null,
+    "shortWindowUsedPercent": null,
+    "refreshedAt": "2026-10-03T07:54:33Z",
+    "refreshedHoursAgo": 0.1,
+    "stale": false
+  }
+]

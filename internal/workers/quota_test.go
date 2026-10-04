@@ -78,6 +78,8 @@ func TestResolvedAccount(t *testing.T) {
 		{"claude", "opus", "", "claude"},
 		{"codex", "openai/gpt-5.3", "", "openai"},
 		{"pi", "alias", "opencode-go/actual", "opencode-go"},
+		{"pi", "zai/glm-4.6", "", "zai"},
+		{"opencode", "zai/glm-4.6", "", "zai"},
 	} {
 		r := Resolved{Spec: Spec{Tool: tc.tool, Model: tc.model}, CLIModel: tc.cliModel}
 		if got := r.Account(); got != tc.account {

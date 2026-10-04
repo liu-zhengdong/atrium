@@ -146,6 +146,9 @@ func TestMain(m *testing.M) {
 			fmt.Fprintln(os.Stderr, "synthetic corrupt row")
 		}
 		payload := string(sourceFixture)
+		if strings.Contains(filepath.Base(os.Args[0]), "legacy") {
+			payload = string(legacyFixture)
+		}
 		if strings.Contains(filepath.Base(os.Args[0]), "damaged") {
 			payload = strings.Replace(payload, `"quotaCount":2`, `"quotaCount":1`, 1)
 		}
@@ -170,7 +173,7 @@ func TestOpenquotaMixedDamagedExitZero(t *testing.T) {
 		t.Fatal(err)
 	}
 	dir := t.TempDir()
-	for _, name := range []string{"clean", "mixed", "damaged", "empty"} {
+	for _, name := range []string{"clean", "mixed", "damaged", "empty", "legacy"} {
 		suffix := ""
 		if strings.HasSuffix(exe, ".exe") {
 			suffix = ".exe"
@@ -183,6 +186,9 @@ func TestOpenquotaMixedDamagedExitZero(t *testing.T) {
 		if name != "clean" {
 			if err == nil || rows != nil {
 				t.Fatal("exit0+坏行警告不能标成功", rows, err)
+			}
+			if name == "legacy" && !strings.Contains(err.Error(), "缺 quotas/valueMetrics 数组") {
+				t.Fatal("旧版出口未写明缺失字段", err)
 			}
 		} else if err != nil || len(rows) != 1 {
 			t.Fatal("正常假来源被拒", rows, err)

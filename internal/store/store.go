@@ -20,7 +20,10 @@ import (
 //go:embed schema.sql
 var schema string
 
-type DB struct{ *sql.DB }
+type DB struct {
+	*sql.DB
+	ChoicesSkipped *ChoicesSkipped
+}
 
 // Querier 是 *sql.DB 与 *sql.Tx 的共同部分；只读函数收它，调用方决定在不在事务里。
 type Querier interface {
@@ -45,7 +48,8 @@ func Open(path string) (*DB, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := upgradeChoices(context.Background(), sqlDB); err != nil {
+	var skipped *ChoicesSkipped
+	if err := upgradeChoices(context.Background(), sqlDB); err != nil && !errors.As(err, &skipped) {
 		sqlDB.Close()
 		return nil, fmt.Errorf("升级选项单失败：%w", err)
 	}
@@ -53,7 +57,19 @@ func Open(path string) (*DB, error) {
 		sqlDB.Close()
 		return nil, fmt.Errorf("升级定时任务失败：%w", err)
 	}
-	if _, err := sqlDB.Exec(schema); err != nil {
+	startupSchema := schema
+	if skipped != nil {
+		// 未知表可能连索引需要的列也没有；保留现有 choices，不给它补索引。
+		var statements []string
+		for _, statement := range strings.Split(schema, ";") {
+			if strings.Contains(statement, "CREATE INDEX") && strings.Contains(statement, " ON choices (") {
+				continue
+			}
+			statements = append(statements, statement)
+		}
+		startupSchema = strings.Join(statements, ";")
+	}
+	if _, err := sqlDB.Exec(startupSchema); err != nil {
 		sqlDB.Close()
 		return nil, fmt.Errorf("建表失败：%w", err)
 	}
@@ -63,7 +79,10 @@ func Open(path string) (*DB, error) {
 		sqlDB.Close()
 		return nil, fmt.Errorf("迁移 worker_marks 失败：%w", err)
 	}
-	return &DB{sqlDB}, nil
+	if skipped != nil {
+		skipped.Database = path
+	}
+	return &DB{DB: sqlDB, ChoicesSkipped: skipped}, nil
 }
 
 // Tx 在一个事务里跑 fn；fn 返回错误就回滚。

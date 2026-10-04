@@ -21,7 +21,7 @@ func normalizeDDL(s, table string) string {
 	return strings.Join(strings.Fields(strings.TrimSuffix(strings.TrimSpace(s), ";")), " ")
 }
 
-// upgradeTables 是存量表结构升级的公共路径：仅接受已确认的旧定义，与现行不一致且不是已知旧结构就报错停下；
+// upgradeTables 仅升级已确认的旧定义；未知 choices 返回降级信号，其他未知结构报错；
 // 新库与现行结构不复制数据。
 func upgradeTables(ctx context.Context, db *sql.DB, table, old string) error {
 	conn, err := db.Conn(ctx)
@@ -45,6 +45,21 @@ func upgradeTableConn(ctx context.Context, conn *sql.Conn, table, old string) (e
 	if normalizeDDL(ddl, table) == normalizeDDL(current, table) {
 		return nil
 	}
+	if table == "choices" {
+		legacyDecision := strings.Replace(old, "  created_by", "  decision   TEXT REFERENCES decisions (id),\n  created_by", 1)
+		if normalizeDDL(ddl, table) == normalizeDDL(legacyDecision, table) {
+			var populated bool
+			if err := conn.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM choices WHERE decision IS NOT NULL)`).Scan(&populated); err != nil {
+				return err
+			}
+			if !populated {
+				old = legacyDecision
+			}
+		}
+		if normalizeDDL(ddl, table) != normalizeDDL(old, table) {
+			return &ChoicesSkipped{Structure: normalizeDDL(ddl, table)}
+		}
+	}
 	if normalizeDDL(ddl, table) != normalizeDDL(old, table) {
 		return fmt.Errorf("未知 %s 结构，停止升级", table)
 	}
@@ -56,15 +71,25 @@ func upgradeTableConn(ctx context.Context, conn *sql.Conn, table, old string) (e
 		_, restoreErr := conn.ExecContext(context.Background(), `PRAGMA foreign_keys=ON`)
 		err = errors.Join(err, restoreErr)
 	}()
-	return rebuildTable(ctx, conn, table, current)
+	return rebuildTable(ctx, conn, table, current, table == "choices" && strings.Contains(old, "decision   TEXT"))
 }
 
-func rebuildTable(ctx context.Context, conn *sql.Conn, table, current string) error {
+func rebuildTable(ctx context.Context, conn *sql.Conn, table, current string, decision bool) error {
 	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
+	if decision {
+		// 在写事务中再次确认，防止识别后其他写者填入 decision。
+		var populated bool
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM choices WHERE decision IS NOT NULL)`).Scan(&populated); err != nil {
+			return err
+		}
+		if populated {
+			return &ChoicesSkipped{Structure: "历史 choices 的 decision 已有值"}
+		}
+	}
 	// 显式索引也在同一事务保存、恢复；自动唯一索引由现行表定义建立。
 	rows, err := tx.QueryContext(ctx, `SELECT sql FROM sqlite_schema WHERE type='index' AND tbl_name=? AND sql IS NOT NULL ORDER BY name`, table)
 	if err != nil {
@@ -84,10 +109,19 @@ func rebuildTable(ctx context.Context, conn *sql.Conn, table, current string) er
 	if err != nil {
 		return err
 	}
+	// 列名从现行 DDL 派生，历史多余列不参与复制。
+	var columns []string
+	for _, line := range strings.Split(current, "\n")[1:] {
+		fields := strings.Fields(line)
+		if len(fields) > 1 {
+			columns = append(columns, fields[0])
+		}
+	}
+	cols := strings.Join(columns, ", ")
 	upgrade := table + "_upgrade"
 	for _, statement := range []string{
 		strings.Replace(current, "IF NOT EXISTS "+table, upgrade, 1),
-		`INSERT INTO ` + upgrade + ` SELECT * FROM ` + table,
+		`INSERT INTO ` + upgrade + ` (` + cols + `) SELECT ` + cols + ` FROM ` + table,
 		`DROP TABLE ` + table,
 		`ALTER TABLE ` + upgrade + ` RENAME TO ` + table,
 	} {
@@ -116,7 +150,17 @@ func rebuildTable(ctx context.Context, conn *sql.Conn, table, current string) er
 	return tx.Commit()
 }
 
-// upgradeChoices 仅接受已确认的旧 choices：没有 void 状态的那一版。
+// ChoicesSkipped 表示未知 choices 原样保留，交给事件模块报告负责人。
+type ChoicesSkipped struct {
+	Database  string `json:"database"`
+	Structure string `json:"structure"`
+}
+
+func (e *ChoicesSkipped) Error() string {
+	return "未知 choices 结构，跳过 choices 升级：" + e.Structure
+}
+
+// upgradeChoices 仅接受已确认的旧 choices。
 func upgradeChoices(ctx context.Context, db *sql.DB) error {
 	return upgradeTables(ctx, db, "choices", strings.Replace(tableDefinition("choices"), "'passed', 'void'", "'passed'", 1))
 }

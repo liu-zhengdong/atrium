@@ -118,14 +118,14 @@ func hostRows(ctx context.Context, q store.Querier) ([]hostRow, error) {
 }
 
 // EnsureLocal 登记本机（第一次启动时发到 h1），之后每次启动刷新机器信息。
+// 刷新与自检（setCLIs）会并发，clis 只归自检写，刷新走 touch 保留库里的。
 func EnsureLocal(ctx context.Context, db *store.DB, info Info) error {
 	raw, _ := json.Marshal(info)
 	return db.Tx(ctx, func(tx *sql.Tx) error {
 		var id string
 		err := tx.QueryRowContext(ctx, `SELECT id FROM hosts WHERE kind = 'local'`).Scan(&id)
 		if err == nil {
-			_, err = tx.ExecContext(ctx, `UPDATE hosts SET info = ?, last_seen_at = ? WHERE id = ?`, string(raw), store.Now(), id)
-			return err
+			return touch(ctx, tx, id, &info, nil)
 		}
 		if !store.IsNotFound(err) {
 			return err

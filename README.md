@@ -103,6 +103,7 @@ go build ./...
 go test ./internal/<包>/          # 只跑改动相关的包
 .agents/check                     # 快检查：gofmt、vet 与交叉编译（Windows、Linux）、构建、全部测试、--help
 scripts/smoke.sh                  # 主路径端到端（隔离服务、假执行者、假 gh）
+scripts/quota-drill.sh            # 额度避让演练（假 magpie + 隔离服务 + 假执行者，三个窗口场景）
 ```
 
 开发中用隔离的服务，别碰 4320 上的安装版：

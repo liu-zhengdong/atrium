@@ -126,10 +126,13 @@ type Need struct {
 }
 
 // Choice 是挑机器的结论：run 在 Host 上拉起；queue 排队（Host 非空表示钉在指定的那台）；refuse 拒绝。
+// Held 只在 queue 上有意义：为真表示排队的根因是「不可用标记/离线/自检未就绪」这类等恢复的，
+// 不是正忙满载的正常排队——挑人的一侧据此决定要不要上报知会（dispatch 的空池兜底）。
 type Choice struct {
 	Kind   string `json:"kind"`
 	Host   string `json:"host,omitempty"`
 	Reason string `json:"reason,omitempty"`
+	Held   bool   `json:"held,omitempty"`
 }
 
 // RepoAllowed：没有仓库的活都能接；有仓库时要登记过（* 为全部）。
@@ -146,32 +149,33 @@ func RepoAllowed(repos []string, repo string) bool {
 }
 
 // fit 判这台能不能接：never 接不了，later 这会儿不行（满、太忙，或远程暂时不在）。pinned 是用户 --host 指定的（不看仓库）。
-func fit(c Candidate, n Need, pinned bool) (ok bool, later bool, reason string) {
+// held 只在 later 为真时有意义：标记不可用、离线、自检未就绪这类「等恢复」的排队是真，满载正忙是假。
+func fit(c Candidate, n Need, pinned bool) (ok bool, later bool, held bool, reason string) {
 	if c.Kind == "remote" {
 		switch c.Conn {
 		case ConnPending, ConnExpired:
-			return false, false, c.ID + " 还没接入"
+			return false, false, false, c.ID + " 还没接入"
 		case ConnOffline:
 			// 心跳断了或服务重启后还没重连。机器还是这台，等它回来再派，不转受阻。
-			return false, true, c.ID + " 离线"
+			return false, true, true, c.ID + " 离线"
 		}
 	}
 	if c.Kind == "remote" && n.LocalOnly != "" {
-		return false, false, c.ID + " 是远程机器：" + n.LocalOnly
+		return false, false, false, c.ID + " 是远程机器：" + n.LocalOnly
 	}
 	if c.Paused {
-		return false, false, c.ID + " 已暂停接活"
+		return false, false, false, c.ID + " 已暂停接活"
 	}
 	if n.Tool != "" {
 		if c.CLIs == nil {
-			return false, true, c.ID + " 尚未完成工具自检，自检就绪后再派"
+			return false, true, true, c.ID + " 尚未完成工具自检，自检就绪后再派"
 		}
 		cli := c.CLIs[n.Tool]
 		if !cli.Installed {
-			return false, false, fmt.Sprintf("%s 上没装 %s", c.ID, n.Tool)
+			return false, false, false, fmt.Sprintf("%s 上没装 %s", c.ID, n.Tool)
 		}
 		if cli.LoggedIn != nil && !*cli.LoggedIn {
-			return false, false, fmt.Sprintf("%s 上的 %s 没登录", c.ID, n.Tool)
+			return false, false, false, fmt.Sprintf("%s 上的 %s 没登录", c.ID, n.Tool)
 		}
 	}
 	why := c.Unavailable
@@ -180,24 +184,24 @@ func fit(c Candidate, n Need, pinned bool) (ok bool, later bool, reason string) 
 	}
 	if why != "" {
 		// 标记会到期或被解除（自检跑通、人 --clear），等它而不是拒绝：拒绝会让任务转受阻，恢复后没人再派。
-		return false, true, fmt.Sprintf("%s 上的 %s 不可用：%s", c.ID, workers.Spec{Tool: n.Tool, Model: n.Model}, why)
+		return false, true, true, fmt.Sprintf("%s 上的 %s 不可用：%s", c.ID, workers.Spec{Tool: n.Tool, Model: n.Model}, why)
 	}
 	if c.Kind == "remote" && !pinned && !RepoAllowed(c.Repos, n.Repo) {
 		if n.Repo == "" {
-			return false, false, c.ID + " 不接这件活"
+			return false, false, false, c.ID + " 不接这件活"
 		}
-		return false, false, fmt.Sprintf("%s 没登记能接仓库 %s（atrium host add 时用 --repo 登记）", c.ID, n.Repo)
+		return false, false, false, fmt.Sprintf("%s 没登记能接仓库 %s（atrium host add 时用 --repo 登记）", c.ID, n.Repo)
 	}
 	if n.Urgent {
-		return true, false, ""
+		return true, false, false, ""
 	}
 	if c.Busy != "" {
-		return false, true, c.Busy
+		return false, true, false, c.Busy
 	}
 	if c.Max > 0 && c.Running >= c.Max {
-		return false, true, fmt.Sprintf("%s 同时最多跑 %d 个执行者，有执行者结束后再拉起", c.ID, c.Max)
+		return false, true, false, fmt.Sprintf("%s 同时最多跑 %d 个执行者，有执行者结束后再拉起", c.ID, c.Max)
 	}
-	return true, false, ""
+	return true, false, false, ""
 }
 
 func utilization(c Candidate) float64 {
@@ -217,12 +221,12 @@ func Choose(cands []Candidate, n Need, pinned string) Choice {
 			if c.ID != pinned {
 				continue
 			}
-			ok, later, reason := fit(c, n, true)
+			ok, later, held, reason := fit(c, n, true)
 			switch {
 			case ok:
 				return Choice{Kind: "run", Host: c.ID}
 			case later:
-				return Choice{Kind: "queue", Host: c.ID, Reason: reason}
+				return Choice{Kind: "queue", Host: c.ID, Reason: reason, Held: held}
 			}
 			return Choice{Kind: "refuse", Reason: reason}
 		}
@@ -230,15 +234,16 @@ func Choose(cands []Candidate, n Need, pinned string) Choice {
 	}
 	var ready []Candidate
 	var laterReason, localLater, localNever string
+	var laterHeld, localHeld bool
 	for _, c := range cands {
-		ok, later, reason := fit(c, n, false)
+		ok, later, held, reason := fit(c, n, false)
 		switch {
 		case ok:
 			ready = append(ready, c)
 		case later && c.Kind == "local":
-			localLater = reason
+			localLater, localHeld = reason, held
 		case later && laterReason == "":
-			laterReason = reason
+			laterReason, laterHeld = reason, held
 		case !later && c.Kind == "local":
 			localNever = reason
 		}
@@ -269,10 +274,10 @@ func Choose(cands []Candidate, n Need, pinned string) Choice {
 		return Choice{Kind: "run", Host: ready[0].ID}
 	}
 	if localLater != "" {
-		return Choice{Kind: "queue", Reason: localLater}
+		return Choice{Kind: "queue", Reason: localLater, Held: localHeld}
 	}
 	if laterReason != "" {
-		return Choice{Kind: "queue", Reason: laterReason}
+		return Choice{Kind: "queue", Reason: laterReason, Held: laterHeld}
 	}
 	if localNever == "" {
 		localNever = "本机接不了"

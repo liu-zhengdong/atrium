@@ -78,6 +78,9 @@ type PickView struct {
 	Reason      string      `json:"reason"`
 	// Waiting：有符合条件的候选，但工具正忙或主机暂未就绪；为假且没有推荐表示没人能接。
 	Waiting bool `json:"waiting,omitempty"`
+	// Held：能接的都在等恢复（不可用标记冷却、主机没就绪），不是正忙排队——单执行者线下等于空池，
+	// 挑人的一侧据此向秘书上报知会用户（见 choose）；正忙排队不属此类。
+	Held bool `json:"held,omitempty"`
 }
 
 // NeedTrust 纯判定：活的分量要求的最低 trust。紧急、修复，或 risk 高于 low 的活只交给 trust≥medium 的；其余不限（空）。
@@ -239,6 +242,12 @@ func Pick(in PickInput) PickView {
 	}
 	if len(ok) > 0 {
 		v.Waiting = true
+		for _, r := range ok {
+			if r.wait != "" {
+				v.Held = true
+				break
+			}
+		}
 		if ok[0].wait != "" {
 			v.Reason = ok[0].c.ID + "：" + ok[0].wait
 			return v

@@ -54,9 +54,9 @@ func TestChoose(t *testing.T) {
 		want   Choice
 	}{
 		{"尚未自检", []Candidate{with(local, func(c *Candidate) { c.CLIs = nil })}, codex, "",
-			Choice{Kind: "queue", Reason: "h1 尚未完成工具自检，自检就绪后再派"}},
+			Choice{Kind: "queue", Reason: "h1 尚未完成工具自检，自检就绪后再派", Held: true}},
 		{"紧急也等自检", []Candidate{with(local, func(c *Candidate) { c.CLIs = nil })}, Need{Tool: "codex", Urgent: true}, "h1",
-			Choice{Kind: "queue", Host: "h1", Reason: "h1 尚未完成工具自检，自检就绪后再派"}},
+			Choice{Kind: "queue", Host: "h1", Reason: "h1 尚未完成工具自检，自检就绪后再派", Held: true}},
 		{"本机自检中选就绪远程", []Candidate{with(local, func(c *Candidate) { c.CLIs = nil }), remote}, codex, "", Choice{Kind: "run", Host: "h2"}},
 		{"自检完成没装", []Candidate{with(local, func(c *Candidate) { c.CLIs = map[string]CLI{} })}, codex, "",
 			Choice{Kind: "refuse", Reason: "h1 上没装 codex，也没有别的机器能接"}},
@@ -71,9 +71,9 @@ func TestChoose(t *testing.T) {
 		{"指定满了排队钉住", []Candidate{local, with(remote, func(c *Candidate) { c.Running = 4 })}, codex, "h2",
 			Choice{Kind: "queue", Host: "h2", Reason: "h2 同时最多跑 4 个执行者，有执行者结束后再拉起"}},
 		{"指定不存在", []Candidate{local}, codex, "h9", Choice{Kind: "refuse", Reason: "没有机器 h9"}},
-		{"离线", []Candidate{with(remote, func(c *Candidate) { c.Conn = ConnOffline })}, codex, "h2", Choice{Kind: "queue", Host: "h2", Reason: "h2 离线"}},
+		{"离线", []Candidate{with(remote, func(c *Candidate) { c.Conn = ConnOffline })}, codex, "h2", Choice{Kind: "queue", Host: "h2", Reason: "h2 离线", Held: true}},
 		{"离线不挡能接的", []Candidate{local, with(remote, func(c *Candidate) { c.Conn = ConnOffline })}, codex, "", Choice{Kind: "run", Host: "h1"}},
-		{"只剩离线的就等", []Candidate{with(remote, func(c *Candidate) { c.Conn = ConnOffline })}, codex, "", Choice{Kind: "queue", Reason: "h2 离线"}},
+		{"只剩离线的就等", []Candidate{with(remote, func(c *Candidate) { c.Conn = ConnOffline })}, codex, "", Choice{Kind: "queue", Reason: "h2 离线", Held: true}},
 		{"代理报忙", []Candidate{with(remote, func(c *Candidate) { c.Busy = "负载高" })}, codex, "", Choice{Kind: "queue", Reason: "负载高"}},
 		{"紧急的不看满", []Candidate{with(local, func(c *Candidate) { c.Running = 2 }), remote}, Need{Tool: "codex", Repo: "a/b", Urgent: true}, "",
 			Choice{Kind: "run", Host: "h2"}},

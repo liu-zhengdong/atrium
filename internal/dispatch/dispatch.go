@@ -8,6 +8,7 @@ package dispatch
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -18,6 +19,7 @@ import (
 
 	"github.com/liu-zhengdong/atrium/internal/api"
 	"github.com/liu-zhengdong/atrium/internal/app"
+	"github.com/liu-zhengdong/atrium/internal/events"
 	"github.com/liu-zhengdong/atrium/internal/gates"
 	"github.com/liu-zhengdong/atrium/internal/hosts"
 	"github.com/liu-zhengdong/atrium/internal/ledger"
@@ -165,6 +167,9 @@ func (d *dispatcher) tryOnce(ctx context.Context, it item) error {
 	}
 	switch choice.Kind {
 	case "queue":
+		if choice.Held {
+			d.reportHeld(ctx, t, []string{choice.Reason})
+		}
 		return noteWait(ctx, d.env.DB, t.ID, choice.Reason)
 	case "refuse":
 		return d.block(ctx, t.ID, "没有机器能接："+choice.Reason)
@@ -257,6 +262,9 @@ func (d *dispatcher) choose(ctx context.Context, t ledger.Task, o Options, exclu
 	}
 	if v.Recommended == "" {
 		if v.Waiting {
+			if v.Held {
+				d.notifyHeld(ctx, t, v)
+			}
 			return w, v.Reason, nil
 		}
 		return w, "", api.Conflict("%s", v.Reason).WithNext("atrium workers")
@@ -265,19 +273,58 @@ func (d *dispatcher) choose(ctx context.Context, t ledger.Task, o Options, exclu
 	return w, "", err
 }
 
-// noteWait 把排队任务此刻在等什么记进经历（task show 看得到），和这次入队后上次记的一样就不再记。
-func noteWait(ctx context.Context, db *store.DB, id, why string) error {
+// waitNoted：这次入队后是否已记过同样的「在等什么」。上报知会也按它去重，原因变了才再记、再报。
+func waitNoted(ctx context.Context, db *store.DB, id, why string) (bool, error) {
 	var last string
 	err := db.QueryRowContext(ctx, `SELECT body FROM task_events WHERE task = ? AND kind = 'waiting'
 		AND id > (SELECT COALESCE(max(id), 0) FROM task_events WHERE task = ? AND kind IN ('enqueue', 'requeue', 'bounce', 'start'))
 		ORDER BY id DESC LIMIT 1`, id, id).Scan(&last)
 	if err != nil && !store.IsNotFound(err) {
+		return false, err
+	}
+	return err == nil && last == why, nil
+}
+
+// noteWait 把排队任务此刻在等什么记进经历（task show 看得到），和这次入队后上次记的一样就不再记。
+func noteWait(ctx context.Context, db *store.DB, id, why string) error {
+	noted, err := waitNoted(ctx, db, id, why)
+	if err != nil || noted {
 		return err
 	}
-	if last == why {
-		return nil
-	}
 	return ledger.Record(ctx, db, id, "waiting", actor, why)
+}
+
+// notifyHeld：自动挑人时，能接的执行者都在等恢复（标记冷却、主机没就绪、离线）——队列只是挂着，没人知道。
+// 正忙排队（Held 为假）与「没有能接的执行者」的受阻（TaskStatus 事件已投负责人/秘书）不归这里。
+func (d *dispatcher) notifyHeld(ctx context.Context, t ledger.Task, v PickView) {
+	var waits []string
+	for _, c := range v.Candidates {
+		if c.Eligible && c.Waiting != "" {
+			waits = append(waits, c.ID+"："+c.Waiting)
+		}
+		if len(waits) == 3 {
+			break
+		}
+	}
+	if len(waits) == 0 {
+		waits = []string{v.Reason}
+	}
+	d.reportHeld(ctx, t, waits)
+}
+
+// reportHeld 向秘书发一条知会用户的上报；同一原因每任务只报一次（按事件键去重），原因变了才再报。
+// 上报失败只丢这次知会，不挡排队本身：原因还在，下一轮还会等。
+func (d *dispatcher) reportHeld(ctx context.Context, t ledger.Task, waits []string) {
+	note := fmt.Sprintf("任务 %s 没有能马上接的执行者，在等恢复：%s；不会另派，恢复或点名别的执行者后继续",
+		t.ID, strings.Join(waits, "；"))
+	key := fmt.Sprintf("held:%s:%x", t.ID, sha256.Sum256([]byte(note)))
+	seen, err := events.Seen(ctx, d.env.DB, org.Secretary, key)
+	if err != nil || seen {
+		return // 查不到宁可不报；同一原因报过（含已确认）就不再报
+	}
+	_ = events.Emit(ctx, d.env.DB, events.Event{Kind: events.LeaderEscalate, Task: t.ID, Dept: t.Org,
+		Target: org.Secretary, Level: events.Act, Key: key,
+		Body: map[string]any{"from": actor, "kind": "notify", "label": "知会用户", "note": note}})
 }
 
 // busyTools 是在跑的执行者用到的工具。

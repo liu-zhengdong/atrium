@@ -8,9 +8,6 @@ type Stored struct {
 	Reading
 }
 
-// Accounts 是旧厂商读取与缓存接受的来源名，不证明执行账号或共享池。
-var Accounts = []string{"claude", "codex", "opencode", "kimi", "grok", "cursor", "antigravity"}
-
 // Spare 是给分派任务的一个账号的额度判定。
 type Spare struct {
 	TokenWindows []TokenWindow `json:"token_windows,omitempty"`

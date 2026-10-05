@@ -14,6 +14,7 @@ import (
 )
 
 func TestNamedOnlyWorker(t *testing.T) {
+	nonIsolated(t)
 	ctx := context.Background()
 	dir := t.TempDir()
 	db, err := store.Open(filepath.Join(dir, "atrium.db"))
@@ -23,10 +24,7 @@ func TestNamedOnlyWorker(t *testing.T) {
 	defer db.Close()
 	env := &app.Env{DB: db, Paths: config.Paths{Data: dir}}
 	testLocalHost(t, env)
-	src := "---\nprotocol: cli\ncommand: go\nargs: [\"{prompt}\"]\nauto: false\n---\n"
-	if _, err := workers.SaveProfile(ctx, db, "harness/fake", workers.Edit{Source: &src}, "u1"); err != nil {
-		t.Fatal(err)
-	}
+	id := fakeCombo(t, ctx, db, "named", "auto: false\n")
 	tk, err := ledger.Add(ctx, db, ledger.NewTask{Title: "只点名"}, "u1")
 	if err != nil {
 		t.Fatal(err)
@@ -38,7 +36,7 @@ func TestNamedOnlyWorker(t *testing.T) {
 	}
 	found := false
 	for _, c := range v.Candidates {
-		if c.ID == "fake" {
+		if c.ID == id {
 			found = true
 			if c.Eligible || !strings.Contains(strings.Join(c.Refusals, "；"), "档案 auto=false：只接点名分派任务") {
 				t.Fatalf("自动候选：%+v", c)
@@ -48,14 +46,14 @@ func TestNamedOnlyWorker(t *testing.T) {
 	if !found {
 		t.Fatal("拒绝的执行者仍应列出")
 	}
-	w, wait, err := d.choose(ctx, tk, Options{Worker: "fake", Risk: "low"}, nil, false)
-	if err != nil || wait != "" || w.ID != "fake" {
+	w, wait, err := d.choose(ctx, tk, Options{Worker: id, Risk: "low"}, nil, false)
+	if err != nil || wait != "" || w.ID != id {
 		t.Fatalf("点名 choose：%+v %v %v", w, wait, err)
 	}
-	if _, err := Enqueue(ctx, env, tk.ID, Options{Worker: "fake", Risk: "low"}, "u1"); err != nil {
+	if _, err := Enqueue(ctx, env, tk.ID, Options{Worker: id, Risk: "low"}, "u1"); err != nil {
 		t.Fatalf("点名入队：%v", err)
 	}
-	if _, _, err := d.choose(ctx, tk, Options{Worker: "fake", Risk: "low"}, map[string]bool{}, false); err == nil {
+	if _, _, err := d.choose(ctx, tk, Options{Worker: id, Risk: "low"}, map[string]bool{}, false); err == nil {
 		t.Fatal("换人重试不能挑只点名执行者")
 	}
 	rows, err := workers.List(ctx, db)
@@ -63,15 +61,15 @@ func TestNamedOnlyWorker(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, r := range rows {
-		if r.ID == "fake" && r.Auto {
+		if r.ID == id && r.Auto {
 			t.Fatal("列表应标只点名")
 		}
 	}
-	if _, err := workers.SaveProfile(ctx, db, "harness/fake", workers.Edit{Unset: []string{"auto"}}, "u1"); err != nil {
+	if _, err := workers.SaveProfile(ctx, db, "combos/"+id, workers.Edit{Unset: []string{"auto"}}, "u1"); err != nil {
 		t.Fatal(err)
 	}
 	v, err = d.view(ctx, tk, Options{Risk: "low"}, nil, false)
-	if err != nil || v.Recommended != "fake" {
+	if err != nil || v.Recommended != id {
 		t.Fatalf("缺省仍自动挑：%+v %v", v, err)
 	}
 }

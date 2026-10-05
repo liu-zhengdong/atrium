@@ -21,9 +21,9 @@ import (
 func TestWatchTerminationOwnership(t *testing.T) {
 	env, d := setup(t)
 	ctx := context.Background()
-	// 启动超时要求没有输出；共享 kimi 假执行者会先输出 started，
-	// 较快机器上 observe 会把它算成进展，切换为 20 分钟超时。
-	fake, err := exec.LookPath("kimi")
+	// 启动超时要求没有输出：把假 dsh 换成一个不吭声的 sleep，
+	// 免得假执行者先打一行会话被算成进展、换成更长的超时。
+	fake, err := exec.LookPath("dsh")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -37,7 +37,11 @@ func TestWatchTerminationOwnership(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Enqueue(ctx, env, tk.ID, Options{Worker: "kimi"}, "u1"); err != nil {
+	// 单工具下「换人」只能换模型：写两份组合档案，超时只标记这一轮用过的那个模型，
+	// 另一个模型仍可当替代执行者（标记的 Covers 按工具+模型算）。
+	first := fakeCombo(t, ctx, env.DB, "tt-first", "")
+	fakeCombo(t, ctx, env.DB, "tt-second", "")
+	if _, err := Enqueue(ctx, env, tk.ID, Options{Worker: first}, "u1"); err != nil {
 		t.Fatal(err)
 	}
 	if err := d.pump(ctx); err != nil {
@@ -74,7 +78,7 @@ func TestWatchTerminationOwnership(t *testing.T) {
 	if platform.Alive(old.run.PID) {
 		t.Fatal("旧执行者仍存活")
 	}
-	// 原轮次收尾后，真实换人队列拉起假 claude（等标准输入关闭才退出）。
+	// 原轮次收尾后，真实换人队列再拉起假 dsh（这里已被换成 sleep 30）。
 	d.wg.Wait()
 	if err := d.pump(ctx); err != nil {
 		t.Fatal(err)

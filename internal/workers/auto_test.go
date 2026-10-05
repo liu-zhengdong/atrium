@@ -9,7 +9,7 @@ func TestAutoRule(t *testing.T) {
 			if value != "" {
 				edit.Set["auto"] = value
 			}
-			src, err := ApplyEdit("harness/codex", "", edit)
+			src, err := ApplyEdit("harness/dsh", "", edit)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -35,7 +35,7 @@ func TestAutoRule(t *testing.T) {
 				t.Fatal("点名仍应检查风险")
 			}
 			if value != "" {
-				src, err = ApplyEdit("harness/codex", src, Edit{Unset: []string{"auto"}})
+				src, err = ApplyEdit("harness/dsh", src, Edit{Unset: []string{"auto"}})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -47,7 +47,7 @@ func TestAutoRule(t *testing.T) {
 			}
 		})
 	}
-	if _, err := ApplyEdit("harness/codex", "", Edit{Set: map[string]string{"auto": "maybe"}}); err == nil {
+	if _, err := ApplyEdit("harness/dsh", "", Edit{Set: map[string]string{"auto": "maybe"}}); err == nil {
 		t.Fatal("auto=maybe 应报错")
 	}
 }

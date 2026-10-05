@@ -49,7 +49,7 @@ func ParseWorker(v string) (Spec, error) {
 	}
 	s.Tool = head
 	if !toolRE.MatchString(s.Tool) {
-		return s, api.Usage("--worker: 工具名不合法：%q（写成 工具+模型[:强度]，如 claude+opus:high）", s.Tool)
+		return s, api.Usage("--worker: 工具名不合法：%q（写成 工具+模型[:强度]，如 dsh+deepseek-official/deepseek-pro:high）", s.Tool)
 	}
 	if hasModel {
 		if !modelRE.MatchString(rest) || strings.Contains("/"+rest, "/.") {
@@ -77,17 +77,14 @@ type Resolved struct {
 }
 
 // Account 是展示使用的来源类别，不是实际账号或共享套餐身份：模型带 provider 前缀（<provider>/<模型>）
-// 就归 provider（claude+zcode/GLM-5.3 实际走 magpie 的 zcode，不记在 claude 名下），agy 走它的套餐名，
-// 其余归工具名。执行组合与 provider 分开；显式 CLI provider 保持原名，不建立别名表。
+// 就归 provider（实际走 magpie 的那个 provider，不记在工具名下），其余归工具名。
+// 执行组合与 provider 分开；provider 保持原名，不建立别名表。
 func (r Resolved) Account() string {
 	if provider, _, ok := strings.Cut(r.CLIModel, "/"); ok {
 		return provider
 	}
 	if provider, _, ok := strings.Cut(r.Spec.Model, "/"); ok {
 		return provider
-	}
-	if r.Spec.Tool == "agy" {
-		return "antigravity"
 	}
 	return r.Spec.Tool
 }
@@ -120,10 +117,9 @@ func (r Resolved) LocalOnly() string {
 	return ""
 }
 
-// Request 按执行者补上模型、强度、端点与通用命令行写法。
+// Request 按执行者补上模型、强度与端点。
 func (r Resolved) Request(prompt, promptFile, dir string) Request {
-	return Request{Prompt: prompt, PromptFile: promptFile, Dir: dir, Model: r.CLIModel, Effort: r.Spec.Effort, Endpoint: r.Endpoint(),
-		CLI: r.Adapter.cli}
+	return Request{Prompt: prompt, PromptFile: promptFile, Dir: dir, Model: r.CLIModel, Effort: r.Spec.Effort, Endpoint: r.Endpoint()}
 }
 
 // MergeLayers 三层叠加（纯函数）：后层的键整项覆盖前层。
@@ -152,18 +148,7 @@ func Resolve(ctx context.Context, q store.Querier, id string) (Resolved, error) 
 	}
 	a, ok := builtin[s.Tool]
 	if !ok {
-		if harness == nil || harness.Keys["protocol"] != "cli" {
-			return Resolved{}, api.Usage("--worker: 未知的工具 %s，可选 %s，或先写 harness/%s 档案（protocol: cli）接进来",
-				s.Tool, strings.Join(Tools, "、"), s.Tool).WithNext("atrium workers edit harness/" + s.Tool + " --file <档案>")
-		}
-		r, err := decodeRules(harness.Keys)
-		if err != nil {
-			return Resolved{}, err
-		}
-		if p := r.CLISpec.Problems(s.Tool); len(p) > 0 {
-			return Resolved{}, api.Usage("harness/%s 写得不对：%s", s.Tool, strings.Join(p, "；"))
-		}
-		a = cliAdapter(s.Tool, r.CLISpec)
+		return Resolved{}, api.Usage("--worker: 未知的工具 %s，可选 %s", s.Tool, strings.Join(Tools, "、"))
 	}
 	var layers []Profile
 	if harness != nil {
@@ -199,7 +184,7 @@ func Resolve(ctx context.Context, q store.Querier, id string) (Resolved, error) 
 	}
 	rules.Model = cliModel
 	if ModelKey(cliModel) == ModelKey(model) {
-		model = cliModel // 同一模型只差 provider 前缀（deepseek-v4.1-flash 与 opencode-go/deepseek-v4.1-flash）时按档案写的算，目录、统计、标记只有一个名字
+		model = cliModel // 同一模型只差 provider 前缀时按档案写的算，目录、统计、标记只有一个名字
 	}
 	full := Spec{Tool: s.Tool, Model: model, Effort: s.Effort}
 	out := Resolved{ID: full.String(), Spec: full, CLIModel: cliModel, Rules: rules, Body: body, Adapter: a, Layers: []string{}}

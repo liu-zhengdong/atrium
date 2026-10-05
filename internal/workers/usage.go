@@ -201,24 +201,3 @@ func (p *Parser) addUsage(u Usage) {
 		p.t.Usage.Cost, p.t.Usage.Currency, p.t.Usage.Source = nil, "", ""
 	}
 }
-
-// reportedCost 取工具报的花费；0 当没报——Claude、Cursor、grok 的 total_cost_usd 恒为 0 时是没计费，不是免费。
-func reportedCost(e event, key string) *float64 {
-	if v, ok := e[key].(float64); ok && v > 0 {
-		return &v
-	}
-	return nil
-}
-
-// reportedCostOrZero 同 reportedCost，但字段在场且是有限非负数时，明确报的 0 也算报了
-// （pi 的 cost.total、opencode 的 step cost 是工具自己的结论，免费渠道报 0）。
-func reportedCostOrZero(e event, key string) *float64 {
-	if v, ok := e[key].(float64); ok && v >= 0 && !math.IsInf(v, 0) {
-		return &v
-	}
-	return nil
-}
-
-func snakeUsage(e event) Usage {
-	return Usage{Tokens: Tokens{Input: number(e, "input_tokens"), Output: number(e, "output_tokens"), CacheRead: number(e, "cache_read_input_tokens"), CacheWrite: number(e, "cache_creation_input_tokens")}}
-}

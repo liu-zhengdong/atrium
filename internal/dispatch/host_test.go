@@ -17,7 +17,7 @@ import (
 func testLocalHost(t *testing.T, env *app.Env) {
 	t.Helper()
 	env.Pause = &pause.Store{DB: env.DB}
-	clis := map[string]hosts.CLI{"fake": {Installed: true}}
+	clis := map[string]hosts.CLI{}
 	for _, name := range workers.Tools {
 		clis[name] = hosts.CLI{Installed: true}
 	}
@@ -27,6 +27,7 @@ func testLocalHost(t *testing.T, env *app.Env) {
 }
 
 func TestRemoteCLISelection(t *testing.T) {
+	nonIsolated(t)
 	ctx := context.Background()
 	dir := t.TempDir()
 	db, err := store.Open(filepath.Join(dir, "atrium.db"))
@@ -38,10 +39,7 @@ func TestRemoteCLISelection(t *testing.T) {
 	if err := hosts.EnsureLocal(ctx, db, hosts.Info{}); err != nil {
 		t.Fatal(err)
 	}
-	src := "---\nprotocol: cli\ncommand: remote-only-command\nargs: [\"{prompt}\"]\n---\n"
-	if _, err := workers.SaveProfile(ctx, db, "harness/remote-cli", workers.Edit{Source: &src}, "u1"); err != nil {
-		t.Fatal(err)
-	}
+	id := fakeCombo(t, ctx, db, "remote", "")
 	h, code, err := hosts.Add(ctx, db, hosts.AddInput{Name: "远程", Repos: []string{"*"}}, 4999)
 	if err != nil {
 		t.Fatal(err)
@@ -50,7 +48,7 @@ func TestRemoteCLISelection(t *testing.T) {
 	for _, available := range []bool{true, false} {
 		clis := map[string]hosts.CLI{}
 		if available {
-			clis["remote-cli"] = hosts.CLI{Installed: true}
+			clis["dsh"] = hosts.CLI{Installed: true}
 		}
 		if available {
 			if _, _, err := hosts.Join(ctx, db, code, hosts.Info{CLIs: clis}); err != nil {
@@ -67,10 +65,10 @@ func TestRemoteCLISelection(t *testing.T) {
 			t.Fatal(err)
 		}
 		if available {
-			if v.Recommended != "remote-cli" {
+			if v.Recommended != id {
 				t.Fatalf("远程可用应推荐：%+v", v)
 			}
-			c, err := hosts.Pick(ctx, env, hosts.Need{Tool: "remote-cli"}, "")
+			c, err := hosts.Pick(ctx, env, hosts.Need{Tool: "dsh"}, "")
 			if err != nil || c.Kind != "run" || c.Host != h.ID {
 				t.Fatalf("应派到远程：%+v %v", c, err)
 			}

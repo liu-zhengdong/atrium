@@ -27,7 +27,7 @@ func TestLaunchTransientRetries(t *testing.T) {
 	ctx := context.Background()
 	repo := gitRepo(t)
 	tk, _ := ledger.Add(ctx, env.DB, ledger.NewTask{Title: "改 README", Repo: repo}, "u1")
-	if _, err := Enqueue(ctx, env, tk.ID, Options{Worker: "claude"}, "u1"); err != nil {
+	if _, err := Enqueue(ctx, env, tk.ID, Options{Worker: fakeOK}, "u1"); err != nil {
 		t.Fatal(err)
 	}
 	old := originRunner

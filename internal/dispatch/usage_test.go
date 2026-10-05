@@ -26,11 +26,12 @@ func TestExitUsageSnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 	src := "---\nbilling: subscription\nprices: {currency: USD, input: 2, output: 10, cache_read: 0.2, cache_write: 3}\n---\n"
-	if _, err := workers.SaveProfile(ctx, db, "harness/claude", workers.Edit{Source: &src}, "u1"); err != nil {
+	if _, err := workers.SaveProfile(ctx, db, "harness/dsh", workers.Edit{Source: &src}, "u1"); err != nil {
 		t.Fatal(err)
 	}
-	run := workers.Run{N: 1, Worker: "claude", Log: filepath.Join(t.TempDir(), "run.log")}
-	log := `{"type":"result","usage":{"input_tokens":100,"output_tokens":20,"cache_read_input_tokens":1000,"cache_creation_input_tokens":10},"total_cost_usd":0}` + "\n"
+	run := workers.Run{N: 1, Worker: "dsh", Log: filepath.Join(t.TempDir(), "run.log")}
+	log := `{"type":"session","sessionId":"session-0123abcd-0123-0123-0123-0123456789ab"}` + "\n" +
+		`{"type":"status","phase":"step_end","turn":1,"usage":{"inputTokens":100,"outputTokens":20,"cacheReadTokens":1000,"cacheWriteTokens":10}}` + "\n"
 	if err := os.WriteFile(run.Log, []byte(log), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -46,7 +47,7 @@ func TestExitUsageSnapshot(t *testing.T) {
 	}
 	// 改档案与日志后仍读当次快照；重记不会覆盖它。
 	src = "---\nbilling: metered\n---\n"
-	workers.SaveProfile(ctx, db, "harness/claude", workers.Edit{Source: &src}, "u1")
+	workers.SaveProfile(ctx, db, "harness/dsh", workers.Edit{Source: &src}, "u1")
 	os.WriteFile(run.Log, []byte("无读数\n"), 0600)
 	if err := recordExit(ctx, db, task.ID, run, workers.Exit{N: 1, Outcome: workers.OutFail}); err != nil {
 		t.Fatal(err)
@@ -70,21 +71,19 @@ func TestExitUsageSnapshot(t *testing.T) {
 	}
 }
 
-func TestCLIExitUsage(t *testing.T) {
+func TestSpecExitUsage(t *testing.T) {
 	ctx := context.Background()
 	db, err := store.Open(filepath.Join(t.TempDir(), "a.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	task, err := ledger.Add(ctx, db, ledger.NewTask{Title: "CLI 用量"}, "u1")
+	task, err := ledger.Add(ctx, db, ledger.NewTask{Title: "档案声明用量"}, "u1")
 	if err != nil {
 		t.Fatal(err)
 	}
+	// 档案自己声明从哪种事件、哪些字段取用量：日志格式随便哪个工具都行。
 	src := `---
-protocol: cli
-command: trae-cli
-args: ["{prompt}"]
 usage:
   event: result
   input: usage.input_tokens
@@ -97,10 +96,10 @@ billing: metered
 prices: {currency: CNY, input: 6, output: 30, cache_read: 1.2}
 ---
 `
-	if _, err := workers.SaveProfile(ctx, db, "harness/trae", workers.Edit{Source: &src}, "u1"); err != nil {
+	if _, err := workers.SaveProfile(ctx, db, "harness/dsh", workers.Edit{Source: &src}, "u1"); err != nil {
 		t.Fatal(err)
 	}
-	run := workers.Run{N: 1, Worker: "trae", Log: filepath.Join(t.TempDir(), "run.log")}
+	run := workers.Run{N: 1, Worker: "dsh", Log: filepath.Join(t.TempDir(), "run.log")}
 	log := `{"type":"result","subtype":"success","usage":{"input_tokens":1000000,"output_tokens":1000000,"cache_read_input_tokens":0,"cache_creation_input_tokens":0},"total_cost_usd":0}` + "\n"
 	if err := os.WriteFile(run.Log, []byte(log), 0600); err != nil {
 		t.Fatal(err)
@@ -131,47 +130,6 @@ func mustJSON(t *testing.T, v any) string {
 	return string(b)
 }
 
-func TestClaudeUsageResume(t *testing.T) {
-	ctx := context.Background()
-	db, err := store.Open(filepath.Join(t.TempDir(), "a.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	task, err := ledger.Add(ctx, db, ledger.NewTask{Title: "续接计费"}, "u1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	runs := []workers.Run{}
-	for i, cost := range []int{3, 5} {
-		run := workers.Run{N: i + 1, Worker: "claude", Log: filepath.Join(t.TempDir(), "run.log"), Why: workers.WhyFirst}
-		if i == 1 {
-			run.Why = workers.WhyResume
-		}
-		result, _ := json.Marshal(map[string]any{"type": "result", "usage": map[string]int{"input_tokens": 10, "output_tokens": 20, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0}, "total_cost_usd": cost})
-		log := `{"type":"system","subtype":"init","session_id":"test-session"}` + "\n" + string(result) + "\n"
-		if err := os.WriteFile(run.Log, []byte(log), 0600); err != nil {
-			t.Fatal(err)
-		}
-		body, _ := json.Marshal(run)
-		if err := ledger.Record(ctx, db, task.ID, workers.RunKind, "runtime", string(body)); err != nil {
-			t.Fatal(err)
-		}
-		runs = append(runs, run)
-	}
-	u, err := workers.RunUsage(ctx, db, task.ID, runs[1])
-	if err != nil || u.Cost == nil || *u.Cost != 2 || *u.Input != 10 {
-		t.Fatal(u, err)
-	}
-	if err := os.Remove(runs[0].Log); err != nil {
-		t.Fatal(err)
-	}
-	u, err = workers.RunUsage(ctx, db, task.ID, runs[1])
-	if err != nil || u.Cost != nil {
-		t.Fatal("基线缺失不能把累计花费当本次花费", u, err)
-	}
-}
-
 func TestStoppedExitUsage(t *testing.T) {
 	ctx := context.Background()
 	db, err := store.Open(filepath.Join(t.TempDir(), "a.db"))
@@ -188,12 +146,9 @@ func TestStoppedExitUsage(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	run := workers.Run{N: 1, Worker: "claude", Log: filepath.Join(t.TempDir(), "run.log")}
-	log, err := os.ReadFile("../workers/testdata/claude-t632-usage.ndjson")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(run.Log, log, 0600); err != nil {
+	run := workers.Run{N: 1, Worker: "dsh", Log: filepath.Join(t.TempDir(), "run.log")}
+	log := `{"type":"status","phase":"step_end","turn":1,"usage":{"inputTokens":112,"outputTokens":7,"cacheReadTokens":3,"cacheWriteTokens":1}}` + "\n"
+	if err := os.WriteFile(run.Log, []byte(log), 0600); err != nil {
 		t.Fatal(err)
 	}
 	body, _ := json.Marshal(run)
@@ -205,7 +160,7 @@ func TestStoppedExitUsage(t *testing.T) {
 		t.Fatal(err)
 	}
 	u, err := workers.ExitUsage(ctx, db, task.ID, 1)
-	if err != nil || u.Input == nil || *u.Input != 112 || u.Cost == nil {
+	if err != nil || u.Input == nil || *u.Input != 112 || u.Output == nil || *u.Output != 7 {
 		t.Fatal(u, err)
 	}
 	got, err := ledger.Get(ctx, db, task.ID)

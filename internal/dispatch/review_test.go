@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/liu-zhengdong/atrium/internal/api"
@@ -17,21 +18,24 @@ func TestReviewRequirementsOnlyForReview(t *testing.T) {
 	env, d := setup(t)
 	ctx := context.Background()
 	tk, _ := ledger.Add(ctx, env.DB, ledger.NewTask{Title: "挑审阅者"}, "u1")
-	for _, name := range []string{"claude+opus", "claude+sonnet", "codex+opus", "kimi+k2", "codex+gpt"} {
+	// 内置只剩 dsh：审阅的「不同工具」这条只能靠点名（NotModel/MinTrust）与作者排除来测。
+	for _, name := range []string{"dsh+author", "dsh+opus", "dsh+sonnet", "dsh+k2", "dsh+gpt"} {
 		trust := "medium"
-		if name == "kimi+k2" {
+		if name == "dsh+k2" {
 			trust = "low"
 		}
-		if _, err := env.DB.ExecContext(ctx, `INSERT INTO worker_profiles(name,spec,updated_by,updated_at) VALUES(?,?,'u1',0)`, "combos/"+name, "---\ntrust: "+trust+"\n---\n"); err != nil {
+		// 模型的 provider/模型写法要完整（dsh 只认 provider/模型），键又得跟标识里的不同，ID 才留在 combos/ 的名字上。
+		src := "---\nmodel: rev/" + strings.TrimPrefix(name, "dsh+") + "-x\ntrust: " + trust + "\n---\n"
+		if _, err := env.DB.ExecContext(ctx, `INSERT INTO worker_profiles(name,spec,updated_by,updated_at) VALUES(?,?,'u1',0)`, "combos/"+name, src); err != nil {
 			t.Fatal(err)
 		}
 	}
-	body, _ := json.Marshal(gates.Requirement{NotTool: "claude", NotModel: "opus", MinTrust: "medium"})
+	body, _ := json.Marshal(gates.Requirement{NotModel: "opus", MinTrust: "medium"})
 	if err := ledger.Record(ctx, env.DB, tk.ID, gates.KindRequire, "gates", string(body)); err != nil {
 		t.Fatal(err)
 	}
 	for _, review := range []bool{true, false} {
-		v, err := d.view(ctx, tk, Options{Risk: "low"}, map[string]bool{"claude+opus": true}, review)
+		v, err := d.view(ctx, tk, Options{Risk: "low"}, map[string]bool{"dsh+author": true}, review)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -39,7 +43,7 @@ func TestReviewRequirementsOnlyForReview(t *testing.T) {
 			id             string
 			reviewEligible bool
 		}{
-			{"claude+opus", false}, {"claude+sonnet", false}, {"codex+opus", false}, {"kimi+k2", false}, {"codex+gpt", true},
+			{"dsh+author", false}, {"dsh+opus", false}, {"dsh+sonnet", true}, {"dsh+k2", false}, {"dsh+gpt", true},
 		} {
 			found := false
 			for _, c := range v.Candidates {
@@ -47,7 +51,7 @@ func TestReviewRequirementsOnlyForReview(t *testing.T) {
 					continue
 				}
 				found = true
-				want := tc.reviewEligible || !review && tc.id != "claude+opus"
+				want := tc.reviewEligible || !review && tc.id != "dsh+author"
 				if c.Eligible != want {
 					t.Errorf("review=%v %s eligible=%v，要求%v，原因%v", review, tc.id, c.Eligible, want, c.Refusals)
 				}
@@ -61,8 +65,8 @@ func TestReviewRequirementsOnlyForReview(t *testing.T) {
 	if err := ledger.Record(ctx, env.DB, tk.ID, gates.KindRequire, "gates", `{}`); err != nil {
 		t.Fatal(err)
 	}
-	w, _, err := d.chooseReview(ctx, tk, &workers.Run{Worker: "claude+opus", Host: LocalHost})
-	if err != nil || w.ID == "claude+opus" {
+	w, _, err := d.chooseReview(ctx, tk, &workers.Run{Worker: "dsh+author", Host: LocalHost})
+	if err != nil || w.ID == "dsh+author" {
 		t.Fatalf("作者成为自己的审阅者：%s %v", w.ID, err)
 	}
 }
@@ -76,10 +80,10 @@ func TestReviewTokenReadOnly(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := d.record(ctx, tk, workers.Run{N: 1, Why: workers.WhyReview, Worker: "codex", Host: LocalHost}); err != nil {
+	if err := d.record(ctx, tk, workers.Run{N: 1, Why: workers.WhyReview, Worker: "dsh", Host: LocalHost}); err != nil {
 		t.Fatal(err)
 	}
-	if busy, err := busyTools(ctx, env.DB); err != nil || !busy["codex"] {
+	if busy, err := busyTools(ctx, env.DB); err != nil || !busy["dsh"] {
 		t.Fatalf("审阅中的工具没有计入并发：%v %v", busy, err)
 	}
 	r := api.NewRouter(env.Log)
@@ -106,10 +110,10 @@ func TestReviewTokenReadOnly(t *testing.T) {
 			t.Fatalf("%s %s：%v", tc.method, tc.path, err)
 		}
 	}
-	if err := recordExit(ctx, env.DB, tk.ID, workers.Run{N: 1, Worker: "codex"}, workers.Exit{N: 1}); err != nil {
+	if err := recordExit(ctx, env.DB, tk.ID, workers.Run{N: 1, Worker: "dsh"}, workers.Exit{N: 1}); err != nil {
 		t.Fatal(err)
 	}
-	if busy, err := busyTools(ctx, env.DB); err != nil || busy["codex"] {
+	if busy, err := busyTools(ctx, env.DB); err != nil || busy["dsh"] {
 		t.Fatalf("退出的审阅工具仍占并发：%v %v", busy, err)
 	}
 	err := c.Do(ctx, "GET", "/api/tasks", nil, nil)

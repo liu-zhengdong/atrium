@@ -59,7 +59,7 @@ func TestGateReleaseAuthorized(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			e.start(task.ID, "codex+gpt")
+			e.start(task.ID, "dsh+gpt")
 			ledger.Record(e.ctx, e.db, task.ID, gates.KindWorktree, "dispatch", `{"host":"h1","dir":"`+filepath.ToSlash(dir)+`"}`)
 			e.exit(task.ID)
 			e.sweep()
@@ -89,7 +89,7 @@ func TestGateMergedPRWithoutAuthorization(t *testing.T) {
 	}
 	e.tag("v1.0.0")
 	e.gh.Releases = []fakegh.Release{{Tag: "v1.0.0", Assets: 3}}
-	task := e.delivered("做事", "codex+gpt", dir)
+	task := e.delivered("做事", "dsh+gpt", dir)
 	e.sweep()
 	if got := e.get(task.ID); got.Status != ledger.Queued || !strings.Contains(e.lastNote(task.ID), "pr_exists") {
 		t.Fatalf("常规任务合入的 PR 应按 pr_exists 交回：%+v；%s", got, e.lastNote(task.ID))

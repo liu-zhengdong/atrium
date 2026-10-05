@@ -36,7 +36,7 @@ type Mark struct {
 	Evidence string `json:"evidence,omitempty"`
 	Until    int64  `json:"until"` // 到这个时刻自动恢复；0 等人处理后 workers edit --clear
 	Since    int64  `json:"since"`
-	// OpenEnded：报文没写恢复时刻（如 grok 402 balance exhausted），Until 只是到期自动再试的上限，不是恢复时刻，不展示成「恢复」。
+	// OpenEnded：报文没写恢复时刻（供应方只报余额不足），Until 只是到期自动再试的上限，不是恢复时刻，不展示成「恢复」。
 	OpenEnded bool `json:"open_ended,omitempty"`
 }
 
@@ -235,7 +235,7 @@ func parseMarkTarget(flag, target string) (Spec, string, error) {
 	who, host, _ := strings.Cut(strings.TrimSpace(target), "@")
 	s, err := ParseWorker(who)
 	if err != nil {
-		return Spec{}, "", api.Usage("--%s: 写成 工具[+模型][@机器]，如 agy+claude-opus-4-6-thinking@h1（%s）", flag, err.(*api.Error).Message)
+		return Spec{}, "", api.Usage("--%s: 写成 工具[+模型][@机器]，如 dsh+deepseek-official/deepseek-pro@h1（%s）", flag, err.(*api.Error).Message)
 	}
 	return s, host, nil
 }

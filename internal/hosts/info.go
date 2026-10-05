@@ -16,26 +16,18 @@ import (
 // 一台机器的自我介绍：系统、核数、装了哪些编码 CLI 及是否登录（只看登录文件在不在，不读内容）。
 // 服务登记本机与代理接入远程机器用同一份。
 
-// loginFiles：各工具登录后留下的文件（相对主目录）。
+// loginFiles：工具登录后留下的文件（相对主目录）。收线到 dsh 后只剩它一份。
 var loginFiles = map[string][]string{
-	"claude":   {".claude/.credentials.json", ".claude.json"},
-	"codex":    {".codex/auth.json", ".config/codex/auth.json"},
-	"opencode": {".local/share/opencode/auth.json"},
-	"pi":       {".pi/agent/auth.json"},
+	"dsh": {".dsh/.credentials.yaml"},
 }
 
-// LoggedIn 判是否登录（纯函数）：有登录文件算登录；codex 没文件就是没登录；claude 在 macOS 上可能只在钥匙串里，
-// 没文件时看不出；其余看不出为 nil。
+// LoggedIn 判是否登录（纯函数）：有登录文件算登录；没文件也可能是走环境变量里的密钥，看不出为 nil。
 func LoggedIn(tool, goos string, exists func(rel string) bool) *bool {
-	yes, no := true, false
+	yes := true
 	for _, f := range loginFiles[tool] {
 		if exists(f) {
 			return &yes
 		}
-	}
-	switch {
-	case tool == "codex", tool == "claude" && goos != "darwin":
-		return &no
 	}
 	return nil
 }

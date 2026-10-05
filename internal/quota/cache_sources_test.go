@@ -23,7 +23,7 @@ func TestCacheMachineSources(t *testing.T) {
 	}
 	defer db.Close()
 	now := store.Now()
-	good := Reading{Account: "opencode", OK: true, Finger: "key-A", ReadAt: now, Windows: []Window{{ID: "month", Used: 100}, {ID: "week", Used: 25}}}
+	good := Reading{Account: MagpieAccount, OK: true, Finger: "key-A", ReadAt: now, Windows: []Window{{ID: "month", Used: 100}, {ID: "week", Used: 25}}}
 	for _, h := range []string{"h1", "h2"} {
 		if err := Record(ctx, db, h, []Reading{good}); err != nil {
 			t.Fatal(err)
@@ -34,7 +34,7 @@ func TestCacheMachineSources(t *testing.T) {
 		t.Fatal("同key多机不能覆盖", rows, err)
 	}
 	// 不同key不证明独立套餐；失败保留旧成功身份与原时间，不能归当前账号。
-	failure := Reading{Account: "opencode", Finger: "key-B", ReadAt: now + 1, Reason: "登录已过期"}
+	failure := Reading{Account: MagpieAccount, Finger: "key-B", ReadAt: now + 1, Reason: "登录已过期"}
 	if err := Record(ctx, db, "h1", []Reading{failure}); err != nil {
 		t.Fatal(err)
 	}
@@ -74,9 +74,9 @@ func TestCacheLegacyAndLimit(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	r := Reading{Account: "codex", OK: true, Finger: "old", ReadAt: store.Now()}
+	r := Reading{Account: MagpieAccount, OK: true, Finger: "old", ReadAt: store.Now()}
 	body, _ := json.Marshal(Stored{Host: "h2", Reading: r})
-	if _, err := db.ExecContext(ctx, `INSERT INTO quota_cache VALUES (?,?,?,?)`, "old", "codex", string(body), r.ReadAt); err != nil {
+	if _, err := db.ExecContext(ctx, `INSERT INTO quota_cache VALUES (?,?,?,?)`, "old", MagpieAccount, string(body), r.ReadAt); err != nil {
 		t.Fatal(err)
 	}
 	rows, _ := Cached(ctx, db)
@@ -92,7 +92,7 @@ func TestCacheLegacyAndLimit(t *testing.T) {
 		t.Fatal("旧行只在正常刷新清理")
 	}
 	for i := 1; i < CacheRows; i++ {
-		if _, err := db.ExecContext(ctx, `INSERT INTO quota_cache VALUES (?,?,?,?)`, fmt.Sprintf("synthetic-%d", i), "codex", string(body), r.ReadAt); err != nil {
+		if _, err := db.ExecContext(ctx, `INSERT INTO quota_cache VALUES (?,?,?,?)`, fmt.Sprintf("synthetic-%d", i), MagpieAccount, string(body), r.ReadAt); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -102,7 +102,7 @@ func TestCacheLegacyAndLimit(t *testing.T) {
 	if err := Record(ctx, db, "h3", []Reading{r}); err == nil {
 		t.Fatal("超限写入不能成功")
 	}
-	db.ExecContext(ctx, `INSERT INTO quota_cache VALUES ('overflow','codex',?,?)`, string(body), r.ReadAt)
+	db.ExecContext(ctx, `INSERT INTO quota_cache VALUES ('overflow',?,?,?)`, MagpieAccount, string(body), r.ReadAt)
 	if rows, err := Cached(ctx, db); err == nil || rows != nil {
 		t.Fatal("超限读取不能返回静默截断", len(rows), err)
 	}
@@ -125,9 +125,6 @@ func TestOpenquotaOriginalAgeAndFailure(t *testing.T) {
 	db.ExecContext(ctx, `INSERT INTO quota_cache VALUES (?,?,?,?)`, oqKey, oqKey, string(body), now.UnixMilli())
 	deps := Deps{Now: func() time.Time { return now.Add(time.Hour) }}
 	local := NewLocal(deps)
-	for _, a := range Builtin {
-		local.next[a] = now.Add(2 * time.Hour)
-	}
 	p := poller{local: local, now: deps.Now, oq: func(context.Context) ([]Pace, error) { return nil, errors.New("假来源失败") }}
 	if err := p.round(ctx, db); err != nil {
 		t.Fatal(err)

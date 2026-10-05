@@ -15,13 +15,13 @@ func TestPickRotation(t *testing.T) {
 			in := PickInput{
 				Risk: "low", Priority: priority,
 				Facts: []Fact{
-					{ID: "codex", Account: "codex", Trust: "medium", Stat: workers.Stat{Launches: 1}},
+					{ID: "dsh", Account: "dsh", Trust: "medium", Stat: workers.Stat{Launches: 1}},
 					{ID: "unknown-first", Trust: "medium"},
 					{ID: "unknown-second", Trust: "medium"},
 				},
-				Spares: map[string]Spare{"codex": {Percent: f(90)}},
+				Spares: map[string]Spare{"dsh": {Percent: f(90)}},
 			}
-			for n, want := range []string{"unknown-first", "unknown-second", "codex", "unknown-first", "unknown-second", "codex"} {
+			for n, want := range []string{"unknown-first", "unknown-second", "dsh", "unknown-first", "unknown-second", "dsh"} {
 				v := Pick(in)
 				if v.Recommended != want {
 					t.Fatalf("第 %d 次派发推荐 %s，应为 %s；候选：%+v", n+1, v.Recommended, want, v.Candidates)

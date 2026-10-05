@@ -35,9 +35,7 @@ type Rules struct {
 	Endpoint    string     `yaml:"endpoint,omitempty" json:"endpoint,omitempty"`
 	EndpointAPI string     `yaml:"endpoint_api,omitempty" json:"endpoint_api,omitempty"`
 	EndpointKey string     `yaml:"endpoint_key,omitempty" json:"endpoint_key,omitempty"` // 凭据名，值分派任务时注入
-	Protocol    string     `yaml:"protocol,omitempty" json:"protocol,omitempty"`         // 只在 harness 层：cli
 	Usage       *UsageSpec `yaml:"usage,omitempty" json:"usage,omitempty"`               // 从 JSON 日志取用量的字段路径
-	CLISpec     `yaml:",inline" json:"-"`
 }
 
 // TrustLevel、RiskLevel 是档位序号；不认识返回 -1。
@@ -68,7 +66,7 @@ func (r Rules) EffectiveMaxRisk() string {
 
 // Profile 是一层档案的原文与解析结果。
 type Profile struct {
-	Name      string         `json:"name"` // 层/名，如 harness/claude
+	Name      string         `json:"name"` // 层/名，如 harness/dsh
 	Source    string         `json:"source"`
 	Keys      map[string]any `json:"-"`
 	Body      string         `json:"body"`
@@ -78,8 +76,11 @@ type Profile struct {
 
 var checkNameRE = regexp.MustCompile(`^[a-z_]+$`)
 
+// envNameRE 是环境变量名（endpoint_key 之类要注入子进程环境的凭据名）。
+var envNameRE = regexp.MustCompile(`^[A-Z_][A-Z0-9_]*$`)
+
 // layerToolRE 是工具名一段；模型段与执行者标识共用 modelRE（见 adapter.go），
-// provider 前缀（opencode-go/deepseek-v4-pro）与方括号档位后缀（GLM-5.3[1m]）都放行。
+// provider 前缀（deepseek-official/deepseek-pro）与方括号档位后缀（GLM-5.3[1m]）都放行。
 var layerToolRE = regexp.MustCompile(`^[\w.@-]+$`)
 
 // CheckName 校验档案名：harness/<工具>、models/<模型>、combos/<工具>+<模型>（模型与执行者标识同一套规则）。
@@ -157,10 +158,7 @@ func decodeRules(keys map[string]any) (Rules, error) {
 	return r, nil
 }
 
-var cliKeys = []string{"protocol", "command", "args", "model_args", "effort_args", "endpoint_args", "session_args", "session_match", "efforts", "done_match",
-	"error_match", "env", "endpoint_apis", "key_env", "exclusive", "json"}
-
-// CheckProfile 校验一层档案（纯函数）：键都认识、取值在档位内、通用命令行写法只在 harness 层且写得对。
+// CheckProfile 校验一层档案（纯函数）：键都认识、取值在档位内、harness 层只能是内置工具。
 func CheckProfile(name string, keys map[string]any) error {
 	if err := CheckName(name); err != nil {
 		return err
@@ -198,22 +196,9 @@ func CheckProfile(name string, keys map[string]any) error {
 			p = append(p, "endpoint_key 是凭据名（大写字母、数字、下划线）")
 		}
 	}
-	hasCLI := false
-	for _, k := range cliKeys {
-		if _, ok := keys[k]; ok {
-			hasCLI = true
-		}
-	}
-	switch {
-	case hasCLI && layer != "harness":
-		p = append(p, "protocol、command、args 这类通用命令行写法只能写在 harness 层")
-	case hasCLI && r.Protocol != "cli":
-		p = append(p, "通用命令行执行者要写 protocol: cli")
-	case hasCLI:
-		p = append(p, r.CLISpec.Problems(rest)...)
-	case layer == "harness":
+	if layer == "harness" {
 		if _, ok := builtin[rest]; !ok {
-			p = append(p, fmt.Sprintf("%s 不是内置工具（%s）；接新工具写 protocol: cli 与 command、args", rest, strings.Join(Tools, "、")))
+			p = append(p, fmt.Sprintf("%s 不是内置工具（%s）", rest, strings.Join(Tools, "、")))
 		}
 	}
 	if len(p) > 0 {

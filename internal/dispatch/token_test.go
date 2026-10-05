@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -106,7 +107,16 @@ func TestWorkerTokenRoutes(t *testing.T) {
 	}
 	o2, _ := org.Add(ctx, env.DB, org.NewDept{Name: "别处"})
 	tk, _ := ledger.Add(ctx, env.DB, ledger.NewTask{Title: "长活", Org: o1.ID}, "u1")
-	if _, err := Enqueue(ctx, env, tk.ID, Options{Worker: "kimi"}, "u1"); err != nil {
+	// 长活要一个不自己收尾的假 dsh：打出服务地址与令牌，供下面断言。
+	fake, err := exec.LookPath("dsh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := "#!/bin/sh\ncat >/dev/null &\necho \"started server=$ATRIUM_SERVER token=${ATRIUM_WORKER_TOKEN:+yes}\"\nsleep 30\n"
+	if err := os.WriteFile(fake, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Enqueue(ctx, env, tk.ID, Options{Worker: fakeOK}, "u1"); err != nil {
 		t.Fatal(err)
 	}
 	if err := d.pump(ctx); err != nil {

@@ -2,7 +2,6 @@ package workers
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -25,23 +24,23 @@ func TestParseWorker(t *testing.T) {
 		want Spec
 		bad  bool
 	}{
-		{in: "claude", want: Spec{Tool: "claude"}},
-		{in: "claude:high", want: Spec{Tool: "claude", Effort: "high"}},
-		{in: "claude+opus", want: Spec{Tool: "claude", Model: "opus"}},
-		{in: "opencode+opencode-go/mimo-v2.6-flash:low", want: Spec{Tool: "opencode", Model: "opencode-go/mimo-v2.6-flash", Effort: "low"}},
-		{in: "claude+zcode/GLM-5.3[1m]", want: Spec{Tool: "claude", Model: "zcode/GLM-5.3[1m]"}},
-		{in: "claude+GLM-5.3[1m]:high", want: Spec{Tool: "claude", Model: "GLM-5.3[1m]", Effort: "high"}},
-		{in: "Claude", bad: true},
-		{in: "claude+", bad: true},
-		{in: "claude+a b", bad: true},
-		{in: "claude+../x", bad: true},
-		{in: "claude:HIGH", bad: true},
+		{in: "dsh", want: Spec{Tool: "dsh"}},
+		{in: "dsh:high", want: Spec{Tool: "dsh", Effort: "high"}},
+		{in: "dsh+deepseek/deepseek-v4", want: Spec{Tool: "dsh", Model: "deepseek/deepseek-v4"}},
+		{in: "dsh+opencode-go/mimo-v2.6-flash:low", want: Spec{Tool: "dsh", Model: "opencode-go/mimo-v2.6-flash", Effort: "low"}},
+		{in: "dsh+zcode/GLM-5.3[1m]", want: Spec{Tool: "dsh", Model: "zcode/GLM-5.3[1m]"}},
+		{in: "dsh+GLM-5.3[1m]:high", want: Spec{Tool: "dsh", Model: "GLM-5.3[1m]", Effort: "high"}},
+		{in: "Dsh", bad: true},
+		{in: "dsh+", bad: true},
+		{in: "dsh+a b", bad: true},
+		{in: "dsh+../x", bad: true},
+		{in: "dsh:HIGH", bad: true},
 		// 方括号档位后缀只在段尾、至多一个，里面不嵌方括号。
-		{in: "claude+glm[1m", bad: true},
-		{in: "claude+glm[1m][2m]", bad: true},
-		{in: "claude+[1m]glm", bad: true},
-		{in: "claude+glm[]", bad: true},
-		{in: "claude+glm[1[m]]", bad: true},
+		{in: "dsh+glm[1m", bad: true},
+		{in: "dsh+glm[1m][2m]", bad: true},
+		{in: "dsh+[1m]glm", bad: true},
+		{in: "dsh+glm[]", bad: true},
+		{in: "dsh+glm[1[m]]", bad: true},
 	}
 	for _, c := range cases {
 		got, err := ParseWorker(c.in)
@@ -66,35 +65,12 @@ func TestBuild(t *testing.T) {
 		want []string // 必须按顺序出现的参数片段
 		bad  string
 	}{
-		{tool: "claude", in: in("opus", "high"), want: []string{"-p", "--output-format", "stream-json", "--permission-mode", "bypassPermissions", "--setting-sources", "user,project", "--strict-mcp-config", "--model", "opus", "--effort", "high"}},
-		{tool: "claude", in: Request{Prompt: "x", PromptFile: pf, Dir: dir, Live: true}, want: []string{"--input-format", "stream-json", "--replay-user-messages"}},
-		{tool: "claude", in: Request{Prompt: "x", PromptFile: pf, Dir: dir, Session: "0123abcd-0123-0123-0123-0123456789ab"}, want: []string{"-p", "--resume", "0123abcd-0123-0123-0123-0123456789ab"}},
-		{tool: "claude", in: in("", "ultra"), bad: "思考强度只能是"},
-		{tool: "codex", in: in("gpt-6", "high"), want: []string{"exec", "--json", "--skip-git-repo-check", "--ignore-user-config", "--dangerously-bypass-approvals-and-sandbox", "-C", dir, "--disable", "apps", "-m", "gpt-6", `model_reasoning_effort="high"`, "-"}},
-		{tool: "codex", in: Request{Prompt: "x", PromptFile: pf, Dir: dir, Session: "0123abcd-0123-0123-0123-0123456789ab"}, want: []string{"exec", "resume", "--json", "--skip-git-repo-check", "--ignore-user-config", "--dangerously-bypass-approvals-and-sandbox", "--disable", "apps", "0123abcd-0123-0123-0123-0123456789ab", "-"}},
-		{tool: "codex", in: Request{Prompt: "x", PromptFile: pf, Dir: dir, ComputerUse: []string{`mcp_servers={computer-use={command="cu"}}`}}, want: []string{"--ignore-user-config", "-C", dir, "-c", "-"}},
-		{tool: "opencode", in: in("p/m", "low"), want: []string{"run", "--format", "json", "--auto", "-m", "p/m", "--variant", "low"}},
-		{tool: "kimi", in: in("k2", ""), want: []string{"-p", "请先完整读取任务说明文件 " + pf + "，然后按文件内容执行。", "--output-format", "stream-json", "-m", "k2"}},
-		{tool: "command-code", in: in("deepseek-v4.1-flash", ""), want: []string{"--print", "--output-format", "json", "--yolo", "请先完整读取任务说明文件 " + pf + "，然后按文件内容执行。", "--model", "deepseek-v4.1-flash"}},
-		{tool: "command-code", in: in("", "high"), bad: "不接受思考强度"},
-		{tool: "kimi", in: in("", "high"), bad: "不接受思考强度"},
-		{tool: "grok", in: in("g", "low"), want: []string{"--prompt-file", pf, "--output-format", "streaming-messages-json", "-m", "g", "--reasoning-effort", "low", "--always-approve", "--cwd", dir}},
-		{tool: "pi", in: in("opencode-go/glm-5.3-flash", "high"), want: []string{"-p", "--mode", "json", "-na", "--model", "opencode-go/glm-5.3-flash", "--thinking", "high"}},
-		{tool: "pi", in: in("opencode-go/glm-5.3-flash", ""), want: []string{"--model", "opencode-go/glm-5.3-flash"}},
-		{tool: "pi", in: in("opencode-go/glm-5.3-flash", ""), want: []string{"--session-dir", filepath.Join(dir, "pi-sessions")}},
-		{tool: "pi", in: Request{Prompt: "x", PromptFile: pf, Dir: dir, Session: "0123abcd-0123-0123-0123-0123456789ab"}, want: []string{"-p", "--mode", "json", "-na", "--session-id", "0123abcd-0123-0123-0123-0123456789ab"}},
-		{tool: "pi", in: in("", "high"), bad: "要指定模型才能给思考强度"},
-		{tool: "agy", in: in("gemini-3.8-flash", "high"), want: []string{"--input-format", "stream-json", "--output-format", "stream-json", "--model", "gemini-3.8-flash", "--effort", "high"}},
-		{tool: "agy", in: in("claude-opus", "high"), bad: "不接受思考强度"},
-		{tool: "cursor", in: in("gpt-5.3-codex-fast", "high"), want: []string{"-p", "--workspace", dir, "--model", "gpt-5.3-codex-high-fast"}},
-		{tool: "cursor", in: in("auto", "high"), bad: "auto"},
 		{tool: "dsh", in: in("", ""), want: []string{"--profile", "headless", "--json", "-"}},
 		{tool: "dsh", in: in("deepseek-official/deepseek-pro", "high"), want: []string{"--profile", "headless", "--patch", filepath.Join(dir, "dsh-model.yml"), "--json", "-"}},
 		{tool: "dsh", in: Request{Prompt: "x", PromptFile: pf, Dir: dir, Session: "0123abcd-0123-0123-0123-0123456789ab"}, want: []string{"--session-id", "session-0123abcd-0123-0123-0123-0123456789ab", "-"}},
 		{tool: "dsh", in: in("deepseek-pro", ""), bad: "要写 provider/模型"},
 		{tool: "dsh", in: in("", "high"), bad: "要写模型才能给思考强度"},
-		{tool: "claude", in: Request{Prompt: "x", PromptFile: pf, Dir: "rel"}, bad: "绝对路径"},
-		{tool: "kimi", in: Request{Prompt: "x", PromptFile: pf, Dir: dir, Live: true}, bad: "不能即时送补充说明"},
+		{tool: "dsh", in: Request{Prompt: "x", PromptFile: pf, Dir: "rel"}, bad: "绝对路径"},
 	}
 	for _, c := range cases {
 		a, _ := Builtin(c.tool)
@@ -116,14 +92,6 @@ func TestBuild(t *testing.T) {
 			t.Errorf("%s：%+v", c.tool, l)
 		}
 	}
-	// 没写模型：codex、grok 不传模型参数，跟随工具自带的缺省。
-	for _, tool := range []string{"codex", "grok"} {
-		a, _ := Builtin(tool)
-		l, err := a.Build(in("", ""))
-		if err != nil || slices.Contains(l.Args, "-m") {
-			t.Errorf("%s 没写模型不应传 -m：%q %v", tool, l.Args, err)
-		}
-	}
 	// dsh 的模型覆盖层：patch 整份替换 agent-default-model 的 config，provider 与 model 都要给。
 	d, _ := Builtin("dsh")
 	dl, derr := d.Build(in("deepseek-official/deepseek-pro", "high"))
@@ -136,78 +104,16 @@ func TestBuild(t *testing.T) {
 			t.Errorf("dsh 覆盖层里没有 %s：%q", want, src)
 		}
 	}
-	// 走标准输入的接提示词文件，走文件路径的只传路径。
-	for tool, stdin := range map[string]bool{"claude": true, "codex": true, "cursor": true, "opencode": true, "kimi": false, "grok": false, "agy": false, "dsh": true} {
-		a, _ := Builtin(tool)
-		l, _ := a.Build(in("", ""))
-		if (l.StdinFile == pf) != stdin {
-			t.Errorf("%s StdinFile=%q", tool, l.StdinFile)
-		}
+	// dsh 走标准输入接提示词文件，命令行里不带正文；权限模式由环境变量给足。
+	l, err := d.Build(in("", ""))
+	if err != nil {
+		t.Fatal(err)
 	}
-	// 端点：codex 只接 responses；claude 设 ANTHROPIC_BASE_URL。
-	a, _ := Builtin("codex")
-	if _, err := a.Build(Request{Prompt: "x", PromptFile: pf, Dir: dir, Endpoint: &Endpoint{BaseURL: "https://x", API: "openai"}}); err == nil {
-		t.Error("codex 不接 openai 端点")
+	if l.StdinFile != pf {
+		t.Errorf("dsh StdinFile=%q", l.StdinFile)
 	}
-	a, _ = Builtin("claude")
-	l, _ := a.Build(Request{Prompt: "x", PromptFile: pf, Dir: dir, Endpoint: &Endpoint{BaseURL: "https://gw", API: "anthropic", KeyEnv: "ANTHROPIC_AUTH_TOKEN"}})
-	if l.Env["ANTHROPIC_BASE_URL"] != "https://gw" {
-		t.Errorf("claude 端点：%+v", l.Env)
-	}
-}
-
-func TestPiEndpoint(t *testing.T) {
-	dir := t.TempDir()
-	pf := filepath.Join(dir, "p.md")
-	a, _ := Builtin("pi")
-	ext := filepath.Join(dir, piEndpointFile)
-	cases := []struct {
-		name string
-		in   Request
-		want []string // 扩展里必须出现的片段
-		bad  string
-	}{
-		{name: "本机网关不要 key", in: Request{Model: "zhipu/glm-5.3", Endpoint: &Endpoint{BaseURL: "http://127.0.0.1:3425/v1", API: "openai"}},
-			want: []string{`"baseUrl":"http://127.0.0.1:3425/v1"`, `"api":"openai-completions"`, `"apiKey":"atrium"`, `"id":"zhipu/glm-5.3"`, `"reasoning":false`, `"cacheWrite":0`}},
-		{name: "带凭据名与强度", in: Request{Model: "m", Effort: "high", Endpoint: &Endpoint{BaseURL: "https://gw", API: "anthropic", KeyEnv: "GW_KEY"}},
-			want: []string{`"api":"anthropic-messages"`, `"apiKey":"$GW_KEY"`, `"reasoning":true`}},
-		{name: "引号不破坏脚本", in: Request{Model: "m", Endpoint: &Endpoint{BaseURL: `https://gw/"});x("`, API: "openai"}},
-			want: []string{`"baseUrl":"https://gw/\"});x(\""`}},
-		{name: "没写模型", in: Request{Endpoint: &Endpoint{BaseURL: "https://gw", API: "openai"}}, bad: "要写模型名"},
-		{name: "responses 不接", in: Request{Model: "m", Endpoint: &Endpoint{BaseURL: "https://gw", API: "responses"}}, bad: "只能接 openai、anthropic"},
-	}
-	for _, c := range cases {
-		c.in.Prompt, c.in.PromptFile, c.in.Dir = "x", pf, dir
-		l, err := a.Build(c.in)
-		if c.bad != "" {
-			if err == nil || !strings.Contains(err.Error(), c.bad) {
-				t.Errorf("%s：应报 %q，得到 %v", c.name, c.bad, err)
-			}
-			continue
-		}
-		if err != nil {
-			t.Fatalf("%s：%v", c.name, err)
-		}
-		if !inOrder(l.Args, []string{"-p", "--mode", "json", "-na", "-e", ext, "--model", "atrium/" + c.in.Model}) {
-			t.Errorf("%s 参数：%q", c.name, l.Args)
-		}
-		src := l.Files[ext]
-		for _, w := range c.want {
-			if !strings.Contains(src, w) {
-				t.Errorf("%s 扩展里没有 %s：%s", c.name, w, src)
-			}
-		}
-		if err := l.WriteFiles(); err != nil {
-			t.Fatal(err)
-		}
-		if b, err := os.ReadFile(ext); err != nil || string(b) != src {
-			t.Errorf("%s 扩展没写出：%v", c.name, err)
-		}
-	}
-	// 没写端点：不加 -e、模型原样、不写文件。
-	l, err := a.Build(Request{Prompt: "x", PromptFile: pf, Dir: dir, Model: "zai-coding-cn/glm-5.3"})
-	if err != nil || slices.Contains(l.Args, "-e") || len(l.Files) != 0 || !inOrder(l.Args, []string{"--model", "zai-coding-cn/glm-5.3"}) {
-		t.Errorf("直连：%q %v %v", l.Args, l.Files, err)
+	if l.Env["DSH_PERMISSION_MODE"] != "danger-full-access" {
+		t.Errorf("dsh Env=%v", l.Env)
 	}
 }
 
@@ -228,36 +134,24 @@ func TestLocalOnly(t *testing.T) {
 	}
 }
 
+// 提示词永远走标准输入或提示词文件，不拼进命令行：Windows 的批处理包装有 8191 字节上限。
 func TestWindowsBatchLongPrompt(t *testing.T) {
 	dir := t.TempDir()
 	for _, prompt := range []string{"第一行\n第二行", strings.Repeat("长说明", 10000)} {
-		for _, tool := range []string{"opencode", "agy", "kimi", "grok"} {
-			req := Request{Dir: dir, PromptFile: filepath.Join(dir, "prompt.md"), Prompt: prompt}
-			l, err := Build(tool, req)
-			if err != nil {
-				t.Fatalf("%s Build: %v", tool, err)
-			}
-			line, err := platform.BatchCommandLine("", `C:\\bin\\`+tool+`.cmd`, l.Args)
-			if err != nil || strings.Contains(line, prompt) || len(line) >= 8191 {
-				t.Fatalf("%s Windows 命令行含说明或过长: len=%d err=%v", tool, len(line), err)
-			}
-			if tool == "opencode" && l.StdinFile != req.PromptFile {
-				t.Fatal("opencode 未接提示词文件到 stdin")
-			}
-			if tool == "agy" {
-				var event struct {
-					Event   string `json:"event"`
-					Message struct {
-						Content string `json:"content"`
-					} `json:"message"`
-				}
-				if err := json.Unmarshal([]byte(l.StdinData), &event); err != nil || event.Event != "user" || event.Message.Content != prompt {
-					t.Fatalf("agy stdin 未保留原文: %v", err)
-				}
-			}
+		req := Request{Dir: dir, PromptFile: filepath.Join(dir, "prompt.md"), Prompt: prompt}
+		l, err := Build("dsh", req)
+		if err != nil {
+			t.Fatalf("dsh Build: %v", err)
+		}
+		line, err := platform.BatchCommandLine("", `C:\\bin\\dsh.cmd`, l.Args)
+		if err != nil || strings.Contains(line, prompt) || len(line) >= 8191 {
+			t.Fatalf("Windows 命令行含说明或过长: len=%d err=%v", len(line), err)
+		}
+		if l.StdinFile != req.PromptFile {
+			t.Fatal("dsh 未接提示词文件到 stdin")
 		}
 	}
-	if _, err := platform.BatchCommandLine("", `C:\\bin\\opencode.cmd`, []string{"run", "第一行\n第二行"}); err == nil {
+	if _, err := platform.BatchCommandLine("", `C:\\bin\\dsh.cmd`, []string{"--json", "第一行\n第二行"}); err == nil {
 		t.Fatal("BatchCommandLine 应继续拒绝换行参数")
 	}
 }
@@ -271,67 +165,13 @@ func inOrder(args, want []string) bool {
 	}
 	return i == len(want)
 }
-
-func TestCLISpec(t *testing.T) {
-	ok := CLISpec{Command: "mytool", Args: []string{"run", "{model_args}", "--cwd", "{cwd}", "{prompt}"}, ModelArgs: []string{"-m", "{model}"},
-		DoneMatch: "^DONE$", Env: map[string]string{"MY_MODEL": "{model}"}}
-	if p := ok.Problems("mytool"); len(p) > 0 {
-		t.Fatalf("应能用：%v", p)
-	}
-	bad := []struct {
-		name string
-		s    CLISpec
-		want string
-	}{
-		{"claude", CLISpec{Command: "x"}, "内置工具"},
-		{"t", CLISpec{Command: "/bin/x"}, "只写 PATH 上的命令名"},
-		{"t", CLISpec{Command: "x", Args: []string{"{what}"}}, "不是占位"},
-		{"t", CLISpec{Command: "x", Args: []string{"-a{model_args}"}}, "单独占一项"},
-		{"t", CLISpec{Command: "x", ModelArgs: []string{"-m"}}, "没有 {model_args}"},
-		{"t", CLISpec{Command: "x", Args: []string{"{effort}"}}, "没写 efforts"},
-		{"t", CLISpec{Command: "x", Args: []string{"{prompt}", "{prompt_file}"}}, "只用一个"},
-		{"t", CLISpec{Command: "x", DoneMatch: "("}, "不是合法正则"},
-		{"t", CLISpec{Command: "x", Env: map[string]string{"ATRIUM_X": "1"}}, "不能盖"},
-	}
-	for _, c := range bad {
-		p := strings.Join(c.s.Problems(c.name), "；")
-		if !strings.Contains(p, c.want) {
-			t.Errorf("%+v：应报 %q，得到 %q", c.s, c.want, p)
-		}
-	}
-	a := cliAdapter("mytool", ok)
-	dir := t.TempDir()
-	l, err := a.Build(Request{Prompt: "hi", PromptFile: filepath.Join(dir, "p"), Dir: dir})
-	if err != nil || !reflect.DeepEqual(l.Args, []string{"run", "--cwd", dir, "hi"}) || l.StdinFile != "" || l.Env != nil {
-		t.Fatalf("没模型整组省掉：%+v %v", l, err)
-	}
-	l, _ = a.Build(Request{Prompt: "hi", PromptFile: filepath.Join(dir, "p"), Dir: dir, Model: "m1"})
-	if !reflect.DeepEqual(l.Args, []string{"run", "-m", "m1", "--cwd", dir, "hi"}) || l.Env["MY_MODEL"] != "m1" {
-		t.Fatalf("有模型：%+v", l)
-	}
-	stdin := cliAdapter("s", CLISpec{Command: "s", Args: []string{"go"}})
-	l, _ = stdin.Build(Request{Prompt: "hi", PromptFile: filepath.Join(dir, "p"), Dir: dir})
-	if l.StdinFile == "" {
-		t.Fatal("没有 {prompt} 时提示词走标准输入")
-	}
-	if e := a.Ended("working\nDONE\n"); !e.Known || !e.OK {
-		t.Fatalf("done_match 命中：%+v", e)
-	}
-	if e := a.Ended("working\r\nDONE\r\n"); !e.Known || !e.OK {
-		t.Fatalf("Windows 原生工具的 CRLF 行尾不算进行里：%+v", e)
-	}
-	if e := a.Ended("working\n"); !e.Known || e.OK {
-		t.Fatalf("done_match 没命中：%+v", e)
-	}
-}
-
 func TestProfileEdit(t *testing.T) {
 	src := "---\ntrust: medium\nchecks: [pr_exists]\n---\n先跑相关测试。\n"
-	out, err := ApplyEdit("combos/claude+opus", "", Edit{Source: &src})
+	out, err := ApplyEdit("combos/dsh+deepseek-v4", "", Edit{Source: &src})
 	if err != nil || !strings.Contains(out, "先跑相关测试。") {
 		t.Fatalf("%q %v", out, err)
 	}
-	out, err = ApplyEdit("combos/claude+opus", out, Edit{Set: map[string]string{"max_risk": "high", "checks": "[]"}, Unset: []string{"trust"}})
+	out, err = ApplyEdit("combos/dsh+deepseek-v4", out, Edit{Set: map[string]string{"max_risk": "high", "checks": "[]"}, Unset: []string{"trust"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -348,17 +188,16 @@ func TestProfileEdit(t *testing.T) {
 		e    Edit
 		want string
 	}{
-		{"harness/claude", Edit{Set: map[string]string{"trust": "super"}}, "trust 只能是"},
-		{"harness/claude", Edit{Set: map[string]string{"colour": "red"}}, "规则写得不对"},
-		{"harness/claude", Edit{Set: map[string]string{"limits": "{max_tasks: 1}"}}, "field limits not found"},
-		{"models/opus", Edit{Set: map[string]string{"protocol": "cli", "command": "x"}}, "只能写在 harness 层"},
+		{"harness/dsh", Edit{Set: map[string]string{"trust": "super"}}, "trust 只能是"},
+		{"harness/dsh", Edit{Set: map[string]string{"colour": "red"}}, "规则写得不对"},
+		{"harness/dsh", Edit{Set: map[string]string{"limits": "{max_tasks: 1}"}}, "field limits not found"},
 		{"harness/nope", Edit{Set: map[string]string{"trust": "low"}}, "不是内置工具"},
-		{"harness/claude", Edit{Set: map[string]string{"endpoint": "ftp://x", "endpoint_api": "openai"}}, "http(s)"},
-		{"combos/claude", Edit{Set: map[string]string{"trust": "low"}}, "档案名应为"},
+		{"harness/dsh", Edit{Set: map[string]string{"endpoint": "ftp://x", "endpoint_api": "openai"}}, "http(s)"},
+		{"combos/dsh", Edit{Set: map[string]string{"trust": "low"}}, "档案名应为"},
 		{"skills/x", Edit{Set: map[string]string{"trust": "low"}}, "档案名应为"},
-		{"combos/claude+glm[1m", Edit{Set: map[string]string{"trust": "low"}}, "档案名应为"},
-		{"combos/claude+glm[1m][2m]", Edit{Set: map[string]string{"trust": "low"}}, "档案名应为"},
-		{"harness/claude", Edit{Unset: []string{"trust"}}, "没有 trust"},
+		{"combos/dsh+glm[1m", Edit{Set: map[string]string{"trust": "low"}}, "档案名应为"},
+		{"combos/dsh+glm[1m][2m]", Edit{Set: map[string]string{"trust": "low"}}, "档案名应为"},
+		{"harness/dsh", Edit{Unset: []string{"trust"}}, "没有 trust"},
 	}
 	for _, c := range bad {
 		if _, err := ApplyEdit(c.name, "", c.e); err == nil || !strings.Contains(err.Error(), c.want) {
@@ -369,14 +208,14 @@ func TestProfileEdit(t *testing.T) {
 
 func TestCheckName(t *testing.T) {
 	ok := []string{
-		"harness/claude",
-		"models/opus",
+		"harness/dsh",
+		"models/deepseek-v4",
 		"models/GLM-5.3[1m]",
 		"models/zcode/GLM-5.3[1m]",
-		"combos/claude+opus",
-		"combos/claude+GLM-5.3[1m]",
-		"combos/claude+zcode/GLM-5.3[1m]",
-		"combos/opencode+opencode-go/deepseek-v4-pro",
+		"combos/dsh+deepseek-v4",
+		"combos/dsh+GLM-5.3[1m]",
+		"combos/dsh+zcode/GLM-5.3[1m]",
+		"combos/dsh+deepseek-official/deepseek-pro",
 		"harness/my-tool.v2",
 	}
 	bad := []string{
@@ -385,16 +224,16 @@ func TestCheckName(t *testing.T) {
 		"harness/",
 		"models/",
 		"combos/",
-		"harness/.claude",
+		"harness/.dsh",
 		"models/.glm",
 		"models/GLM-5.3[1m",
 		"models/GLM-5.3[1m][2m]",
 		"models/[1m]",
-		"models/claude+opus",
-		"harness/claude+opus",
-		"combos/claude",
-		"combos/claude+op+us",
-		"combos/claude+opus:high",
+		"models/dsh+deepseek-v4",
+		"harness/dsh+deepseek-v4",
+		"combos/dsh",
+		"combos/dsh+op+us",
+		"combos/dsh+deepseek-v4:high",
 		"skills/x",
 	}
 	for _, name := range ok {
@@ -417,7 +256,7 @@ func TestLegacySlashComboAddressable(t *testing.T) {
 	defer db.Close()
 	ctx := context.Background()
 	// 旧库（渠道池时代）导入的组合名带 provider 前缀，模型串里的 / 曾被当分层符拒收，edit/--delete 都寻址不到。
-	name := "combos/opencode+opencode-go/deepseek-v4-pro"
+	name := "combos/dsh+deepseek-official/deepseek-pro"
 	if _, err := db.ExecContext(ctx, `INSERT INTO worker_profiles (name, spec, updated_by, updated_at) VALUES (?, ?, ?, ?)`,
 		name, "---\ntrust: medium\n---\n旧组合\n", "u1", store.Now()); err != nil {
 		t.Fatal(err)
@@ -453,21 +292,21 @@ func TestResolveAndRefusal(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	must("harness/claude", "---\ntrust: low\nchecks: [finished]\nmodel: sonnet\n---\n工具层叮嘱")
-	must("models/opus", "---\ntrust: medium\n---\n模型层叮嘱")
-	must("combos/claude+opus", "---\nmax_risk: high\nmodel: claude-opus-5\n---\n组合层叮嘱")
-	must("harness/mytool", "---\nprotocol: cli\ncommand: mytool\nargs: [\"{prompt}\"]\n---\n")
+	must("harness/dsh", "---\ntrust: low\nchecks: [finished]\nmodel: deepseek/deepseek-v4\n---\n工具层叮嘱")
+	must("models/deepseek-v4", "---\ntrust: medium\n---\n模型层叮嘱")
+	must("combos/dsh+deepseek-v4", "---\nmax_risk: high\nmodel: deepseek-official/deepseek-v4\n---\n组合层叮嘱")
 
-	r, err := Resolve(ctx, db, "claude+opus:high")
+	r, err := Resolve(ctx, db, "dsh+deepseek-v4:high")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r.ID != "claude+opus:high" || r.CLIModel != "claude-opus-5" || r.Rules.Trust != "medium" || r.Rules.MaxRisk != "high" ||
+	if r.ID != "dsh+deepseek-official/deepseek-v4:high" || r.CLIModel != "deepseek-official/deepseek-v4" ||
+		r.Rules.Trust != "medium" || r.Rules.MaxRisk != "high" ||
 		!reflect.DeepEqual(r.Rules.Checks, []string{"finished"}) || r.Body != "工具层叮嘱\n\n模型层叮嘱\n\n组合层叮嘱" ||
-		!reflect.DeepEqual(r.Layers, []string{"harness/claude", "models/opus", "combos/claude+opus"}) {
+		!reflect.DeepEqual(r.Layers, []string{"harness/dsh", "models/deepseek-v4", "combos/dsh+deepseek-v4"}) {
 		t.Fatalf("叠加：%+v", r)
 	}
-	detail, err := Show(ctx, db, "claude+opus:high")
+	detail, err := Show(ctx, db, "dsh+deepseek-v4:high")
 	if err != nil || len(detail.Layers) != 3 {
 		t.Fatalf("Show 各层原文：%+v %v", detail, err)
 	}
@@ -477,23 +316,24 @@ func TestResolveAndRefusal(t *testing.T) {
 			t.Fatalf("第 %d 层原文不一致：%v", i, err)
 		}
 	}
-	// 档案写的模型与标识里的只差 provider 前缀：两种写法是同一个执行者，ID 按档案写的，目录里只一行。
-	must("combos/opencode+deepseek-v4.1-flash", "---\nmodel: opencode-go/deepseek-v4.1-flash\n---\n")
-	for _, id := range []string{"opencode+deepseek-v4.1-flash", "opencode+opencode-go/deepseek-v4.1-flash:high"} {
+	// 档案写的模型与标识里的只差 provider 前缀：两种写法是同一个执行者，ID 按档案写的。
+	must("combos/dsh+deepseek-v4.1-flash", "---\nmodel: deepseek-official/deepseek-v4.1-flash\n---\n")
+	for _, id := range []string{"dsh+deepseek-v4.1-flash", "dsh+deepseek-official/deepseek-v4.1-flash"} {
 		r, err := Resolve(ctx, db, id)
-		if err != nil || r.Spec.Model != "opencode-go/deepseek-v4.1-flash" || r.CLIModel != r.Spec.Model {
+		if err != nil || r.Spec.Model != "deepseek-official/deepseek-v4.1-flash" || r.CLIModel != r.Spec.Model {
 			t.Errorf("%s：%+v %v", id, r, err)
 		}
 	}
-	if ids, _ := List(ctx, db); slices.ContainsFunc(ids, func(r Row) bool { return r.ID == "opencode+deepseek-v4.1-flash" }) {
-		t.Errorf("目录里还有不带前缀的那行：%+v", ids)
+	// 目录里只留档案归一后的那一行。
+	if rows, _ := List(ctx, db); slices.ContainsFunc(rows, func(r Row) bool { return r.ID == "dsh+deepseek-v4.1-flash" }) {
+		t.Errorf("目录里还有不带前缀的那行：%+v", rows)
 	}
 	// magpie 组合：模型名带方括号档位后缀（GLM-5.3[1m]），标识带不带 provider 前缀都归同一身份；
 	// 额度绑定按 magpie 路由名第一段（zcode），回环端点只派本机。
-	must("combos/claude+GLM-5.3[1m]", "---\nmodel: zcode/GLM-5.3[1m]\nendpoint: http://127.0.0.1:3425/v1\nendpoint_api: anthropic\n---\n")
-	for _, id := range []string{"claude+GLM-5.3[1m]", "claude+zcode/GLM-5.3[1m]"} {
+	must("combos/dsh+GLM-5.3[1m]", "---\nmodel: zcode/GLM-5.3[1m]\nendpoint: http://127.0.0.1:3425/v1\nendpoint_api: anthropic\n---\n")
+	for _, id := range []string{"dsh+GLM-5.3[1m]", "dsh+zcode/GLM-5.3[1m]"} {
 		r, err := Resolve(ctx, db, id)
-		if err != nil || r.ID != "claude+zcode/GLM-5.3[1m]" || r.CLIModel != "zcode/GLM-5.3[1m]" {
+		if err != nil || r.ID != "dsh+zcode/GLM-5.3[1m]" || r.CLIModel != "zcode/GLM-5.3[1m]" {
 			t.Errorf("%s：%+v %v", id, r, err)
 			continue
 		}
@@ -505,39 +345,75 @@ func TestResolveAndRefusal(t *testing.T) {
 			t.Errorf("%s 回环端点应只派本机：%q", id, r.LocalOnly())
 		}
 	}
-	// 只写工具：模型取 harness 的 model。
-	r, _ = Resolve(ctx, db, "claude")
-	if r.ID != "claude+sonnet" || r.Rules.EffectiveMaxRisk() != "low" {
+	// 只写工具：模型取 harness 的 model，再经档案归一。
+	r, _ = Resolve(ctx, db, "dsh")
+	if r.ID != "dsh+deepseek-official/deepseek-v4" || r.Rules.EffectiveMaxRisk() != "high" {
 		t.Fatalf("只写工具：%+v", r)
 	}
-	if r.Rules.Refusal("medium", true) == "" || r.Rules.Refusal("low", true) != "" {
-		t.Fatal("trust=low 只接 low")
+	if r.Rules.EffectiveTrust() != "medium" || r.Rules.EffectiveMaxRisk() != "high" {
+		t.Fatal("trust 取模型层、max_risk 取组合层")
 	}
-	// 只写工具、档案没写 model：有别名缺省的补上（claude 的 opus 在上面被 harness 盖掉，这里看 cursor 的 auto），
-	// 没有的不传模型、ID 只有工具名，models/ 档案挂不上。
-	for id, want := range map[string]string{"cursor": "cursor+auto", "codex:high": "codex:high", "grok": "grok"} {
-		r, err := Resolve(ctx, db, id)
-		if err != nil || r.ID != want || (want != "cursor+auto" && (r.CLIModel != "" || r.Spec.Model != "")) {
-			t.Errorf("%s：%+v %v", id, r, err)
-		}
-	}
-	if r, err := Resolve(ctx, db, "mytool"); err != nil || r.Adapter.Exe != "mytool" {
-		t.Fatalf("通用命令行执行者：%+v %v", r, err)
-	}
-	if _, err := Resolve(ctx, db, "nosuch"); err == nil {
-		t.Fatal("未知工具应拒绝")
+	if _, err := Resolve(ctx, db, "mytool"); err == nil {
+		t.Fatal("非内置工具应拒绝")
 	}
 	ids, _ := Catalog(ctx, db)
-	if !slices.Contains(ids, "claude+GLM-5.3[1m]") || ids[len(ids)-1] != "mytool" {
+	if !slices.Contains(ids, "dsh+GLM-5.3[1m]") {
 		t.Fatalf("目录：%v", ids)
 	}
 	rows, err := List(ctx, db)
 	if err != nil {
 		t.Fatal(err)
 	}
-	i := slices.IndexFunc(rows, func(r Row) bool { return r.ID == "claude+opus" })
+	i := slices.IndexFunc(rows, func(r Row) bool { return r.ID == "dsh+deepseek-official/deepseek-v4" })
 	if i < 0 || rows[i].Trust != "medium" {
 		t.Fatalf("列表：%+v", rows)
+	}
+}
+
+func TestCatalogClosedByCombos(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "a.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+	save := func(name, src string) {
+		t.Helper()
+		if _, err := SaveProfile(ctx, db, name, Edit{Source: &src}, "u1"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// 一条组合档案都没有：候选就是唯一的执行者裸名。
+	ids, err := Catalog(ctx, db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(ids, []string{"dsh"}) {
+		t.Fatalf("没配组合时应列执行者裸名：%v", ids)
+	}
+	save("combos/dsh+deepseek/deepseek-v4", "---\nmodel: deepseek/deepseek-v4\n---\n")
+	// 配了组合就是封闭池：只列这些组合，执行者裸名退出候选。
+	ids, err = Catalog(ctx, db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(ids, []string{"dsh+deepseek/deepseek-v4"}) {
+		t.Fatalf("配了组合应封闭：%v", ids)
+	}
+	// 点名不受封闭影响：写死执行者与技能的优先执行者都不经过目录。
+	if _, err := Resolve(ctx, db, "dsh"); err != nil {
+		t.Fatalf("点名的执行者仍应能解析：%v", err)
+	}
+	// 组合删光又回到执行者裸名。
+	if _, err := SaveProfile(ctx, db, "combos/dsh+deepseek/deepseek-v4", Edit{Delete: true}, "u1"); err != nil {
+		t.Fatal(err)
+	}
+	ids, err = Catalog(ctx, db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(ids, "dsh") {
+		t.Fatalf("删掉组合后应回到执行者裸名：%v", ids)
 	}
 }
 
@@ -550,78 +426,53 @@ func TestClassify(t *testing.T) {
 		kind  string
 		reset time.Time
 	}{
-		{"codex 额度", 1, "working\nERROR: You've hit your usage limit. Try again in ~90 min.\n", SignalQuota, now.Add(90 * time.Minute)},
-		{"codex --json 额度", 1, `{"type":"turn.started"}` + "\n" + `{"type":"turn.failed","error":{"message":"You've hit your usage limit. Try again in ~5 min."}}`, SignalQuota, now.Add(5 * time.Minute)},
-		{"claude 额度", 1, `{"type":"result","is_error":true,"result":"Claude AI usage limit reached|resets 3pm (UTC)"}`, SignalQuota, time.Date(2026, 9, 29, 15, 0, 0, 0, time.UTC)},
+		{"额度带恢复间隔", 1, "working\nERROR: You've hit your usage limit. Try again in ~90 min.\n", SignalQuota, now.Add(90 * time.Minute)},
 		{"429", 1, "Error: HTTP/1.1 429 Too Many Requests\nretry-after: 30\n", SignalQuota, now.Add(30 * time.Second)},
-		{"正文提到额度不算", 1, `{"type":"assistant","message":{"content":[{"type":"text","text":"usage limit reached"}]}}`, SignalTransient, time.Time{}},
+		{"dsh 轮次内的额度报文", 1, `{"type":"status","phase":"turn_end","turn":1,"reason":{"kind":"error","error":{"code":"RATE_LIMITED","message":"You've hit your usage limit. Try again in ~5 min."}}}`, SignalQuota, now.Add(5 * time.Minute)},
+		// dsh 的默认 provider（DeepSeek，按 API key 计费）余额不足的真实报文：按额度用尽处置
+		{"dsh 余额不足算额度用尽", 1, `{"type":"status","phase":"turn_end","turn":1,"reason":{"kind":"error","error":{"code":"insufficient_quota","message":"Insufficient Balance"}}}`, SignalQuota, time.Time{}},
+		{"正文提到额度不算", 1, `{"type":"text","text":"usage limit reached"}`, SignalTransient, time.Time{}},
 		{"退出码 0 不判额度", 0, "Error: usage limit reached\n", SignalNone, time.Time{}},
-		// 认不出的出错退出不按措辞分：数不出步骤（通用命令行）或做过事的都按临时错误重试
+		// 认不出的出错退出不按措辞分：数不出步骤（非内置工具）或做过事的都按临时错误重试
 		{"网络", 1, "Error: fetch failed\n", SignalTransient, time.Time{}},
-		{"过载事件", 1, `{"type":"error","error":{"name":"APIError","data":{"message":"Overloaded"}}}`, SignalTransient, time.Time{}},
-		{"容量不足", 1, `{"type":"turn.failed","error":{"message":"Selected model is at capacity. Please try a different model."}}`, SignalTransient, time.Time{}},
-		{"grok 没登录", 1, "Not signed in\n", SignalSetup, time.Time{}},
-		{"claude 没登录", 1, `{"type":"result","is_error":true,"result":"Invalid API key · Please run /login"}`, SignalSetup, time.Time{}},
-		// t942、t954、t970 现场 h3 上 claude 登录过期的原文：报错是一条合成的助手消息，算不得零步骤，报文也不带「请登录」
-		{"claude OAuth 过期没登录", 1, `{"type":"assistant","message":{"model":"<synthetic>","role":"assistant","content":[{"type":"text","text":"Failed to authenticate: OAuth session expired and could not be refreshed"}]},"error":"authentication_failed"}` + "\n" +
-			`{"type":"result","subtype":"success","is_error":true,"terminal_reason":"api_error","result":"Failed to authenticate: OAuth session expired and could not be refreshed"}`, SignalSetup, time.Time{}},
-		// t951 现场 h1 上 claude 登录被吊销的原文
-		{"claude OAuth 吊销没登录", 1, `{"type":"result","subtype":"success","is_error":true,"api_error_status":401,"result":"Failed to authenticate: OAuth token revoked. Please log in again or contact your administrator."}`, SignalSetup, time.Time{}},
-		// t415 现场 h3 上 kimi 没登录的原文：报错之后还跟着一行 libuv 崩溃，退出码是 Windows 的 0xC0000409
-		{"kimi 没登录", 3221226505, "error: failed to run prompt: auth.login_required: OAuth provider \"managed:kimi-code\" requires login before it can be used.\nSee log: C:/Users/CPCli/.kimi-code/logs/kimi-code.log\nAssertion failed: !(handle->flags & UV_HANDLE_CLOSING), file src\\win\\async.c, line 76\n", SignalSetup, time.Time{}},
+		{"过载事件", 1, `{"type":"error","message":"Overloaded"}`, SignalTransient, time.Time{}},
+		{"容量不足", 1, `{"type":"error","message":"Selected model is at capacity. Please try a different model."}`, SignalTransient, time.Time{}},
+		{"没登录（纯文本）", 1, "Not signed in\n", SignalSetup, time.Time{}},
+		// dsh 的默认 provider key 失效（Authentication Fails…api key is invalid）按没登录处置，不当临时错误反复重试
+		{"dsh key 失效算没登录", 1, `{"type":"error","message":"Error: Authentication Fails, Your api key is invalid"}`, SignalSetup, time.Time{}},
 		{"退出码 0 不判没登录", 0, "Not signed in\n", SignalNone, time.Time{}},
-		// t392 现场 h3 上 codex 的 Node 版本管理器没选版本的原文
 		{"Node 没选版本", 1, "No active Node.js version is configured\n", SignalSetup, time.Time{}},
-		{"zsh 找不到命令", 127, "zsh: command not found: codex\n", SignalSetup, time.Time{}},
-		{"bash 找不到命令", 127, "bash: line 1: codex: command not found\n", SignalSetup, time.Time{}},
-		{"dash 找不到命令", 127, "/bin/sh: 1: codex: not found\n", SignalSetup, time.Time{}},
+		{"zsh 找不到命令", 127, "zsh: command not found: mytool\n", SignalSetup, time.Time{}},
+		{"bash 找不到命令", 127, "bash: line 1: mytool: command not found\n", SignalSetup, time.Time{}},
+		{"dash 找不到命令", 127, "/bin/sh: 1: mytool: not found\n", SignalSetup, time.Time{}},
 		{"shebang 找不到 node", 127, "env: node: No such file or directory\n", SignalSetup, time.Time{}},
-		{"Windows 找不到命令", 1, "'codex' 不是内部或外部命令，也不是可运行的程序\n或批处理文件。\n", SignalSetup, time.Time{}},
-		{"Windows 英文找不到命令", 1, "'codex' is not recognized as an internal or external command,\noperable program or batch file.\n", SignalSetup, time.Time{}},
-		{"拉起子进程 ENOENT", 1, "Error: spawn codex ENOENT\n    at ChildProcess._handle.onexit (node:internal/child_process:285:19)\n", SignalSetup, time.Time{}},
-		{"Go 找不到可执行文件", 1, `exec: "codex": executable file not found in $PATH` + "\n", SignalSetup, time.Time{}},
+		{"Windows 找不到命令", 1, "'mytool' 不是内部或外部命令，也不是可运行的程序\n或批处理文件。\n", SignalSetup, time.Time{}},
+		{"Windows 英文找不到命令", 1, "'mytool' is not recognized as an internal or external command,\noperable program or batch file.\n", SignalSetup, time.Time{}},
+		{"拉起子进程 ENOENT", 1, "Error: spawn mytool ENOENT\n    at ChildProcess._handle.onexit (node:internal/child_process:285:19)\n", SignalSetup, time.Time{}},
+		{"Go 找不到可执行文件", 1, `exec: "mytool": executable file not found in $PATH` + "\n", SignalSetup, time.Time{}},
 		{"退出码 0 不判缺运行环境", 0, "zsh: command not found: rg\n", SignalNone, time.Time{}},
 		{"读不到文件不算缺运行环境", 1, "Error: ENOENT: no such file or directory, open 'a.txt'\n", SignalTransient, time.Time{}},
-		// t330 现场 agy 里 Claude 模型撞额度的原文（#543）
-		{"agy Claude 模型额度", 1, "API error (attempt 5): RESOURCE_EXHAUSTED (code 429): Individual quota reached. Resets in 2h57m45s\n", SignalQuota, now.Add(2*time.Hour + 57*time.Minute + 45*time.Second)},
-		// t349、t352 现场 agy+gemini-3.8-flash-high 的收尾：没有 RESOURCE_EXHAUSTED、没有恢复时刻
-		{"agy Individual quota reached", 1, `{"event":"result","result":{"status":"ERROR","error":"Individual quota reached"}}`, SignalQuota, time.Time{}},
+		{"RESOURCE_EXHAUSTED 带恢复时长", 1, "API error (attempt 5): RESOURCE_EXHAUSTED (code 429): Individual quota reached. Resets in 2h57m45s\n", SignalQuota, now.Add(2*time.Hour + 57*time.Minute + 45*time.Second)},
 		{"纯文本 quota reached", 1, "Individual quota reached\n", SignalQuota, time.Time{}},
 		{"quota 在后", 1, "Error: You exceeded your current quota, please check your plan\n", SignalQuota, time.Time{}},
-		{"下划线连写", 1, `{"type":"error","error":{"code":"quota_exceeded"}}`, SignalQuota, time.Time{}},
+		{"下划线连写", 1, "Error: quota_exceeded\n", SignalQuota, time.Time{}},
 		{"限定词 limit 在前", 1, "Error: Rate limit hit\n", SignalQuota, time.Time{}},
 		{"上下文 limit 不算额度", 1, "Error: context limit reached\n", SignalTransient, time.Time{}},
 		{"余额不足", 1, "Error: insufficient balance\n", SignalQuota, time.Time{}},
 		{"负载均衡器不算余额", 1, "Error: load balancer exhausted retries\n", SignalTransient, time.Time{}},
 		{"单词里的 hit 不算", 1, "Error: whitelist quota config missing\n", SignalTransient, time.Time{}},
-		{"agy 结果事件里的额度", 1, `{"event":"result","result":{"status":"ERROR","error":"RESOURCE_EXHAUSTED (code 429): Individual quota reached. Resets in 12m"}}`, SignalQuota, now.Add(12 * time.Minute)},
-		// t865 现场 h1 上 codex 的真实报文：报文自带绝对恢复时刻「try again at Oct 10th, 2026 9:14 AM」
-		{"codex 额度带绝对恢复时刻", 1, `{"type":"error","message":"You’ve hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at Oct 10th, 2026 9:14 AM."}` + "\n" +
-			`{"type":"turn.failed","error":{"message":"You’ve hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at Oct 10th, 2026 9:14 AM."}}`,
-			SignalQuota, time.Date(2026, 10, 10, 9, 14, 0, 0, time.UTC)},
-		// t942 现场 h1 上 kimi 的真实报文：报文声明 5 小时窗口、没写具体时刻，按窗口算恢复
-		{"kimi 额度五小时窗口", 1, "error: failed to run prompt: provider.api_error: 403 You've reached your 5-hour usage limit. Your quota will reset when the current 5-hour window ends. To continue now, purchase extra usage or upgrade your plan: https://www.kimi.com/membership/subscription?tab=quota\n" +
-			"See log: C:/Users/CPCli/.kimi-code/logs/kimi-code.log\n", SignalQuota, now.Add(5 * time.Hour)},
-		// t342 现场 agy 不认不带强度的模型名的原文（#563）
-		{"agy 模型名无效", 1, `invalid model selection (--model "gemini-3.8-flash" --effort "")` + "\n", SignalModel, time.Time{}},
-		{"claude 模型不存在", 1, `{"type":"result","is_error":true,"result":"There's an issue with the selected model (claude-nope). It may not exist or you may not have access to it."}`, SignalModel, time.Time{}},
-		{"codex 模型不支持", 1, "ERROR: The 'gpt-nope' model is not supported when using Codex with a ChatGPT account.\n", SignalModel, time.Time{}},
+		{"模型名无效（不给强度）", 1, `invalid model selection (--model "gemini-3.8-flash" --effort "")` + "\n", SignalModel, time.Time{}},
+		// dsh 报「选的模型有问题」的报文
+		{"dsh 模型不存在", 1, `{"type":"status","phase":"turn_end","turn":1,"reason":{"kind":"error","error":{"code":"MODEL","message":"There's an issue with the selected model (dsh-nope). It may not exist or you may not have access to it."}}}`, SignalModel, time.Time{}},
+		{"模型不支持", 1, "ERROR: The 'gpt-nope' model is not supported when using this account.\n", SignalModel, time.Time{}},
 		{"退出码 0 不判模型名", 0, "invalid model selection\n", SignalNone, time.Time{}},
 		{"继续跟进、没有报错收尾不判", ExitUnknown, "Error: fetch failed\n", SignalNone, time.Time{}},
-		{"继续跟进、报错收尾照判", ExitUnknown, `{"type":"turn.failed","error":{"message":"stream disconnected before completion"}}`, SignalTransient, time.Time{}},
-		{"继续跟进、报错收尾是额度", ExitUnknown, `{"type":"turn.failed","error":{"message":"You've hit your usage limit. Try again in ~5 min."}}`, SignalQuota, now.Add(5 * time.Minute)},
-		{"之后正常收尾", 1, "Error: fetch failed\n" + `{"type":"result","is_error":false,"stop_reason":"end_turn"}`, SignalNone, time.Time{}},
-		{"思考耗尽", 0, `{"type":"step_finish","part":{"reason":"length","tokens":{"reasoning":32000,"output":0}}}`, SignalThinking, time.Time{}},
-		{"长度用尽但有正文", 0, `{"type":"step_finish","part":{"reason":"length","tokens":{"reasoning":100,"output":900}}}`, SignalNone, time.Time{}},
 		// dsh 的终稿（final）无论成败都写，成败看 turn_end 的 reason：中止的按做过事之后出错退出重试
 		{"dsh 收尾被中止", 1, `{"type":"status","phase":"turn_end","turn":1,"reason":{"kind":"aborted"}}` + "\n" + `{"type":"final","text":""}`, SignalTransient, time.Time{}},
 		{"dsh 继续跟进、报错收尾照判", ExitUnknown, `{"type":"status","phase":"turn_end","turn":1,"reason":{"kind":"aborted"}}`, SignalTransient, time.Time{}},
-		{"dsh 轮次内的额度报文", 1, `{"type":"status","phase":"turn_end","turn":1,"reason":{"kind":"error","error":{"code":"RATE_LIMITED","message":"You've hit your usage limit. Try again in ~5 min."}}}`, SignalQuota, now.Add(5 * time.Minute)},
+		{"dsh 继续跟进、报错收尾是额度", ExitUnknown, `{"type":"status","phase":"turn_end","turn":1,"reason":{"kind":"error","error":{"code":"RATE_LIMITED","message":"You've hit your usage limit. Try again in ~5 min."}}}`, SignalQuota, now.Add(5 * time.Minute)},
+		{"之后正常收尾", 1, "Error: fetch failed\n" + `{"type":"status","phase":"turn_end","turn":1,"reason":{"kind":"completed"}}`, SignalNone, time.Time{}},
 		{"dsh 正常收尾不判", 1, `{"type":"status","phase":"turn_end","turn":1,"reason":{"kind":"completed"}}` + "\n" + `{"type":"final","text":"好了"}`, SignalNone, time.Time{}},
-		// dsh 的默认 provider（DeepSeek，按 API key 计费）两种真实报文：余额不足按额度用尽处置；
-		// key 失效（Authentication Fails…api key is invalid）按没登录处置，不当临时错误反复重试。
-		{"dsh 余额不足算额度用尽", 1, `{"type":"status","phase":"turn_end","turn":1,"reason":{"kind":"error","error":{"code":"insufficient_quota","message":"Insufficient Balance"}}}`, SignalQuota, time.Time{}},
-		{"dsh key 失效算没登录", 1, `{"type":"error","message":"Error: Authentication Fails, Your api key is invalid"}`, SignalSetup, time.Time{}},
 	}
 	for _, c := range cases {
 		s := Classify(c.code, "", LogTail{Text: c.tail}, now)
@@ -646,32 +497,25 @@ func TestClassify(t *testing.T) {
 // 报文认不出的出错退出按行为判：一步没做的算零步骤出错退出，做过事的不算。样本是现场日志尾巴的写法。
 func TestClassifyNoStart(t *testing.T) {
 	now := time.Date(2026, 9, 30, 10, 0, 0, 0, time.UTC)
-	read := func(f string) string {
-		b, err := os.ReadFile(f)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return string(b)
-	}
-	// t497、t535 现场：opencode 交给工具的模型名少了 opencode-go/ 前缀，1～2 秒退出码 1，日志只有这一行
-	unknown := `{"type":"error","timestamp":1790730960000,"sessionID":"ses_2f1c9a7e0ffeYk3QpLx8Rm1Vb","error":{"name":"UnknownError","data":{"message":"Unexpected server error"}}}` + "\n"
+	// dsh 只报了一条出错事件、一步没做（现场：拉起 1～2 秒就退出码 1）
+	unknown := `{"type":"error","message":"UnknownError: Unexpected server error"}` + "\n"
+	// 干过活之后才出错退出：日志尾巴里有工具调用，不算零步骤
+	worked := `{"type":"tool_call","callId":"c1","tool":"bash","input":{"command":"ls"}}` + "\n" +
+		`{"type":"error","message":"stream disconnected before completion"}` + "\n"
 	cases := []struct {
 		name, worker string
 		code         int
 		tail, kind   string
 		cut          bool
 	}{
-		{"opencode UnknownError 零步骤", "opencode+deepseek-v4.1-flash", 1, unknown, SignalNoStart, false},
-		// t392 codex+gpt-6-sol 在 h3、h1 各一次退出码 1：原日志没拿到，按 codex 的事件写成开了线程、一步没做
-		{"codex 零步骤退出码 1", "codex+gpt-6-sol", 1, `{"type":"thread.started","thread_id":"0199a213-81c0-7800-8aa1-bbab2a035a53"}` + "\n" + `{"type":"turn.started"}` + "\n", SignalNoStart, false},
-		{"日志是空的", "codex+gpt-6-sol", 1, "", SignalNoStart, false},
-		{"干了活之后退出码 1 按临时错误重试", "opencode+deepseek-v4.1-flash", 1, read("testdata/opencode-sample.jsonl") + unknown, SignalTransient, false},
-		{"agy 做了 23 步后退出码 1 按临时错误重试", "agy+gemini-3.8-flash-high", 1, read("testdata/agy-t349.jsonl"), SignalTransient, false},
-		{"退出码 0 不判", "opencode+deepseek-v4.1-flash", 0, unknown, SignalNone, false},
-		{"继续跟进拿不到退出码不判", "opencode+deepseek-v4.1-flash", ExitUnknown, unknown, SignalNone, false},
-		{"通用命令行数不出步骤，按临时错误重试", "mycli", 1, "boom\n", SignalTransient, false},
-		{"日志比尾巴长、尾巴里数不出步骤，按临时错误重试", "opencode+deepseek-v4.1-flash", 1, unknown, SignalTransient, true},
-		{"认得出的原因照原因判", "opencode+deepseek-v4.1-flash", 1, `{"type":"result","is_error":true,"result":"Invalid API key · Please run /login"}`, SignalSetup, false},
+		{"dsh 零步骤退出码 1", "dsh+deepseek-v4.1-flash", 1, unknown, SignalNoStart, false},
+		{"日志是空的", "dsh", 1, "", SignalNoStart, false},
+		{"干了活之后退出码 1 按临时错误重试", "dsh+deepseek-v4.1-flash", 1, worked, SignalTransient, false},
+		{"退出码 0 不判", "dsh", 0, unknown, SignalNone, false},
+		{"继续跟进拿不到退出码不判", "dsh", ExitUnknown, unknown, SignalNone, false},
+		{"数不出步骤，按临时错误重试", "mycli", 1, "boom\n", SignalTransient, false},
+		{"日志比尾巴长、尾巴里数不出步骤，按临时错误重试", "dsh", 1, unknown, SignalTransient, true},
+		{"认得出的原因照原因判", "dsh", 1, `{"type":"error","message":"Error: Authentication Fails, Your api key is invalid"}`, SignalSetup, false},
 	}
 	for _, c := range cases {
 		s := Classify(c.code, c.worker, LogTail{Text: c.tail, Cut: c.cut}, now)
@@ -679,79 +523,41 @@ func TestClassifyNoStart(t *testing.T) {
 			t.Errorf("%s：得到 %+v", c.name, s)
 		}
 	}
-	if s := Classify(1, "opencode+deepseek-v4.1-flash", LogTail{Text: unknown}, now); !strings.Contains(s.Evidence, "UnknownError") || !strings.Contains(s.Reason, "退出码 1") {
+	if s := Classify(1, "dsh", LogTail{Text: unknown}, now); !strings.Contains(s.Evidence, "UnknownError") || !strings.Contains(s.Reason, "退出码 1") {
 		t.Errorf("证据应是那行报错、原因带退出码：%+v", s)
 	}
-	// 从日志尾巴一路判到标记：三段现场样本都标「工具+模型@机器」且到期解除，干了活的不标
-	agyQuota := `{"event":"result","result":{"status":"ERROR","error":"Individual quota reached"}}`
+	// 从日志尾巴一路判到标记：零步骤与起不来的都标「工具[+模型]@机器」，干了活的不标
 	marks := []struct {
 		worker, tail, target string
+		until                int64
 		ok                   bool
 	}{
-		{"opencode+deepseek-v4.1-flash", unknown, "opencode+deepseek-v4.1-flash@h1", true},
-		{"agy+gemini-3.8-flash-high", agyQuota, "agy+gemini-3.8-flash-high@h1", true},
-		{"codex+gpt-6-sol", `{"type":"turn.started"}`, "codex+gpt-6-sol@h1", true},
-		{"opencode+deepseek-v4.1-flash", read("testdata/opencode-sample.jsonl") + unknown, "", false},
+		{"dsh+deepseek-v4.1-flash", unknown, "dsh+deepseek-v4.1-flash@h1", now.Add(Hold).UnixMilli(), true},
+		{"dsh", `{"type":"error","message":"Error: Authentication Fails, Your api key is invalid"}`, "dsh@h1", 0, true},
+		{"dsh+deepseek-v4.1-flash", worked, "", 0, false},
 	}
 	for _, c := range marks {
 		w, _ := ParseWorker(c.worker)
 		m, ok := MarkOf(Classify(1, c.worker, LogTail{Text: c.tail}, now), w, "h1", now)
-		if ok != c.ok || (ok && (m.Target() != c.target || m.Until != now.Add(Hold).UnixMilli())) {
+		if ok != c.ok || (ok && (m.Target() != c.target || m.Until != c.until)) {
 			t.Errorf("%s：%v %+v", c.worker, ok, m)
 		}
 	}
 }
 
-// grok 把报文放在收尾 result 事件的 errors 数组里：t919（h3，CLI 1.0.5 被服务端拒收）与 t995、t927（余额用尽）现场日志的写法。
-func TestClassifyGrokErrors(t *testing.T) {
-	now := time.Date(2026, 10, 3, 18, 35, 0, 0, time.UTC)
-	result := func(msg string) string {
-		return `{"type":"system","subtype":"init","apiKeySource":"oauth","model":"grok-4.6","cwd":"/w"}` + "\n" +
-			`{"type":"result","subtype":"error_during_execution","is_error":true,"num_turns":0,"usage":{"input_tokens":0,"output_tokens":0},"errors":["Internal error: {\n  \"message\": \"` + msg + `\",\n  \"http_status\": 4xx\n}"]}` + "\n" +
-			"Error: Internal error: {\n  \"message\": \"" + msg + "\",\n  \"http_status\": 4xx\n}\n"
-	}
-	cases := []struct {
-		name, tail, kind, reason, evidence, target string
-		until                                      int64
-	}{
-		{"余额用尽", result("API error (status 402 Payment Required): Grok Build usage balance exhausted"),
-			SignalQuota, "额度用尽", "usage balance exhausted", "grok@h3", now.Add(Hold).UnixMilli()},
-		{"CLI 版本过旧", result("API error (status 426 Upgrade Required): Your Grok CLI version (1.0.5) is outdated. Please update to version 1.0.13 or later via `grok update` or the installation documentation."),
-			SignalSetup, "工具版本过旧", "Your Grok CLI version (1.0.5) is outdated", "grok@h3", 0},
-		{"别的报错仍按零步骤出错退出", result("API error (status 500): Internal Server Error"),
-			SignalNoStart, "零步骤出错退出（退出码 1，原因不明）", "status 500", "grok@h3", now.Add(Hold).UnixMilli()},
-	}
-	for _, c := range cases {
-		s := Classify(1, "grok", LogTail{Text: c.tail}, now)
-		if s.Kind != c.kind || s.Reason != c.reason || !strings.Contains(s.Evidence, c.evidence) || strings.Contains(s.Evidence, "\n") {
-			t.Errorf("%s：得到 %+v", c.name, s)
-			continue
-		}
-		m, ok := MarkOf(s, Spec{Tool: "grok"}, "h3", now)
-		if !ok || m.Target() != c.target || m.Until != c.until {
-			t.Errorf("%s：标记 %v %+v", c.name, ok, m)
-		}
-	}
-}
-
-// pi 撞了 429 仍以 agent_settled 收尾、退出码 0（t1006 现场）：报错只在 assistant 的 message_end 里，
-// 收尾的 agent_end 一行带整场对话，把它挤出 Tail 的尾巴。要读整份日志（ReadTrace）才认得出。
-func TestReportedSignalPiError(t *testing.T) {
+// dsh 在自己的出错事件里报了错、之后没写终稿：报错行被后面一大段输出挤出 Tail 的尾巴，
+// Classify（退出码 0）判不出，要读整份日志（ReadTrace）才认得出，走 ReportedSignal。
+func TestReportedSignalDshError(t *testing.T) {
 	now := time.Date(2026, 10, 3, 19, 25, 0, 0, time.UTC)
-	zero := `"usage":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"totalTokens":0,"cost":{"total":0}}`
-	piLog := func(msg string) string {
-		end := `{"type":"message_end","message":{"role":"assistant","content":[],"provider":"opencode-go","model":"glm-5.3-flash",` + zero + `,"stopReason":"error","errorMessage":` + strconv.Quote(msg) + `}}`
-		return `{"type":"session","version":3,"id":"s1","cwd":"/w"}` + "\n" + `{"type":"agent_start"}` + "\n" + end + "\n" +
-			`{"type":"agent_end","messages":[{"role":"system","content":"` + strings.Repeat("x", TailBytes+1024) + `"}]}` + "\n" +
-			`{"type":"agent_settled"}` + "\n"
+	dshLog := func(msg string) string {
+		return `{"type":"session","sessionId":"session-s1","cwd":"/w"}` + "\n" +
+			`{"type":"error","message":` + strconv.Quote(msg) + `}` + "\n" +
+			`{"type":"text","text":"` + strings.Repeat("x", TailBytes+1024) + `"}` + "\n"
 	}
 	cases := []struct{ name, log, kind, reason string }{
-		{"429 额度", piLog(`429: {"type":"GoUsageLimitError","message":"Go usage limit exceeded"}`), SignalQuota, "额度用尽"},
-		{"没登录", piLog("Not logged in. Please run /login"), SignalSetup, "没登录"},
-		{"认不出照旧空转", piLog("500 Internal Server Error"), SignalNoStart, "静默空转：完整零 usage，且无有效动作或产出"},
-		{"之后有正常回复的不算", strings.Replace(piLog("429: Go usage limit exceeded"), `{"type":"agent_end"`,
-			`{"type":"message_end","message":{"role":"assistant","content":[],`+zero+`,"stopReason":"stop"}}`+"\n"+`{"type":"agent_end"`, 1),
-			SignalNoStart, "静默空转：完整零 usage，且无有效动作或产出"},
+		{"额度", dshLog("Error: You've hit your usage limit."), SignalQuota, "额度用尽"},
+		{"没登录", dshLog("Error: Authentication Fails, Your api key is invalid"), SignalSetup, "没登录"},
+		{"认不出照旧空转", dshLog("500 Internal Server Error"), SignalNoStart, "静默空转：完整零 usage，且无有效动作或产出"},
 	}
 	for _, c := range cases {
 		path := filepath.Join(t.TempDir(), "run-1.log")
@@ -762,15 +568,15 @@ func TestReportedSignalPiError(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if s := Classify(0, "pi", tail, now); s.Kind != SignalNone {
+		if s := Classify(0, "dsh", tail, now); s.Kind != SignalNone {
 			t.Errorf("%s：退出码 0 时 Classify 应判不出，得到 %+v", c.name, s)
 		}
-		tr, err := ReadTrace("pi", path)
+		tr, err := ReadTrace("dsh", path)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !Silent(tr, false) {
-			t.Errorf("%s：应判静默空转，Trace %+v", c.name, tr)
+		if tr.Error == "" {
+			t.Errorf("%s：应读到执行者自己报的错", c.name)
 			continue
 		}
 		s, ok := ReportedSignal(tr.Error, now)
@@ -787,22 +593,17 @@ func TestReportedSignalPiError(t *testing.T) {
 func TestClassifyPicksReport(t *testing.T) {
 	now := time.Date(2026, 9, 30, 14, 21, 0, 0, time.UTC)
 	dir := t.TempDir()
-	read := func(f string) string {
-		b, err := os.ReadFile(f)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return string(b)
-	}
-	// codex 做过事、退出时打的收尾噪音（t744 现场那一行的写法）
-	noise := "2026-09-30T14:21:07.512345Z ERROR codex_core::session: failed to record rollout items: thread 0199e0a1-5c2d-7a13-9f4e-3b8d2c6a1e70 not found\n"
-	worked := read("testdata/codex-sample.jsonl")
+	worked := `{"type":"session","sessionId":"session-s1","cwd":"/w"}` + "\n" +
+		`{"type":"tool_call","callId":"c1","tool":"bash","input":{"command":"cat signals.go"}}` + "\n" +
+		`{"type":"tool_result","callId":"c1","status":"completed","result":"ok"}` + "\n"
+	noise := "warning: failed to record rollout items: thread 0199e0a1 not found\n"
 	failed := func(msg string) string {
-		return `{"type":"error","message":"` + msg + `"}` + "\n" + `{"type":"turn.failed","error":{"message":"` + msg + `"}}` + "\n" + noise
+		return `{"type":"error","message":` + strconv.Quote(msg) + `}` + "\n" + noise
 	}
-	// t696：一条超长的工具输出跨过尾巴开头，截断的半行里有额度字样，之后没有别的报错行
-	long := `{"type":"item.completed","item":{"id":"item_9","type":"command_execution","command":"cat signals.go","aggregated_output":"` +
-		strings.Repeat("a", TailBytes-40) + ` Error: rate limit exceeded ` + strings.Repeat("b", 60) + `","exit_code":0,"status":"completed"}}` + "\n"
+	// 一条超长的工具输出跨过尾巴开头，截断的半行里有额度字样，之后没有别的报错行
+	long := `{"type":"tool_result","callId":"c2","status":"completed","result":"` +
+		strings.Repeat("a", TailBytes-40) + ` Error: rate limit exceeded ` + strings.Repeat("b", 60) + `"}` + "\n"
+	more := `{"type":"tool_call","callId":"c3","tool":"bash","input":{"command":"ls"}}` + "\n"
 	cases := []struct {
 		name, worker, log string
 		code              int
@@ -810,13 +611,13 @@ func TestClassifyPicksReport(t *testing.T) {
 		cut               bool
 		reset             time.Time
 	}{
-		// t744 第 1 次拉起（codex@h1）日志末尾：容量报错之后是收尾噪音
-		{"t744 容量报错被收尾噪音跟着", "codex+gpt-6-sol", read("testdata/codex-t744-run1-tail.txt"), 1, SignalTransient, "at capacity", false, time.Time{}},
-		{"t696 截断半行里的额度字样不算", "codex+gpt-6-sol", worked + long + `{"type":"turn.started"}` + "\n", 1, SignalTransient, "", true, time.Time{}},
-		{"额度报错被收尾噪音跟着", "codex+gpt-6-sol", worked + failed("You've hit your usage limit. Try again in ~90 min."), 1, SignalQuota, "usage limit", false, now.Add(90 * time.Minute)},
-		{"没登录被收尾噪音跟着", "codex+gpt-6-sol", worked + failed("Not signed in. Please run codex login."), 1, SignalSetup, "Not signed in", false, time.Time{}},
-		{"模型名无效被收尾噪音跟着", "codex+gpt-6-sol", failed("The 'gpt-nope' model is not supported when using Codex with a ChatGPT account."), 1, SignalModel, "gpt-nope", false, time.Time{}},
-		{"截断之后仍认额度", "codex+gpt-6-sol", long + failed("You've hit your usage limit. Try again in ~90 min."), 1, SignalQuota, "usage limit", true, now.Add(90 * time.Minute)},
+		// 容量报错之后跟一条收尾噪音：不得盖过出错事件
+		{"容量报错被收尾噪音跟着", "dsh", worked + failed("Selected model is at capacity. Please try a different model."), 1, SignalTransient, "at capacity", false, time.Time{}},
+		{"截断半行里的额度字样不算", "dsh", worked + long + more, 1, SignalTransient, "", true, time.Time{}},
+		{"额度报错被收尾噪音跟着", "dsh", worked + failed("You've hit your usage limit. Try again in ~90 min."), 1, SignalQuota, "usage limit", false, now.Add(90 * time.Minute)},
+		{"没登录被收尾噪音跟着", "dsh", worked + failed("Not signed in. Please run dsh login."), 1, SignalSetup, "Not signed in", false, time.Time{}},
+		{"模型名无效被收尾噪音跟着", "dsh", worked + failed("The 'gpt-nope' model is not supported when using this account."), 1, SignalModel, "gpt-nope", false, time.Time{}},
+		{"截断之后仍认额度", "dsh", long + failed("You've hit your usage limit. Try again in ~90 min."), 1, SignalQuota, "usage limit", true, now.Add(90 * time.Minute)},
 	}
 	for i, c := range cases {
 		path := filepath.Join(dir, fmt.Sprintf("run-%d.log", i))
@@ -841,84 +642,30 @@ func TestClassifyPicksReport(t *testing.T) {
 }
 
 func TestEnded(t *testing.T) {
-	claude, _ := Builtin("claude")
-	agy, _ := Builtin("agy")
-	codex, _ := Builtin("codex")
-	pi, _ := Builtin("pi")
 	dsh, _ := Builtin("dsh")
 	cases := []struct {
-		a     *Driver
 		tail  string
 		known bool
 		ok    bool
 	}{
-		{claude, `{"type":"result","is_error":false,"result":"done"}`, true, true},
-		{claude, `{"type":"result","is_error":true,"subtype":"error_max_turns"}`, true, false},
-		{claude, `{"type":"assistant"}`, false, false},
-		{agy, `{"event":"result","result":{"status":"ERROR","error":"boom"}}`, true, false},
-		{codex, "anything", false, false},
-		{codex, `{"type":"item.completed","item":{"type":"agent_message","text":"好了"}}` + "\n" + `{"type":"turn.completed","usage":{}}`, true, true},
-		{codex, `{"type":"turn.failed","error":{"message":"boom"}}`, true, false},
-		{pi, `{"type":"agent_settled"}`, true, true},
-		{pi, `{"type":"auto_retry_end","success":false,"finalError":"upstream service timeout"}`, true, false},
-		{pi, `{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"跑完了"}]}}`, false, false},
-		// dsh：终稿（final）无论成败都写，所以先认到 turn_end 的一行才算收尾
-		{dsh, `{"type":"status","phase":"turn_end","turn":1,"reason":{"kind":"completed"}}` + "\n" + `{"type":"final","text":"好了"}`, true, true},
-		{dsh, `{"type":"status","phase":"turn_end","turn":1,"reason":{"kind":"aborted"}}` + "\n" + `{"type":"final","text":""}`, true, false},
-		{dsh, `{"type":"status","phase":"turn_end","turn":1,"reason":{"kind":"error","error":{"code":"X","message":"boom"}}}`, true, false},
-		{dsh, `{"type":"status","phase":"step_end","turn":1,"usage":{"inputTokens":1}}`, false, false},
+		// dsh：终稿（final）无论成败都写，所以先认到 turn_end 的一行才算收尾，成败看 reason
+		{`{"type":"status","phase":"turn_end","turn":1,"reason":{"kind":"completed"}}` + "\n" + `{"type":"final","text":"好了"}`, true, true},
+		{`{"type":"status","phase":"turn_end","turn":1,"reason":{"kind":"aborted"}}` + "\n" + `{"type":"final","text":""}`, true, false},
+		{`{"type":"status","phase":"turn_end","turn":1,"reason":{"kind":"error","error":{"code":"X","message":"boom"}}}`, true, false},
+		{`{"type":"status","phase":"step_end","turn":1,"usage":{"inputTokens":1}}`, false, false},
+		{`{"type":"final","text":"好了"}`, false, false},
 	}
 	for _, c := range cases {
-		e := c.a.Ended(c.tail)
+		e := dsh.Ended(c.tail)
 		if e.Known != c.known || e.OK != c.ok {
-			t.Errorf("%s %q → %+v", c.a.Tool, c.tail, e)
+			t.Errorf("%q → %+v", c.tail, e)
 		}
-	}
-	if s := claude.SessionOf(`{"type":"system","subtype":"init","cwd":"/x","session_id":"0123abcd-0123-0123-0123-0123456789ab"}`); s != "0123abcd-0123-0123-0123-0123456789ab" {
-		t.Errorf("会话 id：%q", s)
-	}
-	if s := codex.SessionOf(`{"type":"thread.started","thread_id":"0199a213-81c0-7800-8aa1-bbab2a035a53"}`); s != "0199a213-81c0-7800-8aa1-bbab2a035a53" {
-		t.Errorf("codex 会话 id：%q", s)
-	}
-	if r := codex.LastReply(`{"type":"item.completed","item":{"id":"item_3","type":"agent_message","text":"审阅结论：通过"}}` + "\n" + `{"type":"turn.completed"}`); r != "审阅结论：通过" {
-		t.Errorf("codex 最后回复：%q", r)
-	}
-	if s := pi.SessionOf(`{"type":"session","version":3,"id":"01a0fd13-a325-7380-bb9e-e5468c2deb20","cwd":"/x"}`); s != "01a0fd13-a325-7380-bb9e-e5468c2deb20" {
-		t.Errorf("pi 会话 id：%q", s)
-	}
-	if r := pi.LastReply(`{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"审阅结论：通过"}]}}` + "\n" + `{"type":"agent_settled"}`); r != "审阅结论：通过" {
-		t.Errorf("pi 最后回复：%q", r)
-	}
-	cc, _ := Builtin("command-code")
-	if r := cc.LastReply(`{"type":"assistant","message":{"content":[{"type":"text","text":"中间轮"}]}}` + "\n" + `{"type":"result","subtype":"success","finalText":"交付结论：完成\n审阅结论：通过"}`); r != "交付结论：完成\n审阅结论：通过" {
-		t.Errorf("command-code 最后回复（收尾行 finalText）：%q", r)
 	}
 	if s := dsh.SessionOf(`{"type":"session","sessionId":"session-0123abcd-0123-0123-0123-0123456789ab","cwd":"/x"}`); s != "0123abcd-0123-0123-0123-0123456789ab" {
 		t.Errorf("dsh 会话 id：%q", s)
 	}
 	if r := dsh.LastReply(`{"type":"text","text":"中间轮"}` + "\n" + `{"type":"final","text":"审阅结论：通过"}`); r != "审阅结论：通过" {
 		t.Errorf("dsh 最后回复：%q", r)
-	}
-}
-
-// 「try again at」读出的恢复时刻：过去的、不存在的日期读不出（标记按恢复时间未知处理），不编一个时刻。
-func TestResetAtTryAgainAt(t *testing.T) {
-	now := time.Date(2026, 10, 3, 19, 0, 0, 0, time.UTC)
-	cases := []struct {
-		name, text string
-		want       time.Time
-	}{
-		{"日期加钟点", "try again at Oct 10th, 2026 9:14 AM.", time.Date(2026, 10, 10, 9, 14, 0, 0, time.UTC)},
-		{"月份全拼、下午", "Try again at October 1st, 2027 12:30 PM", time.Date(2027, 10, 1, 12, 30, 0, 0, time.UTC)},
-		{"日期已过", "try again at Oct 1st, 2026 9:14 AM", time.Time{}},
-		{"日期不存在", "try again at Feb 30th, 2027 9:14 AM", time.Time{}},
-		{"月份认不出", "try again at Foo 10th, 2026 9:14 AM", time.Time{}},
-	}
-	for _, c := range cases {
-		got, ok := resetAt(c.text, now)
-		if ok != !c.want.IsZero() || (ok && !got.Equal(c.want)) {
-			t.Errorf("%s：%v %v，应为 %v", c.name, got, ok, c.want)
-		}
 	}
 }
 

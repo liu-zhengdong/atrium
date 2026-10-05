@@ -18,7 +18,6 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/ledger"
 	"github.com/liu-zhengdong/atrium/internal/pause"
 	"github.com/liu-zhengdong/atrium/internal/store"
-	"github.com/liu-zhengdong/atrium/internal/workers"
 )
 
 // 临时数据库、临时 PATH 和假工具：真实自检落库后，现有分派任务循环自动接着派。
@@ -39,34 +38,29 @@ func TestStartupProbeAutoDispatch(t *testing.T) {
 			linkGit(t, bin)
 			t.Setenv("PATH", bin)
 			if installed {
-				file, body := "startupfake", "#!/bin/sh\necho startup-fake-done\n"
-				if runtime.GOOS == "windows" {
-					file, body = "startupfake.cmd", "@echo off\r\necho startup-fake-done\r\n"
-				}
-				if err := os.WriteFile(filepath.Join(bin, file), []byte(body), 0700); err != nil {
-					t.Fatal(err)
-				}
+				installFakeDsh(t, bin)
 			}
 			db, err := store.Open(filepath.Join(dir, "db"))
 			if err != nil {
 				t.Fatal(err)
 			}
 			defer db.Close()
-			env := &app.Env{DB: db, Paths: config.Paths{Data: dir}, Log: slog.New(slog.NewTextHandler(io.Discard, nil)), Pause: &pause.Store{DB: db}}
+			// 用缺省数据目录（<HOME>/.atrium-v2）才不算隔离实例：隔离实例不自动挑内置工具。
+			data := filepath.Join(dir, ".atrium-v2")
+			env := &app.Env{DB: db, Paths: config.Paths{Data: data}, Log: slog.New(slog.NewTextHandler(io.Discard, nil)), Pause: &pause.Store{DB: db}}
+			if err := os.MkdirAll(data, 0700); err != nil {
+				t.Fatal(err)
+			}
 			if err := os.WriteFile(env.Paths.Token(), []byte("test-token"), 0600); err != nil {
 				t.Fatal(err)
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 			defer cancel()
-			source := "---\nprotocol: cli\ncommand: startupfake\ndone_match: startup-fake-done\n---\n"
-			if _, err := workers.SaveProfile(ctx, db, "harness/startupfake", workers.Edit{Source: &source}, "u1"); err != nil {
-				t.Fatal(err)
-			}
 			// 先有旧登记，再走服务启动时的刷新；不能沿用过期的可用事实。
-			if err := hosts.EnsureLocal(ctx, db, hosts.Info{CLIs: map[string]hosts.CLI{"startupfake": {Installed: true}}}); err != nil {
+			if err := hosts.EnsureLocal(ctx, db, hosts.Info{CLIs: map[string]hosts.CLI{"dsh": {Installed: true}}}); err != nil {
 				t.Fatal(err)
 			}
-			if err := hosts.EnsureLocal(ctx, db, hosts.LocalInfo(dir)); err != nil {
+			if err := hosts.EnsureLocal(ctx, db, hosts.LocalInfo(data)); err != nil {
 				t.Fatal(err)
 			}
 			tk, err := ledger.Add(ctx, db, ledger.NewTask{Title: name}, "u1")

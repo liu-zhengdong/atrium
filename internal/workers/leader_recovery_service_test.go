@@ -26,18 +26,28 @@ import (
 )
 
 func TestMain(m *testing.M) {
-	if strings.TrimSuffix(filepath.Base(os.Args[0]), ".exe") == "pi" {
-		os.Exit(fakeLeaderPi())
+	if strings.TrimSuffix(filepath.Base(os.Args[0]), ".exe") == "dsh" {
+		os.Exit(fakeLeaderDsh())
 	}
 	os.Exit(m.Run())
 }
 
-// 本次构建的测试二进制兼作假模型；实际负责人令牌只调用隔离服务。
-func fakeLeaderPi() int {
+// 本次构建的测试二进制兼作假执行者（dsh 形态）：模型写在 --patch 的覆盖层里，
+// 事件按 dsh --json 的逐行格式输出；实际负责人令牌只调用隔离服务。
+func fakeLeaderDsh() int {
 	mode := ""
 	for i, arg := range os.Args {
-		if arg == "--model" && i+1 < len(os.Args) {
-			_, mode, _ = strings.Cut(os.Args[i+1], "/")
+		if arg != "--patch" || i+1 >= len(os.Args) {
+			continue
+		}
+		raw, err := os.ReadFile(os.Args[i+1])
+		if err != nil {
+			continue
+		}
+		for _, line := range strings.Split(string(raw), "\n") {
+			if v, ok := strings.CutPrefix(strings.TrimSpace(line), "model:"); ok {
+				mode = strings.TrimSpace(v)
+			}
 		}
 	}
 	if mode == "quota" {
@@ -50,8 +60,8 @@ func fakeLeaderPi() int {
 		}
 		time.Sleep(time.Second)
 	}
-	fmt.Println(`{"type":"session","id":"fake-leader-session"}`)
-	content := []any{}
+	fmt.Println(`{"type":"session","sessionId":"session-fake","cwd":"/w"}`)
+	say := ""
 	if mode == "good" || mode == "zero-action" || mode == "missing-ack" {
 		info, err := config.ReadService(config.Paths{Data: os.Getenv("ATRIUM_DATA")})
 		if err != nil {
@@ -75,19 +85,22 @@ func fakeLeaderPi() int {
 		if err := c.Do(ctx, "POST", "/api/events/ack", map[string]any{"ids": []int64{2}}, nil); err == nil {
 			return 7
 		}
-		content = append(content, map[string]string{"type": "text", "text": "已处理并确认本批事件"})
+		say = "已处理并确认本批事件"
 	}
-	msg := map[string]any{"role": "assistant", "model": mode, "provider": "fake", "content": content}
 	if mode != "missing" && mode != "missing-ack" {
 		n := 0
 		if mode == "good" {
 			n = 17
 		}
-		msg["usage"] = map[string]int{"input": n, "output": 0, "cacheRead": 0, "cacheWrite": 0}
+		fmt.Printf(`{"type":"status","phase":"step_end","turn":1,"usage":{"inputTokens":%d,"outputTokens":0,"cacheReadTokens":0,"cacheWriteTokens":0}}`+"\n", n)
 	}
-	raw, _ := json.Marshal(map[string]any{"type": "message_end", "message": msg})
+	if say != "" {
+		raw, _ := json.Marshal(map[string]any{"type": "text", "text": say})
+		fmt.Println(string(raw))
+	}
+	fmt.Println(`{"type":"status","phase":"turn_end","turn":1,"reason":{"kind":"completed"}}`)
+	raw, _ := json.Marshal(map[string]any{"type": "final", "text": say})
 	fmt.Println(string(raw))
-	fmt.Println(`{"type":"agent_settled"}`)
 	return 0
 }
 
@@ -111,7 +124,7 @@ func TestLeaderRecoveryServiceEntry(t *testing.T) {
 			if err := os.Mkdir(bin, 0700); err != nil {
 				t.Fatal(err)
 			}
-			fake := filepath.Join(bin, "pi")
+			fake := filepath.Join(bin, "dsh")
 			if runtime.GOOS == "windows" {
 				fake += ".exe"
 			}
@@ -156,7 +169,7 @@ func TestLeaderRecoveryServiceEntry(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			save("harness/pi", "---\ntrust: high\nmax_risk: high\nbilling: subscription\n---\n")
+			save("harness/dsh", "---\ntrust: high\nmax_risk: high\nbilling: subscription\n---\n")
 			first := mode
 			switch mode {
 			case "known-pool", "different-account", "cached-exhausted", "no-candidate", "bounded", "cost":
@@ -164,30 +177,30 @@ func TestLeaderRecoveryServiceEntry(t *testing.T) {
 			case "stopped":
 				first = "stop"
 			}
-			save("combos/pi+aaa", "---\nmodel: fake/"+first+"\n---\n")
+			save("combos/dsh+aaa", "---\nmodel: fake/"+first+"\n---\n")
 			alternate := "good"
 			if mode == "bounded" {
 				alternate = "quota"
 			}
-			save("combos/pi+bbb", "---\nmodel: fake/"+alternate+"\n---\n")
+			save("combos/dsh+bbb", "---\nmodel: fake/"+alternate+"\n---\n")
 			if mode == "no-candidate" {
-				save("combos/pi+bbb", "---\nmodel: fake/good\nauto: false\n---\n")
+				save("combos/dsh+bbb", "---\nmodel: fake/good\nauto: false\n---\n")
 			}
 			if mode == "known-pool" || mode == "different-account" {
-				save("combos/pi+ccc", "---\nmodel: fake/good\n---\n")
+				save("combos/dsh+ccc", "---\nmodel: fake/good\n---\n")
 			}
 			// 防止 Catalog 只写工具名时无意添加另一档；仍能通过显式组合解析。
-			save("harness/pi", "---\ntrust: high\nmax_risk: high\nbilling: subscription\nauto: false\n---\n")
-			save("combos/pi+aaa", "---\nmodel: fake/"+first+"\nauto: true\n---\n")
+			save("harness/dsh", "---\ntrust: high\nmax_risk: high\nbilling: subscription\nauto: false\n---\n")
+			save("combos/dsh+aaa", "---\nmodel: fake/"+first+"\nauto: true\n---\n")
 			if mode != "no-candidate" {
-				save("combos/pi+bbb", "---\nmodel: fake/"+alternate+"\nauto: true\n---\n")
+				save("combos/dsh+bbb", "---\nmodel: fake/"+alternate+"\nauto: true\n---\n")
 			}
 			if mode == "known-pool" || mode == "different-account" {
-				save("combos/pi+ccc", "---\nmodel: fake/good\nauto: true\n---\n")
+				save("combos/dsh+ccc", "---\nmodel: fake/good\nauto: true\n---\n")
 			}
 			if mode == "cost" {
-				save("combos/pi+bbb", "---\nmodel: fake/good\nauto: true\nprices: {currency: USD, input: 2, output: 2, cache_read: 2, cache_write: 2}\n---\n")
-				save("combos/pi+ccc", "---\nmodel: fake/good\nauto: true\nprices: {currency: USD, input: 0, output: 0, cache_read: 0, cache_write: 0}\n---\n")
+				save("combos/dsh+bbb", "---\nmodel: fake/good\nauto: true\nprices: {currency: USD, input: 2, output: 2, cache_read: 2, cache_write: 2}\n---\n")
+				save("combos/dsh+ccc", "---\nmodel: fake/good\nauto: true\nprices: {currency: USD, input: 0, output: 0, cache_read: 0, cache_write: 0}\n---\n")
 			}
 			oldResolve := ResolveExecution
 			oldCheck := org.CheckWorker
@@ -200,8 +213,9 @@ func TestLeaderRecoveryServiceEntry(t *testing.T) {
 			})
 			if mode == "known-pool" || mode == "different-account" || mode == "cached-exhausted" {
 				// magpie 模型里账号在网关后面路由，Atrium 只见 provider：同 provider 即同池，另一 provider 即另一批账号。
+				// 比的是组合名里的模型键（Spec.Model），组合层实际模型在 CLIModel。
 				ResolveExecution = func(_ context.Context, _ *app.Env, r Resolved, host string) (Resolved, error) {
-					if r.Spec.Tool != "pi" || (r.Spec.Model != "aaa" && r.Spec.Model != "bbb" && r.Spec.Model != "ccc") {
+					if r.Spec.Tool != "dsh" || (r.Spec.Model != "aaa" && r.Spec.Model != "bbb" && r.Spec.Model != "ccc") {
 						return r, nil
 					}
 					provider := "fake"
@@ -230,11 +244,11 @@ func TestLeaderRecoveryServiceEntry(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			who, err := org.AddLeader(ctx, db, org.NewLeader{Name: "隔离负责人", Workers: []string{"pi+aaa"}})
+			who, err := org.AddLeader(ctx, db, org.NewLeader{Name: "隔离负责人", Workers: []string{"dsh+aaa"}})
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := org.AddLeader(ctx, db, org.NewLeader{Name: "线外负责人", Workers: []string{"pi+aaa"}}); err != nil {
+			if _, err := org.AddLeader(ctx, db, org.NewLeader{Name: "线外负责人", Workers: []string{"dsh+aaa"}}); err != nil {
 				t.Fatal(err)
 			}
 			if _, err := org.Add(ctx, db, org.NewDept{Name: "隔离部门", Leader: who.ID}); err != nil {
@@ -334,7 +348,7 @@ func TestLeaderRecoveryServiceEntry(t *testing.T) {
 				t.Fatal(err)
 			}
 			saved, err := org.GetIdentity(ctx, db, who.ID)
-			if err != nil || len(saved.Workers) != 1 || saved.Workers[0] != "pi+aaa" {
+			if err != nil || len(saved.Workers) != 1 || saved.Workers[0] != "dsh+aaa" {
 				t.Fatal("偏好被覆写", saved, err)
 			}
 			switch mode {
@@ -357,12 +371,12 @@ func TestLeaderRecoveryServiceEntry(t *testing.T) {
 				if len(wakes) != expected || acked == nil || target != who.ID || wakes[len(wakes)-1].Outcome != leaders.WakeOK {
 					t.Fatal("未恢复完成", wakes, target, acked)
 				}
-				want := "pi+bbb"
+				want := "dsh+bbb"
 				if mode == "known-pool" || mode == "cost" {
-					want = "pi+ccc"
+					want = "dsh+ccc"
 				}
 				if mode == "zero-action" || mode == "missing-ack" {
-					want = "pi+aaa"
+					want = "dsh+aaa"
 				}
 				if wakes[len(wakes)-1].Profile != want {
 					t.Fatalf("实际组合归属错误：%+v want %s", wakes, want)

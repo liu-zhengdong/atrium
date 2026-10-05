@@ -27,7 +27,7 @@ func TestShowWithoutQuota(t *testing.T) {
 	defer db.Close()
 	ctx := context.Background()
 	now := store.Now()
-	if err := quota.Record(ctx, db, quota.LocalHost, []quota.Reading{{Account: "claude", OK: true, ReadAt: now,
+	if err := quota.Record(ctx, db, quota.LocalHost, []quota.Reading{{Account: quota.MagpieAccount, OK: true, ReadAt: now,
 		Windows: []quota.Window{{ID: "week", Used: 25, ResetsAt: now + 84*3600_000, Period: 168 * 3600}}}}); err != nil {
 		t.Fatal(err)
 	}
@@ -39,14 +39,14 @@ func TestShowWithoutQuota(t *testing.T) {
 	tb := cli.NewTable("atrium", "测试")
 	Commands(tb)
 	vars := map[string]string{"ATRIUM_WORKER_TOKEN": "test-token", "ATRIUM_SERVER": srv.URL}
-	for _, args := range [][]string{{"workers", "claude+opus"}, {"workers", "claude+opus", "--json"}} {
+	for _, args := range [][]string{{"workers", "dsh+deepseek/deepseek-v4"}, {"workers", "dsh+deepseek/deepseek-v4", "--json"}} {
 		var out, errOut bytes.Buffer
 		code := tb.Main(ctx, args, cli.Env{Stdout: &out, Stderr: &errOut, Getenv: func(k string) string { return vars[k] }})
 		if code != 0 {
 			t.Fatalf("%v：退出码 %d %s", args, code, errOut.String())
 		}
 		text := out.String()
-		if !strings.Contains(text, "claude+opus") {
+		if !strings.Contains(text, "dsh+deepseek/deepseek-v4") {
 			t.Fatalf("%v：没有执行者详情：%s", args, text)
 		}
 		if strings.Contains(text, "额度：") || strings.Contains(text, "富余") {
@@ -62,8 +62,9 @@ func TestShowWithoutQuota(t *testing.T) {
 }
 
 func TestResolvedAccount(t *testing.T) {
+	// 模型不带 provider 时账号就是执行者自己（没有厂商别名表了）。
 	for _, tc := range []struct{ tool, account string }{
-		{"agy", "antigravity"}, {"claude", "claude"}, {"trae", "trae"}, {"fake", "fake"},
+		{"dsh", "dsh"}, {"my-cli", "my-cli"},
 	} {
 		for _, model := range []string{"", "model-a", "model-b"} {
 			r := Resolved{Spec: Spec{Tool: tc.tool, Model: model}}
@@ -72,14 +73,12 @@ func TestResolvedAccount(t *testing.T) {
 			}
 		}
 	}
-	// 模型带 provider 前缀就归 provider，不限工具：claude+zcode/GLM-5.3[1m] 实际走 magpie 的 zcode，不记在 claude 名下。
+	// 模型带 provider 前缀就归 provider：dsh+zcode/GLM-5.3[1m] 实际走 magpie 的 zcode，不记在 dsh 名下。
 	for _, tc := range []struct{ tool, model, cliModel, account string }{
-		{"claude", "zcode/GLM-5.3[1m]", "", "zcode"},
-		{"claude", "opus", "", "claude"},
-		{"codex", "openai/gpt-5.3", "", "openai"},
-		{"pi", "alias", "opencode-go/actual", "opencode-go"},
-		{"pi", "zai/glm-4.6", "", "zai"},
-		{"opencode", "zai/glm-4.6", "", "zai"},
+		{"dsh", "zcode/GLM-5.3[1m]", "", "zcode"},
+		{"dsh", "alias", "deepseek-official/actual", "deepseek-official"},
+		{"dsh", "deepseek/deepseek-v4", "", "deepseek"},
+		{"dsh", "", "", "dsh"},
 	} {
 		r := Resolved{Spec: Spec{Tool: tc.tool, Model: tc.model}, CLIModel: tc.cliModel}
 		if got := r.Account(); got != tc.account {

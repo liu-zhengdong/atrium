@@ -111,7 +111,7 @@ INSERT INTO memos VALUES ('a1', '备忘', 3), ('secretary', '秘书备忘', 4), 
 INSERT INTO org_skills VALUES (1, 'visual-design', 2, '{"SKILL.md":"---\ndescription: 视觉设计\n---\n做法","references/a.md":"细节"}', NULL, 10);
 INSERT INTO materials VALUES (1, 2, 'dir', '设计稿', '原型与截图', 1, 5, 'u1', 11, NULL, NULL);
 INSERT INTO material_versions VALUES (1, 1, '[{"path":"README.md","size":2},{"path":"shots/a.png","size":3}]');
-INSERT INTO worker_profiles VALUES ('harness', 'claude', '---\ntrust: high\n---\n', 'u1', 12);
+INSERT INTO worker_profiles VALUES ('harness', 'dsh', '---\ntrust: high\n---\n', 'u1', 12);
 INSERT INTO hosts VALUES (1, '本机', 'local', '{"max_workers":6,"node":"v24"}', '["*"]', NULL, NULL, NULL, 13, NULL, NULL, NULL, NULL), (2, '旧', 'remote', NULL, '[]', NULL, 99, NULL, 14, NULL, NULL, NULL, NULL), (3, 'ggb', 'remote', NULL, '["*"]', 4, NULL, 15, 16, 'me@ggb', '/k/id_ggb', 4310, 14310);
 INSERT INTO tasks VALUES (306);
 INSERT INTO choices VALUES (3);
@@ -193,7 +193,7 @@ func TestRun(t *testing.T) {
 	if h3, _ := hosts.Get(ctx, db, "h3"); h3.MaxRunning != 4 || h3.Joined {
 		t.Errorf("h3：%+v（令牌不搬，应未接入）", h3)
 	}
-	if n := count(t, db, `SELECT count(*) FROM worker_profiles WHERE name = 'harness/claude'`); n != 1 {
+	if n := count(t, db, `SELECT count(*) FROM worker_profiles WHERE name = 'harness/dsh'`); n != 1 {
 		t.Error("档案名应带层名")
 	}
 	// 目录资料还是一条 m1：标题是原名称，README.md 是正文，图片按相对路径跟着。

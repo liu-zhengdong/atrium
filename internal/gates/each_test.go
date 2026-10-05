@@ -10,14 +10,14 @@ import (
 
 func TestSweepBadWorkspaceContinues(t *testing.T) {
 	e := setup(t)
-	bad := e.delivered("旧登记缺机器", "claude+opus", "")
+	bad := e.delivered("旧登记缺机器", "dsh+opus", "")
 	if err := ledger.Record(e.ctx, e.db, bad.ID, gates.KindWorktree, "dispatch", `{"dir":"unused"}`); err != nil {
 		t.Fatal(err)
 	}
 	dir := filepath.Join(t.TempDir(), "wt")
 	e.gh.Branch(dir, "t2-work", map[string]string{"a.go": "package a\n"})
 	e.gh.Open("t2-work", goodBody)
-	good := e.delivered("正常交付", "claude+opus", dir)
+	good := e.delivered("正常交付", "dsh+opus", dir)
 	e.sweep()
 	e.sweep()
 	if got := e.get(bad.ID); got.Status != ledger.Blocked {

@@ -15,16 +15,24 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/workers"
 )
 
-// 合成绑定：pi 的组合都算经 magpie 的同一个 provider；different-account 让 sibling 走另一个 provider。
+// 合成绑定：池 = 同一个已证实账号（provider）。dsh 不能声明自定义端点，绑不了真实 magpie 账号，
+// 所以测试里按模型首段分账号：rev/quota 与 rev/zero-action 算同一个账号，fake/* 算另外的账号；
+// different-account 让 sibling 走另一个 provider。
 func installSyntheticExecution(t *testing.T, mode string) {
 	t.Helper()
 	old := workers.ResolveExecution
 	workers.ResolveExecution = func(_ context.Context, _ *app.Env, r workers.Resolved, host string) (workers.Resolved, error) {
-		if r.Spec.Tool != "pi" {
+		if r.Spec.Tool != "dsh" {
 			return r, nil
 		}
-		provider := "synthetic"
-		if mode == "different-account" && r.CLIModel == "opencode-go/zero-action" {
+		provider := r.CLIModel
+		if i := strings.Index(provider, "/"); i > 0 {
+			provider = provider[:i]
+		}
+		if provider == "" {
+			provider = "synthetic"
+		}
+		if mode == "different-account" && r.CLIModel == "rev/zero-action" {
 			provider = "other"
 		}
 		r.QuotaBinding = &workers.ExecutionBinding{Worker: r.ID, Host: host, Provider: provider}
@@ -62,8 +70,8 @@ func TestSharedFailurePreservesMarksAndBudget(t *testing.T) {
 		t.Fatal(err)
 	}
 	for name, source := range map[string]string{
-		"harness/pi":        "---\nmodel: opencode-go/quota\n---\n",
-		"combos/pi+sibling": "---\nmodel: opencode-go/zero-action\n---\n",
+		"harness/dsh":        "---\nmodel: rev/quota\n---\n",
+		"combos/dsh+sibling": "---\nmodel: rev/zero-action\n---\n",
 	} {
 		if _, err := workers.SaveProfile(ctx, db, name, workers.Edit{Source: &source}, "u1"); err != nil {
 			t.Fatal(err)
@@ -71,7 +79,7 @@ func TestSharedFailurePreservesMarksAndBudget(t *testing.T) {
 	}
 	installSyntheticExecution(t, "known-pool")
 	env := &app.Env{DB: db}
-	r, err := workers.Resolve(ctx, db, "pi")
+	r, err := workers.Resolve(ctx, db, "dsh")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,13 +87,13 @@ func TestSharedFailurePreservesMarksAndBudget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := quota.Record(ctx, db, LocalHost, []quota.Reading{magpieReading("synthetic", 85, 0)}); err != nil {
+	if err := quota.Record(ctx, db, LocalHost, []quota.Reading{magpieReading("rev", 85, 0)}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := CheckExecution(ctx, env, r, LocalHost, 0); err == nil || !strings.Contains(err.Error(), "额度将满") {
 		t.Fatal("写死执行者也不能绕过窗口将满", err)
 	}
-	if err := quota.Record(ctx, db, LocalHost, []quota.Reading{magpieReading("synthetic", 50, 0)}); err != nil {
+	if err := quota.Record(ctx, db, LocalHost, []quota.Reading{magpieReading("rev", 50, 0)}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := CheckExecution(ctx, env, r, LocalHost, 0); err != nil {
@@ -136,11 +144,11 @@ func TestQuotaResetFromMagpie(t *testing.T) {
 	}
 	defer db.Close()
 	reset := store.Now() + 90*60_000
-	if err := quota.Record(ctx, db, LocalHost, []quota.Reading{magpieReading("cursor", 100, reset)}); err != nil {
+	if err := quota.Record(ctx, db, LocalHost, []quota.Reading{magpieReading("rev", 100, reset)}); err != nil {
 		t.Fatal(err)
 	}
 	d := &dispatcher{env: &app.Env{DB: db}}
-	bound := &workers.ExecutionBinding{Worker: "pi+cursor/auto", Host: LocalHost, Provider: "cursor"}
+	bound := &workers.ExecutionBinding{Worker: "dsh+rev/auto", Host: LocalHost, Provider: "rev"}
 	quotaSig := workers.Signal{Kind: workers.SignalQuota}
 	for _, tc := range []struct {
 		name    string
@@ -151,7 +159,7 @@ func TestQuotaResetFromMagpie(t *testing.T) {
 		{"magpie-reset", bound, quotaSig, reset},
 		{"message-wins", bound, workers.Signal{Kind: workers.SignalQuota, ResetAt: 42}, 42},
 		{"direct", nil, quotaSig, 0},
-		{"other-host-unknown", &workers.ExecutionBinding{Worker: bound.Worker, Host: "h3", Provider: "cursor"}, quotaSig, 0},
+		{"other-host-unknown", &workers.ExecutionBinding{Worker: bound.Worker, Host: "h3", Provider: "rev"}, quotaSig, 0},
 		{"not-quota", bound, workers.Signal{Kind: workers.SignalNoStart}, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -159,7 +167,7 @@ func TestQuotaResetFromMagpie(t *testing.T) {
 			if err != nil || sig.ResetAt != tc.want {
 				t.Fatalf("resetAt=%d want %d err=%v", sig.ResetAt, tc.want, err)
 			}
-			m, ok := workers.MarkOf(sig, workers.Spec{Tool: "pi", Model: "cursor/auto"}, LocalHost, time.Now())
+			m, ok := workers.MarkOf(sig, workers.Spec{Tool: "dsh", Model: "rev/auto"}, LocalHost, time.Now())
 			if tc.name == "magpie-reset" && (!ok || m.Until != reset) {
 				t.Fatal("标记应在 magpie 窗口重置时恢复", m)
 			}

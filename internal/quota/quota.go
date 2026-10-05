@@ -1,5 +1,5 @@
 // Package quota 负责额度后台读取、缓存与派活感知；余量展示由 OpenQuota/magpie 提供。
-// 派活避让只认 magpie 读数，旧厂商读取在过渡期保留；设置只管理给用户预留的份额。
+// 自带读取只认 magpie；派活避让只认 magpie 读数；设置只管理给用户预留的份额。
 package quota
 
 import (
@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"os"
 	"runtime"
-	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -37,11 +36,11 @@ type Local struct {
 	next     map[string]time.Time
 }
 
-// NewLocal 读自带账号；配了 magpie 地址（LocalDeps 总会配）再读 magpie。
+// NewLocal 只读 magpie；配了 magpie 地址（LocalDeps 总会配）才有账号可读。
 func NewLocal(d Deps) *Local {
-	accounts := Builtin
+	var accounts []string
 	if d.url(MagpieAccount) != "" {
-		accounts = append(slices.Clone(Builtin), MagpieAccount)
+		accounts = []string{MagpieAccount}
 	}
 	return &Local{deps: d, accounts: accounts, next: map[string]time.Time{}}
 }
@@ -135,7 +134,7 @@ func DropHost(ctx context.Context, q store.Querier, host string) error {
 	return err
 }
 
-func isAccount(a string) bool { return a == MagpieAccount || slices.Contains(Accounts, a) }
+func isAccount(a string) bool { return a == MagpieAccount }
 
 func stored(ctx context.Context, q store.Querier) ([]Stored, error) {
 	rows, err := q.QueryContext(ctx, `SELECT body FROM quota_cache WHERE account != ? ORDER BY read_at DESC LIMIT ?`, oqKey, CacheRows+1)

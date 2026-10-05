@@ -31,7 +31,9 @@ func continuePRWorker() int {
 			return 1
 		}
 	}
-	fmt.Println("DONE\n交付结论：完成")
+	fmt.Println(`{"type":"session","sessionId":"session-0123abcd-0123-0123-0123-0123456789ab"}`)
+	fmt.Println(`{"type":"text","text":"交付结论：完成"}`)
+	fmt.Println(`{"type":"final","text":"交付结论：完成"}`)
 	return 0
 }
 
@@ -49,16 +51,8 @@ func TestContinuePRFromAcceptance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	exe, err := os.Executable()
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("PATH", filepath.Dir(exe)+string(os.PathListSeparator)+os.Getenv("PATH"))
-	quoted, _ := json.Marshal(filepath.Base(exe))
-	source := "---\nprotocol: cli\ncommand: " + string(quoted) + "\nargs: [\"--continue-pr-worker\", \"{prompt}\"]\ndone_match: '^DONE$'\ntrust: high\nchecks: [finished, pr_exists]\n---\n"
-	if _, err := workers.SaveProfile(ctx, d.env.DB, "harness/continuefake", workers.Edit{Source: &source}, "u1"); err != nil {
-		t.Fatal(err)
-	}
+	fakeDshOnPath(t)
+	id := fakeCombo(t, ctx, d.env.DB, "continue-pr", "trust: high\nchecks: [finished, pr_exists]\n")
 	oldPick := pickHost
 	pickHost = func(context.Context, *app.Env, HostNeed, string) (HostChoice, error) {
 		return HostChoice{Kind: "run", Host: LocalHost}, nil
@@ -79,7 +73,7 @@ func TestContinuePRFromAcceptance(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		if _, err := Enqueue(ctx, d.env, task.ID, Options{Worker: "continuefake"}, "u1"); err != nil {
+		if _, err := Enqueue(ctx, d.env, task.ID, Options{Worker: id}, "u1"); err != nil {
 			t.Fatal(err)
 		}
 		stop := runReclaimLoop(t, d, ctx)

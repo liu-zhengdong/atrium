@@ -2,7 +2,6 @@ package dispatch
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
@@ -22,17 +21,10 @@ import (
 // 实际隔离服务、HTTP 入口、SQLite、假执行者子进程、交付检查与生命周期回收。
 // 交付检查由测试推进，固定交付检查打回在 stage=gate 时发生的顺序。
 func TestReclaimInPlaceDeliveryAndRequeue(t *testing.T) {
+	nonIsolated(t)
 	d, gh, ctx := reclaimRig(t)
-	exe, err := os.Executable()
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("PATH", filepath.Dir(exe)+string(os.PathListSeparator)+os.Getenv("PATH"))
-	quoted, _ := json.Marshal(filepath.Base(exe))
-	source := "---\nprotocol: cli\ncommand: " + string(quoted) + "\nargs: [\"--reclaim-fake-worker\", \"{prompt}\"]\ndone_match: '^DONE$'\n---\n"
-	if _, err := workers.SaveProfile(ctx, d.env.DB, "harness/reclaimfake", workers.Edit{Source: &source}, "u1"); err != nil {
-		t.Fatal(err)
-	}
+	fakeDshOnPath(t)
+	id := fakeCombo(t, ctx, d.env.DB, "reclaim", "")
 	oldPick := pickHost
 	pickHost = func(context.Context, *app.Env, HostNeed, string) (HostChoice, error) {
 		return HostChoice{Kind: "run", Host: LocalHost}, nil
@@ -101,7 +93,7 @@ func TestReclaimInPlaceDeliveryAndRequeue(t *testing.T) {
 		if round == 2 {
 			call("PATCH", path, map[string]string{"status": "todo"}, nil)
 		}
-		call("POST", path+"/run", map[string]string{"worker": "reclaimfake"}, nil)
+		call("POST", path+"/run", map[string]string{"worker": id}, nil)
 		atGate := func() bool {
 			x, err := ledger.Get(ctx, d.env.DB, tk.ID)
 			return err == nil && x.Status == ledger.Running && x.Stage == ledger.StageGate

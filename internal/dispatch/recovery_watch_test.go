@@ -38,7 +38,7 @@ func TestRecoveryWatchBoundAndStop(t *testing.T) {
 			if _, err := ledger.Apply(ctx, db, tk.ID, ledger.Event{Kind: ledger.Start}, actor, ""); err != nil {
 				t.Fatal(err)
 			}
-			worker := "pi+opencode-go/a"
+			worker := "dsh"
 			count := 1
 			if scenario == "bounded" {
 				count = 3

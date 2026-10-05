@@ -101,7 +101,7 @@ func identityCommands(t *cli.Table) {
 				return err
 			}
 			if len(list) == 0 {
-				return c.Done(list, "还没有负责人", "atrium leader add <名字> --workers claude+opus:high")
+				return c.Done(list, "还没有负责人", "atrium leader add <名字> --workers dsh+deepseek-official/deepseek-v4:high")
 			}
 			lines := make([]string, len(list))
 			for k, i := range list {

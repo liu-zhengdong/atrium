@@ -5,7 +5,6 @@ import (
 	"context"
 	"database/sql"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 
@@ -78,12 +77,6 @@ func Tell(ctx context.Context, env *app.Env, id, text, by string) (TellResult, e
 		return r, nil
 	}
 	switch p.adapter.Tell {
-	case workers.TellStdin:
-		if p.send(text, "tell-"+strconv.FormatInt(tid, 10)) {
-			r.Via, r.Note = "stdin", "已写进执行者的标准输入，下一个工具调用边界读入"
-			return r, nil
-		}
-		r.Via, r.Note = "resume", "本轮已收尾，退出后带着补充继续会话"
 	case workers.TellResume:
 		r.Via, r.Note = "resume", "本轮结束后带着补充继续会话"
 	default:

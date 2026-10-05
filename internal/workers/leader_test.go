@@ -15,8 +15,8 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/store"
 )
 
-// 负责人的执行者组合与 task run --worker 同一种写法：导入的档案名（harness/claude 这样带层名）与旧库的组合
-// claude+opus:high 对得上——登记时按 Resolve 核对，唤醒时按同一份档案翻成进程调用。
+// 负责人的执行者组合与 task run --worker 同一种写法：导入的档案名（harness/dsh 这样带层名）与组合
+// dsh+deepseek/deepseek-v4:high 对得上——登记时按 Resolve 核对，唤醒时按同一份档案翻成进程调用。
 func TestLeaderComboResolves(t *testing.T) {
 	dir := t.TempDir()
 	db, err := store.Open(filepath.Join(dir, "a.db"))
@@ -26,7 +26,7 @@ func TestLeaderComboResolves(t *testing.T) {
 	defer db.Close()
 	ctx := context.Background()
 	src := "---\ntrust: medium\n---\n工具层叮嘱"
-	if _, err := SaveProfile(ctx, db, "harness/claude", Edit{Source: &src}, "import"); err != nil {
+	if _, err := SaveProfile(ctx, db, "harness/dsh", Edit{Source: &src}, "import"); err != nil {
 		t.Fatal(err)
 	}
 	org.CheckWorker = func(ctx context.Context, q store.Querier, id string) error { _, err := Resolve(ctx, q, id); return err }
@@ -35,13 +35,13 @@ func TestLeaderComboResolves(t *testing.T) {
 	if _, err := org.AddLeader(ctx, db, org.NewLeader{Name: "坏组合", Workers: []string{"nosuch+x"}}); err == nil {
 		t.Fatal("解析不了的执行者应拒绝登记")
 	}
-	a, err := org.AddLeader(ctx, db, org.NewLeader{Name: "Atrium 负责人", Workers: []string{"claude+opus:high"}})
+	a, err := org.AddLeader(ctx, db, org.NewLeader{Name: "Atrium 负责人", Workers: []string{"dsh+deepseek/deepseek-v4:high"}})
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	bin := t.TempDir()
-	for _, n := range []string{"claude", "claude.exe"} {
+	for _, n := range []string{"dsh", "dsh.exe"} {
 		if err := os.WriteFile(filepath.Join(bin, n), []byte("#!/bin/sh\n"), 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -51,7 +51,7 @@ func TestLeaderComboResolves(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Contains(spec.Args, "opus") {
-		t.Fatalf("应按组合里的模型拉起：%v", spec.Args)
+	if !slices.Contains(spec.Args, "--patch") || spec.Stdin == nil {
+		t.Fatalf("应按组合里的模型拉起并把提示词接到标准输入：%+v", spec)
 	}
 }

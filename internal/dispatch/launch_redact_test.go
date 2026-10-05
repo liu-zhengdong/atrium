@@ -18,13 +18,13 @@ import (
 func TestLocalLaunchLogKeepsUnterminatedTail(t *testing.T) {
 	env, d := setup(t)
 	ctx := context.Background()
-	bin := filepath.Dir(must(exec.LookPath("kimi")))
+	bin := filepath.Dir(must(exec.LookPath("dsh")))
 	body := "#!/bin/sh\necho \"token=$ATRIUM_WORKER_TOKEN\"\nprintf 'tail-no-newline'\n"
-	if err := os.WriteFile(filepath.Join(bin, "kimi"), []byte(body), 0o755); err != nil {
+	if err := os.WriteFile(filepath.Join(bin, "dsh"), []byte(body), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	tk, _ := ledger.Add(ctx, env.DB, ledger.NewTask{Title: "尾巴"}, "u1")
-	if _, err := Enqueue(ctx, env, tk.ID, Options{Worker: "kimi"}, "u1"); err != nil {
+	if _, err := Enqueue(ctx, env, tk.ID, Options{Worker: fakeOK}, "u1"); err != nil {
 		t.Fatal(err)
 	}
 	if err := d.pump(ctx); err != nil {

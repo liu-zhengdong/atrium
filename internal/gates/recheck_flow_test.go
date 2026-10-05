@@ -36,7 +36,7 @@ func (e *env) mergedRecheck(worker string) (ledger.Task, string) {
 }
 
 func TestMergedRecheckLifecycle(t *testing.T) {
-	for _, worker := range []string{"codex+gpt", "kimi+k2"} {
+	for _, worker := range []string{"dsh+gpt", "dsh+k2"} {
 		t.Run(worker, func(t *testing.T) {
 			e := setup(t)
 			task, _ := e.mergedRecheck(worker)
@@ -44,7 +44,7 @@ func TestMergedRecheckLifecycle(t *testing.T) {
 				t.Fatal(err)
 			}
 			e.sweep()
-			if worker == "kimi+k2" {
+			if worker == "dsh+k2" {
 				if e.state(task.ID) != "running/review" {
 					t.Fatal(e.state(task.ID))
 				}
@@ -71,7 +71,7 @@ func TestMergedRecheckRejects(t *testing.T) {
 	for _, damage := range []string{"dirty", "unpushed", "head", "unfinished", "missing", "blocked", "unregistered", "no_merge"} {
 		t.Run(damage, func(t *testing.T) {
 			e := setup(t)
-			task, dir := e.mergedRecheck("codex+gpt")
+			task, dir := e.mergedRecheck("dsh+gpt")
 			switch damage {
 			case "dirty":
 				e.gh.Write(dir, "dirty", "x")
@@ -121,7 +121,7 @@ func TestMergedRecovery(t *testing.T) {
 	for _, word := range []string{"完成", "受阻"} {
 		t.Run(word, func(t *testing.T) {
 			e := setup(t)
-			task, dir := e.mergedRecheck("codex+gpt")
+			task, dir := e.mergedRecheck("dsh+gpt")
 			reply := "实际资料已核对；仅 OPEN 关卡错配\n交付结论：" + word
 			ledger.Record(e.ctx, e.db, task.ID, gates.KindResult, "runtime", reply)
 			e.oldMismatch(task, dir)
@@ -147,7 +147,7 @@ func TestMergedRecoveryRejects(t *testing.T) {
 	for _, damage := range []string{"dirty", "unpushed", "head", "unfinished", "reason", "evidence", "other_block", "external_block", "unauthorized", "changed_reply"} {
 		t.Run(damage, func(t *testing.T) {
 			e := setup(t)
-			task, dir := e.mergedRecheck("codex+gpt")
+			task, dir := e.mergedRecheck("dsh+gpt")
 			e.oldMismatch(task, dir)
 			in := merge.Body{RestoreMerged: true, Reason: "仅关卡错配", Evidence: "核对资料"}
 			actor := "u1"
@@ -191,9 +191,9 @@ func TestMergedRecoveryRejects(t *testing.T) {
 
 func TestMergedRecoveryLeaderAndCLI(t *testing.T) {
 	e := setup(t)
-	task, dir := e.mergedRecheck("codex+gpt")
+	task, dir := e.mergedRecheck("dsh+gpt")
 	e.oldMismatch(task, dir)
-	leader, err := org.AddLeader(e.ctx, e.db, org.NewLeader{Name: "本任务负责人", Workers: []string{"codex+gpt"}})
+	leader, err := org.AddLeader(e.ctx, e.db, org.NewLeader{Name: "本任务负责人", Workers: []string{"dsh+gpt"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -239,7 +239,7 @@ func TestMergedRecheckAcceptRevalidates(t *testing.T) {
 	for _, damage := range []string{"dirty", "unpushed", "head", "reply"} {
 		t.Run(damage, func(t *testing.T) {
 			e := setup(t)
-			task, dir := e.mergedRecheck("codex+gpt")
+			task, dir := e.mergedRecheck("dsh+gpt")
 			e.sweep()
 			if e.state(task.ID) != "running/accept" {
 				t.Fatal(e.state(task.ID))

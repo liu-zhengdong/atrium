@@ -38,11 +38,11 @@ func setup(t *testing.T) *env {
 		g: &gates.Gate{DB: db, Pause: &pause.Store{DB: db}, R: gh, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}}
 	// 档案按 workers 的三层（harness/models/combos）写；任务上记的是执行者标识「工具+模型」。
 	for name, spec := range map[string]string{
-		"combos/claude+opus":   "---\ntrust: medium\nchecks: [finished, pr_exists, claims_verified]\n---\n",
-		"combos/kimi+k2":       "---\ntrust: low\n---\n",
-		"combos/codex+gpt":     "---\ntrust: high\n---\n",
-		"combos/claude+sonnet": "---\ntrust: high\n---\n",
-		"combos/claude+haiku":  "---\ntrust: low\n---\n",
+		"combos/dsh+opus":   "---\ntrust: medium\nchecks: [finished, pr_exists, claims_verified]\n---\n",
+		"combos/dsh+k2":     "---\ntrust: low\n---\n",
+		"combos/dsh+gpt":    "---\ntrust: high\n---\n",
+		"combos/dsh+sonnet": "---\ntrust: high\n---\n",
+		"combos/dsh+haiku":  "---\ntrust: low\n---\n",
 	} {
 		if _, err := db.ExecContext(e.ctx, `INSERT INTO worker_profiles (name, spec, updated_by, updated_at) VALUES (?, ?, 'u1', 0)`, name, spec); err != nil {
 			t.Fatal(err)
@@ -140,7 +140,7 @@ func TestGatePassToMergeQueue(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "wt")
 	e.gh.Branch(dir, "t1-work", map[string]string{"a.go": "package a\n"})
 	e.gh.Open("t1-work", goodBody)
-	task := e.delivered("做事", "claude+opus", dir)
+	task := e.delivered("做事", "dsh+opus", dir)
 	e.sweep()
 	got := e.get(task.ID)
 	if got.Status != ledger.Running || got.Stage != ledger.StageMerge || !strings.HasSuffix(got.PR, "/pull/1") {
@@ -173,7 +173,7 @@ func TestGateBounces(t *testing.T) {
 			dir := filepath.Join(t.TempDir(), "wt")
 			e.gh.Branch(dir, "t1-work", map[string]string{"a.go": "package a\n"})
 			c.prep(e, dir)
-			task := e.delivered("做事", "claude+opus", dir)
+			task := e.delivered("做事", "dsh+opus", dir)
 			e.sweep()
 			got := e.get(task.ID)
 			if got.Status != ledger.Queued || e.queued(task.ID) {
@@ -212,7 +212,7 @@ func TestGateNoChanges(t *testing.T) {
 				dir = filepath.Join(t.TempDir(), "wt")
 				e.gh.Must(filepath.Dir(dir), "clone", "--quiet", e.gh.Bare, dir)
 				e.gh.Must(dir, "checkout", "--quiet", "-b", "t1-work")
-				task = e.delivered("在 h3 装工具", "claude+opus", dir)
+				task = e.delivered("在 h3 装工具", "dsh+opus", dir)
 			}
 			if c.dirty {
 				e.gh.Write(dir, "c.go", "package a\n")
@@ -258,7 +258,7 @@ func TestGateEnding(t *testing.T) {
 				e.gh.Must(filepath.Dir(dir), "clone", "--quiet", e.gh.Bare, dir)
 				e.gh.Must(dir, "checkout", "--quiet", "-b", "t1-work")
 			}
-			e.start(task.ID, "claude+opus")
+			e.start(task.ID, "dsh+opus")
 			ledger.Record(e.ctx, e.db, task.ID, gates.KindWorktree, "dispatch", `{"host":"h1","dir":"`+filepath.ToSlash(dir)+`"}`)
 			if c.stale {
 				ledger.Record(e.ctx, e.db, task.ID, gates.KindResult, "dispatch", c.reply)
@@ -289,7 +289,7 @@ func TestGateEnding(t *testing.T) {
 
 func TestGateNoWorktreeBlocks(t *testing.T) {
 	e := setup(t)
-	task := e.delivered("做事", "claude+opus", "")
+	task := e.delivered("做事", "dsh+opus", "")
 	e.sweep()
 	if got := e.get(task.ID); got.Status != ledger.Blocked || !strings.Contains(e.lastNote(task.ID), "没有工作树登记") {
 		t.Fatalf("没有工作树登记应受阻：%+v %s", got, e.lastNote(task.ID))
@@ -318,7 +318,7 @@ func TestGateNoRepo(t *testing.T) {
 			}
 			e.choiceMaterial(d.ID)
 			task, _ := ledger.Add(e.ctx, e.db, ledger.NewTask{Title: "调研", Org: d.ID}, "u1")
-			e.start(task.ID, "kimi+k2")
+			e.start(task.ID, "dsh+k2")
 			dir := t.TempDir()
 			if c.choice != "" {
 				os.WriteFile(filepath.Join(dir, "choice.json"), []byte(c.choice), 0o600)
@@ -342,7 +342,7 @@ func TestGateNoRepo(t *testing.T) {
 func (e *env) reviewLaunch(id, who string) {
 	e.t.Helper()
 	if who == "" {
-		who = "codex+gpt"
+		who = "dsh+gpt"
 	}
 	last, err := workers.LastRun(e.ctx, e.db, id)
 	if err != nil {
@@ -391,15 +391,16 @@ func TestReview(t *testing.T) {
 			dir := filepath.Join(t.TempDir(), "wt")
 			e.gh.Branch(dir, "t1-work", map[string]string{"a.go": "package a\n"})
 			e.gh.Open("t1-work", goodBody)
-			task := e.delivered("做事", "claude+haiku", dir)
+			task := e.delivered("做事", "dsh+haiku", dir)
 			ledger.Record(e.ctx, e.db, task.ID, "tell", "a7", "保留完整内容")
 			e.sweep()
 			brief, err := gates.RoundBrief(e.ctx, e.db, e.get(task.ID), e.gh)
 			if err != nil || !strings.Contains(brief, "保留完整内容") || !strings.Contains(brief, "审阅结论：通过") {
 				t.Fatalf("brief %s %v", brief, err)
 			}
+			// 收线到一个工具后只要求换模型审：不记 not_tool，记作者用的模型。
 			req, _, _ := gates.Last(e.ctx, e.db, task.ID, gates.KindRequire)
-			if !strings.Contains(req, `"not_tool":"claude"`) {
+			if !strings.Contains(req, `"not_tool":""`) || !strings.Contains(req, `"not_model":"haiku"`) {
 				t.Fatal(req)
 			}
 			e.sweep()
@@ -409,7 +410,7 @@ func TestReview(t *testing.T) {
 			e.reviewExit(task.ID, c.reply)
 			e.sweep()
 			got := e.get(task.ID)
-			if got.Status != c.status || got.Stage != c.stage || got.Worker != "claude+haiku" {
+			if got.Status != c.status || got.Stage != c.stage || got.Worker != "dsh+haiku" {
 				t.Fatalf("%+v", got)
 			}
 			var total int
@@ -429,7 +430,7 @@ func TestReviewMissingThreeTimes(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "wt")
 	e.gh.Branch(dir, "t1-work", map[string]string{"a.go": "package a\n"})
 	e.gh.Open("t1-work", goodBody)
-	task := e.delivered("做事", "claude+haiku", dir)
+	task := e.delivered("做事", "dsh+haiku", dir)
 	e.sweep()
 	for i := 1; i <= 3; i++ {
 		e.reviewExit(task.ID, "读不出结论")
@@ -455,7 +456,7 @@ func TestHighRiskReviewed(t *testing.T) {
 	e.gh.Branch(dir, "t1-work", map[string]string{"a.go": "package a\n"})
 	e.gh.Open("t1-work", goodBody)
 	task, _ := ledger.Add(e.ctx, e.db, ledger.NewTask{Title: "做事", Repo: "o/r"}, "u1")
-	e.start(task.ID, "codex+gpt")
+	e.start(task.ID, "dsh+gpt")
 	ledger.Record(e.ctx, e.db, task.ID, gates.KindWorktree, "dispatch", `{"host":"h1","dir":"`+filepath.ToSlash(dir)+`"}`)
 	ledger.Record(e.ctx, e.db, task.ID, gates.KindRisk, "u1", "high")
 	e.exit(task.ID)
@@ -467,7 +468,7 @@ func TestHighRiskReviewed(t *testing.T) {
 
 func TestPausedSkipped(t *testing.T) {
 	e := setup(t)
-	task := e.delivered("做事", "claude+opus", "")
+	task := e.delivered("做事", "dsh+opus", "")
 	(&pause.Store{DB: e.db}).Set(e.ctx, pause.All, "u1")
 	e.sweep()
 	if got := e.get(task.ID); got.Stage != ledger.StageGate || got.Status != ledger.Running {

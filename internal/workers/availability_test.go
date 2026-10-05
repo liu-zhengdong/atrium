@@ -45,7 +45,7 @@ func TestAvailabilityActualSourceContract(t *testing.T) {
 		for _, host := range []string{"h1", "h2"} {
 			for _, endpoint := range []string{"", quota.MagpieURL + "/v1"} {
 				model := "opencode-go/a"
-				r := Resolved{ID: "pi+" + model, Spec: Spec{Tool: "pi", Model: model}, CLIModel: model, Rules: Rules{Endpoint: endpoint}}
+				r := Resolved{ID: "dsh+" + model, Spec: Spec{Tool: "dsh", Model: model}, CLIModel: model, Rules: Rules{Endpoint: endpoint}}
 				r.QuotaBinding = MagpieBinding(r, host, quota.MagpieURL)
 				sp, why := a.CheckResolved(r, host)
 				if sp.Percent != nil || sp.Stop != "" || why != "" {
@@ -61,18 +61,18 @@ func TestAvailabilityUnknownScope(t *testing.T) {
 	now := store.Now()
 	for _, finger := range []string{"same-key", "different-key", ""} {
 		a := Availability{Now: now, Reserve: 20, Readings: []quota.Stored{
-			{Host: "h1", Reading: quota.Reading{Account: "opencode", OK: true, Finger: "same-key", Plan: "Go", ReadAt: now, Windows: []quota.Window{{ID: "month", Used: 100}}}},
-			{Host: "h2", Reading: quota.Reading{Account: "opencode", OK: true, Finger: finger, Plan: "Go", ReadAt: now, Windows: []quota.Window{{ID: "week", Used: 25}}}},
-		}, Marks: []Mark{{Tool: "pi", Model: "opencode-go/a", Host: "h1", Kind: SignalQuota, Until: now + 1000, Reason: "额度用尽"}}}
+			{Host: "h1", Reading: quota.Reading{Account: quota.MagpieAccount, OK: true, Finger: "same-key", Plan: "Go", ReadAt: now, Windows: []quota.Window{{ID: "month", Used: 100}}}},
+			{Host: "h2", Reading: quota.Reading{Account: quota.MagpieAccount, OK: true, Finger: finger, Plan: "Go", ReadAt: now, Windows: []quota.Window{{ID: "week", Used: 25}}}},
+		}, Marks: []Mark{{Tool: "dsh", Model: "opencode-go/a", Host: "h1", Kind: SignalQuota, Until: now + 1000, Reason: "额度用尽"}}}
 		for _, tc := range []struct {
 			host, tool, model string
 			blocked           bool
 		}{
-			{"h1", "pi", "opencode-go/a", true},
-			{"h1", "pi", "opencode-go/b", false},
-			{"h1", "opencode", "opencode-go/a", false},
-			{"h2", "pi", "opencode-go/a", false},
-			{"h3", "pi", "opencode-go/a", false},
+			{"h1", "dsh", "opencode-go/a", true},
+			{"h1", "dsh", "opencode-go/b", false},
+			{"h1", "my-cli", "opencode-go/a", false},
+			{"h2", "dsh", "opencode-go/a", false},
+			{"h3", "dsh", "opencode-go/a", false},
 		} {
 			sp, why := a.Check(Spec{Tool: tc.tool, Model: tc.model}, tc.host)
 			if sp.Percent != nil || sp.Stop != "" || (why != "") != tc.blocked {
@@ -80,7 +80,7 @@ func TestAvailabilityUnknownScope(t *testing.T) {
 			}
 		}
 		a.Now += 1001
-		if _, why := a.Check(Spec{Tool: "pi", Model: "opencode-go/a"}, "h1"); why != "" {
+		if _, why := a.Check(Spec{Tool: "dsh", Model: "opencode-go/a"}, "h1"); why != "" {
 			t.Fatal("到期不能重建", why)
 		}
 	}
@@ -95,7 +95,7 @@ func TestAvailabilityCacheIsNotBinding(t *testing.T) {
 	}
 	defer db.Close()
 	for _, used := range []float64{0, 80, 100} {
-		if err := quota.Record(ctx, db, "h1", []quota.Reading{{Account: "opencode", OK: true, Finger: "key", ReadAt: store.Now(), Windows: []quota.Window{{ID: "month", Used: used}}}}); err != nil {
+		if err := quota.Record(ctx, db, "h1", []quota.Reading{{Account: quota.MagpieAccount, OK: true, Finger: "key", ReadAt: store.Now(), Windows: []quota.Window{{ID: "month", Used: used}}}}); err != nil {
 			t.Fatal(err)
 		}
 		a, err := LoadAvailability(ctx, &app.Env{DB: db, Paths: config.Paths{Data: dir}})
@@ -105,12 +105,12 @@ func TestAvailabilityCacheIsNotBinding(t *testing.T) {
 		if len(a.Readings) != 1 {
 			t.Fatal("丢机器来源", a)
 		}
-		sp, why := a.CheckResolved(Resolved{Spec: Spec{Tool: "pi", Model: "opencode-go/a"}}, "h1")
+		sp, why := a.CheckResolved(Resolved{Spec: Spec{Tool: "dsh", Model: "opencode-go/a"}}, "h1")
 		if sp.Percent != nil || sp.Stop != "" || why != "" {
 			t.Fatal("未关联当前凭据/池的读数必须未知", sp, why)
 		}
 	}
-	r := Resolved{Spec: Spec{Tool: "pi", Model: "alias"}, CLIModel: "opencode-go/actual"}
+	r := Resolved{Spec: Spec{Tool: "dsh", Model: "alias"}, CLIModel: "opencode-go/actual"}
 	if r.Account() != "opencode-go" {
 		t.Fatal("实际provider不应别名成套餐", r.Account())
 	}

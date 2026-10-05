@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -53,9 +54,35 @@ func TestReviewOriginalTaskFlow(t *testing.T) {
 				}
 			}
 			writeReply("审阅结论：通过\n")
+			// 假 dsh 按模型分饰两角：作者交「交付结论：完成」，审阅者照 reply 文件里的结论收尾。
+			fake, err := exec.LookPath("dsh")
+			if err != nil {
+				t.Fatal(err)
+			}
+			script := `#!/bin/sh
+patch=
+while [ $# -gt 0 ]; do
+	case "$1" in
+	--patch) patch=$2; shift ;;
+	esac
+	shift
+done
+mode=${patch:+$(sed -n 's/^ *model: //p' "$patch" 2>/dev/null)}
+mode=${mode##*/}
+cat >/dev/null
+echo '{"type":"session","sessionId":"session-0123abcd-0123-0123-0123-0123456789ab"}'
+case "$mode" in
+*author*) echo '{"type":"final","text":"交付结论：完成"}' ;;
+*review*) printf '{"type":"final","text":"%s"}\n' "$(tr '\n' ' ' < ` + replyFile + `)" ;;
+*) echo '{"type":"final","text":"ok"}' ;;
+esac
+`
+			if err := os.WriteFile(fake, []byte(script), 0o755); err != nil {
+				t.Fatal(err)
+			}
 			for name, body := range map[string]string{
-				"harness/author":   "---\nprotocol: cli\ncommand: bash\nargs: ['-c', 'echo 交付结论：完成']\ntrust: low\nchecks: [finished, pr_exists]\n---\n",
-				"harness/reviewer": fmt.Sprintf("---\nprotocol: cli\ncommand: bash\nargs: ['-c', 'cat %s']\ntrust: medium\nauto: true\n---\n", replyFile),
+				"combos/dsh+author": "---\nmodel: fake/author1\ntrust: low\nchecks: [finished, pr_exists]\n---\n",
+				"combos/dsh+review": "---\nmodel: fake/review1\ntrust: medium\nauto: true\n---\n",
 			} {
 				if _, err := env.DB.ExecContext(ctx, `INSERT INTO worker_profiles(name,spec,updated_by,updated_at) VALUES(?,?,'u1',0)`, name, body); err != nil {
 					t.Fatal(err)
@@ -65,7 +92,7 @@ func TestReviewOriginalTaskFlow(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := Enqueue(ctx, env, tk.ID, Options{Worker: "author+a"}, "u1"); err != nil {
+			if _, err := Enqueue(ctx, env, tk.ID, Options{Worker: "dsh+author"}, "u1"); err != nil {
 				t.Fatal(err)
 			}
 			if err := d.pump(ctx); err != nil {
@@ -117,7 +144,7 @@ func TestReviewOriginalTaskFlow(t *testing.T) {
 			}
 			waitReviewExit()
 			last, _ := workers.LastRun(ctx, env.DB, tk.ID)
-			if last.Worker != "reviewer" || last.Dir != author.Dir {
+			if last.Worker != "dsh+review" || last.Dir != author.Dir {
 				t.Fatalf("审阅轮：%+v", last)
 			}
 			prompt, err := os.ReadFile(filepath.Join(TaskDir(env.Paths.Data, tk.ID), fmt.Sprintf("prompt-%d.md", last.N)))
@@ -151,7 +178,7 @@ func TestReviewOriginalTaskFlow(t *testing.T) {
 					}
 					waitFor(t, env, tk.ID, func(x ledger.Task) bool { return x.Stage == ledger.StageGate })
 					redo, _ := workers.LastRun(ctx, env.DB, tk.ID)
-					if redo.Worker != "author+a" || redo.Why != workers.WhyBounce {
+					if redo.Worker != "dsh+author" || redo.Why != workers.WhyBounce {
 						t.Fatalf("重做没有回作者：%+v", redo)
 					}
 					writeReply("审阅结论：通过\n")

@@ -63,7 +63,7 @@ func TestStepHolder(t *testing.T) {
 	}{
 		{ledger.Task{Status: ledger.Todo}, 0, "idle", "没派"},
 		{ledger.Task{Status: ledger.Queued}, 0, "idle", "排队"},
-		{ledger.Task{Status: ledger.Running, Worker: "claude+opus:high", Host: "h1"}, 1, "run", "claude"},
+		{ledger.Task{Status: ledger.Running, Worker: "dsh+opus:high", Host: "h1"}, 1, "run", "dsh"},
 		{ledger.Task{Status: ledger.Running}, 1, "run", "在做"},
 		{ledger.Task{Status: ledger.Running, Stage: ledger.StageGate}, 2, "run", "验收中"},
 		{ledger.Task{Status: ledger.Running, Stage: ledger.StageReview}, 2, "run", "审阅中"},
@@ -239,7 +239,7 @@ func TestRoutes(t *testing.T) {
 		}
 		return res
 	}
-	for _, path := range []string{"/", "/ui/api/today", "/ui/api/worker?name=claude", "/ui/stream", "/ui/assets/app.js"} {
+	for _, path := range []string{"/", "/ui/api/today", "/ui/api/worker?name=dsh", "/ui/stream", "/ui/assets/app.js"} {
 		res := get(path, "evil.example:"+strconv.Itoa(port))
 		res.Body.Close()
 		if res.StatusCode != 403 {
@@ -289,8 +289,8 @@ func TestRoutes(t *testing.T) {
 	}
 	// 抽屉的经过来自执行者进程的真日志（与 task log 同一份解析），不是任务经历。
 	logFile := filepath.Join(t.TempDir(), "run-1.log")
-	os.WriteFile(logFile, []byte(`{"type":"assistant","message":{"content":[{"type":"text","text":"改好了"}]}}`+"\n"), 0o600)
-	run, _ := json.Marshal(workers.Run{N: 1, Worker: "claude", Log: logFile})
+	os.WriteFile(logFile, []byte(`{"type":"text","text":"改好了"}`+"\n"), 0o600)
+	run, _ := json.Marshal(workers.Run{N: 1, Worker: "dsh", Log: logFile})
 	ledger.Record(ctx, db, task.ID, workers.RunKind, "dispatch", string(run))
 	read("task/"+task.ID, &detail)
 	if detail.Trace == nil || len(detail.Trace.Segments) != 1 || detail.Trace.Segments[0].Say != "改好了" || detail.Live {
@@ -315,15 +315,15 @@ func TestRoutes(t *testing.T) {
 		t.Errorf("暂停的机器：%+v", legion.Hosts)
 	}
 	ps.Clear(ctx, "h1")
-	workers.SetMark(ctx, db, workers.Mark{Tool: "claude", Host: "h1", Kind: workers.SignalSetup, Reason: "没登录", Since: store.Now()})
+	workers.SetMark(ctx, db, workers.Mark{Tool: "dsh", Host: "h1", Kind: workers.SignalSetup, Reason: "没登录", Since: store.Now()})
 	read("legion", &legion)
-	// 裸名 claude 的拉起按目录组合名归并进 claude+opus，不再拆出「不在目录里」的一行；目录行数不变。
+	// 裸名 dsh 的拉起归进目录里的 dsh 行，不再拆出「不在目录里」的一行；目录行数不变。
 	if len(legion.Workers) != len(workers.Tools) || legion.Window != workers.StatWindow {
 		t.Fatalf("表现：%+v", legion)
 	}
 	var p workers.Row
 	for _, w := range legion.Workers {
-		if w.ID == "claude+opus" {
+		if w.ID == "dsh" {
 			p = w
 		}
 	}
@@ -336,19 +336,19 @@ func TestRoutes(t *testing.T) {
 		t.Fatalf("目录必须共用 workers.List: %v", err)
 	}
 	source := "---\ntrust: high\n---\n档案正文"
-	if _, err := workers.SaveProfile(ctx, db, "harness/claude", workers.Edit{Source: &source}, "u1"); err != nil {
+	if _, err := workers.SaveProfile(ctx, db, "harness/dsh", workers.Edit{Source: &source}, "u1"); err != nil {
 		t.Fatal(err)
 	}
 	var worker workers.Detail
-	read("worker?name=claude", &worker)
-	wantDetail, err := workers.Show(ctx, db, "claude")
+	read("worker?name=dsh", &worker)
+	wantDetail, err := workers.Show(ctx, db, "dsh")
 	gotJSON, _ := json.Marshal(worker)
 	wantJSON, _ := json.Marshal(wantDetail)
 	if err != nil || string(gotJSON) != string(wantJSON) || len(worker.Layers) != 1 || worker.Trust != "high" {
 		t.Fatalf("档案必须共用 workers.Show: %v", err)
 	}
-	read("worker?name=opencode%2Bopencode-go%2Fmimo-v2.6-flash", &worker)
-	if worker.Resolved.ID != "opencode+opencode-go/mimo-v2.6-flash" {
+	read("worker?name=dsh%2Bdeepseek-official%2Fdeepseek-v4", &worker)
+	if worker.Resolved.ID != "dsh+deepseek-official/deepseek-v4" {
 		t.Fatalf("模型中的 / 必须保留：%+v", worker)
 	}
 	for _, name := range []string{"", "../bad", "no-such-tool"} {
@@ -359,17 +359,17 @@ func TestRoutes(t *testing.T) {
 		}
 	}
 	// 等人处理的不可用标记进「等你」，解除就消失；额度用尽会自己恢复，不进。
-	workers.SetMark(ctx, db, workers.Mark{Tool: "kimi", Host: "h3", Kind: workers.SignalQuota, Reason: "额度用尽", Since: store.Now(), Until: store.Now() + 3600_000})
+	workers.SetMark(ctx, db, workers.Mark{Tool: "dsh", Host: "h3", Kind: workers.SignalQuota, Reason: "额度用尽", Since: store.Now(), Until: store.Now() + 3600_000})
 	read("today", &today)
-	if n := len(today.Asks); n != 2 || today.Asks[1].Kind != "worker" || today.Asks[1].Title != "claude（本机）没登录" ||
-		today.Asks[1].Sub != "登录、装好或升级运行环境后 atrium workers edit --clear claude@h1" {
+	if n := len(today.Asks); n != 2 || today.Asks[1].Kind != "worker" || today.Asks[1].Title != "dsh（本机）没登录" ||
+		today.Asks[1].Sub != "登录、装好或升级运行环境后 atrium workers edit --clear dsh@h1" {
 		t.Errorf("不可用标记应进等你（跟在卡住的活后面）：%+v", today.Asks)
 	}
 	if nav, err := loadNav(ctx, db); err != nil || nav.Asks != 2 {
 		t.Errorf("侧栏件数：%+v %v", nav, err)
 	}
 	// 转成等订阅恢复后照样挂在执行者下，但不进「等你」。
-	if n, err := workers.WaitSubscription(ctx, db, "claude@h1", store.Now()); err != nil || n != 1 {
+	if n, err := workers.WaitSubscription(ctx, db, "dsh@h1", store.Now()); err != nil || n != 1 {
 		t.Fatalf("转等订阅恢复：%d %v", n, err)
 	}
 	read("today", &today)
@@ -378,13 +378,23 @@ func TestRoutes(t *testing.T) {
 	}
 	read("legion", &legion)
 	for _, w := range legion.Workers {
-		if w.ID == "claude+opus" && (len(w.Marks) != 1 || w.Marks[0].Kind != workers.MarkSubscription || w.Marks[0].Reason != "订阅已封号") {
+		if w.ID != "dsh" {
+			continue
+		}
+		// 只有 dsh 一条线，h1 的「等订阅恢复」和 h3 的额度标记都挂在同一行上。
+		seen := false
+		for _, m := range w.Marks {
+			if m.Kind == workers.MarkSubscription && m.Reason == "订阅已封号" && m.Host == "h1" {
+				seen = true
+			}
+		}
+		if !seen {
 			t.Errorf("执行者页应看得到等订阅恢复：%+v", w.Marks)
 		}
 	}
-	workers.ClearMarks(ctx, db, "claude@h1")
+	workers.ClearMarks(ctx, db, "dsh@h1")
 	// 部门有了负责人，卡住的活先归负责人，不再递到「等你」；详情里当前等待对象是负责人。
-	a, err := org.AddLeader(ctx, db, org.NewLeader{Name: "运行时负责人", Workers: []string{"claude"}})
+	a, err := org.AddLeader(ctx, db, org.NewLeader{Name: "运行时负责人", Workers: []string{"dsh"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -450,10 +460,10 @@ func TestRoutes(t *testing.T) {
 	}
 	running := ledger.Task{Status: ledger.Running}
 	for h, want := range map[watch.Holder]string{
-		{Kind: "leader", Who: a.ID, Text: "等负责人验收"}:             "运行时负责人（" + a.ID + "）：等负责人验收",
-		{Kind: "secretary", Who: org.Secretary, Text: "待分派"}:    "秘书：待分派",
-		{Kind: "worker", Who: "claude+opus", Text: "执行者在做（h1）"}: "执行者在做",
-		{Kind: "user", Who: "u1", Text: "等你验收"}:                 "等你验收",
+		{Kind: "leader", Who: a.ID, Text: "等负责人验收"}:          "运行时负责人（" + a.ID + "）：等负责人验收",
+		{Kind: "secretary", Who: org.Secretary, Text: "待分派"}: "秘书：待分派",
+		{Kind: "worker", Who: "dsh", Text: "执行者在做（h1）"}:      "执行者在做",
+		{Kind: "user", Who: "u1", Text: "等你验收"}:              "等你验收",
 	} {
 		if got := holderText(running, h, names.Names); got != want {
 			t.Errorf("抽屉里的等待对象 %+v：%q", h, got)

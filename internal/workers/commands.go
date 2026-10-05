@@ -47,23 +47,25 @@ type Detail struct {
 	Layers   []Profile `json:"layers"`
 }
 
-// Catalog 列可派的执行者：combos 档案里的组合在前（按名字），再是各工具只写工具名（内置按固定顺序，通用命令行执行者随后）。
+// Catalog 列可派的执行者。写过组合档案（combos/…）就是封闭池：只列这些组合，
+// 内置工具的裸名不再进候选——配了组合就按组合派，没配到的一律不碰。点名不受影响：写死执行者走
+// Resolve（dispatch 的 Options.Worker），技能声明的优先执行者也不经过这里。
+// 一条组合档案都没有时保持老样子：各工具只写工具名（内置按固定顺序）。
 func Catalog(ctx context.Context, q store.Querier) ([]string, error) {
 	ps, err := ListProfiles(ctx, q)
 	if err != nil {
 		return nil, err
 	}
-	var combos, custom []string
+	var combos []string
 	for _, p := range ps {
-		layer, name, _ := strings.Cut(p.Name, "/")
-		switch {
-		case layer == "combos":
+		if layer, name, _ := strings.Cut(p.Name, "/"); layer == "combos" {
 			combos = append(combos, name)
-		case layer == "harness" && p.Keys["protocol"] == "cli":
-			custom = append(custom, name)
 		}
 	}
-	return append(append(combos, Tools...), custom...), nil
+	if len(combos) > 0 {
+		return combos, nil
+	}
+	return append(combos, Tools...), nil
 }
 
 // Installed：子进程环境的 PATH 上找得到这个工具。
@@ -277,9 +279,6 @@ func Commands(t *cli.Table) {
 	ledger.HistoryText[ExitKind] = ExitText
 	ledger.HistoryText[RecountKind] = RecountText
 	t.Group("workers", "执行者：可派的组合、档案与近期拉起统计")
-	t.Add(cli.Command{Path: "workers chrome-mcp", Local: true, Hidden: true,
-		Summary: "执行者 Chrome MCP 入口", Args: "[-- MCP 参数]",
-		Run: func(c *cli.Ctx) error { return runChromeMCP(c.Args, os.Stdin, c.Env.Stdout, c.Env.Stderr) }})
 	t.Add(cli.Command{Path: "workers", Args: "[执行者或 层/名]",
 		Summary: "列执行者；--quality 看质量汇总；给名字看档案、质量与近 20 次明细",
 		Detail:  qualityHelp,

@@ -245,12 +245,8 @@ func TestInfoHelpers(t *testing.T) {
 		tool, goos, want string
 		exists           func(string) bool
 	}{
-		{"claude", "darwin", "nil", has()},
-		{"claude", "linux", "no", has()},
-		{"claude", "linux", "yes", has(".claude.json")},
-		{"codex", "windows", "no", has()},
-		{"codex", "darwin", "yes", has(".codex/auth.json")},
-		{"kimi", "linux", "nil", has()},
+		{"dsh", "darwin", "yes", has(".dsh/.credentials.yaml")},
+		{"dsh", "linux", "nil", has()},
 	}
 	for _, c := range cases {
 		if got := str(LoggedIn(c.tool, c.goos, c.exists)); got != c.want {

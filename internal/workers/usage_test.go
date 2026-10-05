@@ -3,7 +3,6 @@ package workers
 import (
 	"encoding/json"
 	"math"
-	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -12,50 +11,24 @@ import (
 func token(n int64) *int64     { return &n }
 func price(n float64) *float64 { return &n }
 
-// 真实拉起样本：新摘录仅保留用量字段；其余读取已有脱敏日志。
+// 真实拉起样本：dsh --profile headless --json 的脱敏日志。
 func TestUsageRealLogs(t *testing.T) {
-	cases := []struct {
-		tool, path string
-		want       Tokens
-		cost       *float64
-	}{
-		{"claude", "claude-t632-usage.ndjson", Tokens{token(112), token(42891), token(3933987), token(105128)}, price(3.8480145)},
-		{"codex", "codex-t637-usage.ndjson", Tokens{token(47190), token(12190), token(756096), token(0)}, nil},
-		{"cursor", "cursor-t476.jsonl", Tokens{token(134), token(45847), token(10632043), token(184351)}, nil},
-		{"agy", "agy-t349.jsonl", Tokens{token(152011), token(6597), token(1048683), nil}, nil},
-		{"opencode", "opencode-t597-usage.ndjson", Tokens{token(2136), token(1833), token(300544), token(0)}, price(0.0016538032)},
-		{"grok", "grok-messages-windows.jsonl", Tokens{}, nil},
+	tr, err := ReadTrace("dsh", "testdata/dsh-sample.jsonl")
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, c := range cases {
-		t.Run(c.tool, func(t *testing.T) {
-			tr, err := ReadTrace(c.tool, "testdata/"+c.path)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if !reflect.DeepEqual(tr.Usage.Tokens, c.want) {
-				t.Fatalf("token 得到 %+v，期望 %+v", tr.Usage, c.want)
-			}
-			if (tr.Usage.Cost == nil) != (c.cost == nil) || (c.cost != nil && math.Abs(*tr.Usage.Cost-*c.cost) > 1e-12) {
-				t.Fatalf("花费 %+v", tr.Usage)
-			}
-		})
+	want := Tokens{token(4605), token(146), token(14464), token(0)}
+	if !reflect.DeepEqual(tr.Usage.Tokens, want) {
+		t.Fatalf("token 得到 %+v，期望 %+v", tr.Usage, want)
+	}
+	if tr.Usage.Cost != nil {
+		t.Fatalf("dsh 日志里没有钱数：%+v", tr.Usage)
 	}
 }
 
 func TestUsageMissingFields(t *testing.T) {
-	b, err := os.ReadFile("testdata/claude-t632-usage.ndjson")
-	if err != nil {
-		t.Fatal(err)
-	}
-	var e map[string]any
-	if err := json.Unmarshal(b, &e); err != nil {
-		t.Fatal(err)
-	}
-	delete(e, "usage")
-	delete(e, "total_cost_usd")
-	b, _ = json.Marshal(e)
-	p := NewParser("claude")
-	p.Feed(string(b))
+	p := NewParser("dsh")
+	p.Feed(`{"type":"status","phase":"step_end"}`)
 	u := p.Trace().Usage
 	if u.Input != nil || u.Output != nil || u.CacheRead != nil || u.CacheWrite != nil || u.Cost != nil || strings.Count(u.String(), "读不到") != 4 {
 		t.Fatal(u.String())
@@ -117,56 +90,16 @@ func TestChargeUSD(t *testing.T) {
 }
 
 func TestUsageAggregation(t *testing.T) {
-	claude := NewParser("claude")
-	claude.Feed(`{"type":"result","usage":{"input_tokens":10,"output_tokens":20,"cache_read_input_tokens":0,"cache_creation_input_tokens":0},"total_cost_usd":1}
-{"type":"result","usage":{"input_tokens":10,"output_tokens":20,"cache_read_input_tokens":0,"cache_creation_input_tokens":0},"total_cost_usd":3}`)
-	if u := claude.Trace().Usage; *u.Cost != 3 || *u.Input != 20 {
-		t.Fatal("Claude 多轮花费只取最后累计值", u)
+	p := NewParser("dsh")
+	p.Feed(`{"type":"status","phase":"step_end","usage":{"inputTokens":4379,"outputTokens":58,"cacheReadTokens":5120,"cacheWriteTokens":0}}`)
+	p.Feed(`{"type":"status","phase":"step_end","usage":{"inputTokens":226,"outputTokens":88,"cacheReadTokens":9344,"cacheWriteTokens":0}}`)
+	if u := p.Trace().Usage; *u.Input != 4605 || *u.Output != 146 || *u.CacheRead != 14464 || *u.CacheWrite != 0 || u.Cost != nil {
+		t.Fatal("每步增量跨步累加", u)
 	}
-	p := NewParser("codex")
-	p.Feed(`{"type":"turn.completed","usage":{"input_tokens":100,"cached_input_tokens":30,"output_tokens":20,"cache_write_input_tokens":0}}
-{"type":"turn.completed","usage":{"input_tokens":200,"cached_input_tokens":50,"output_tokens":40,"cache_write_input_tokens":0}}`)
-	if u := p.Trace().Usage; *u.Input != 220 || *u.CacheRead != 80 || *u.Output != 60 {
-		t.Fatal(u)
-	}
-	p.Feed(`{"type":"turn.completed"}`)
-	if u := p.Trace().Usage; u.Input != nil || u.Output != nil {
+	// 某一步没报某类读数：这一类整次就不完整，不能把已读到的部分当合计。
+	p.Feed(`{"type":"status","phase":"step_end","usage":{"inputTokens":1,"cacheReadTokens":1,"cacheWriteTokens":0}}`)
+	if u := p.Trace().Usage; *u.Input != 4606 || u.Output != nil {
 		t.Fatal("缺失一轮不能把部分读数当合计", u)
-	}
-	p = NewParser("grok")
-	p.Feed(`{"type":"result","usage":{"input_tokens":12,"output_tokens":4,"cache_read_input_tokens":0,"cache_creation_input_tokens":0},"total_cost_usd":0}`)
-	if u := p.Trace().Usage; *u.Input != 12 || u.Cost != nil {
-		t.Fatal(u)
-	}
-}
-
-// pi 与 opencode 的 cost 字段明确报的零要保留（免费渠道真报 0）；字段缺席仍当没报。
-func TestUsageExplicitZero(t *testing.T) {
-	p := NewParser("pi")
-	p.Feed(`{"type":"message_end","message":{"role":"assistant","provider":"opencode-go","model":"glm-5.3-flash","usage":{"input":10,"output":4,"cost":{"total":0}}}}`)
-	p.Feed(`{"type":"message_end","message":{"role":"assistant","provider":"opencode-go","model":"glm-5.3-flash","usage":{"input":20,"output":6,"cost":{"total":0}}}}`)
-	if u := p.Trace().Usage; u.Cost == nil || *u.Cost != 0 || u.Source != "tool" || u.Currency != "USD" || *u.Input != 30 {
-		t.Fatal("明确报的零花费要保留", u)
-	}
-	p = NewParser("pi")
-	p.Feed(`{"type":"message_end","message":{"role":"assistant","usage":{"input":10,"output":4}}}`)
-	if u := p.Trace().Usage; u.Cost != nil || u.Source != "" {
-		t.Fatal("字段缺席仍当没报", u)
-	}
-	p = NewParser("opencode")
-	p.Feed(`{"type":"step_finish","part":{"reason":"stop","cost":0,"tokens":{"input":7,"output":2,"cache":{"read":0,"write":0}}}}`)
-	if u := p.Trace().Usage; u.Cost == nil || *u.Cost != 0 || u.Source != "tool" {
-		t.Fatal("明确报的零花费要保留", u)
-	}
-	p = NewParser("opencode")
-	p.Feed(`{"type":"step_finish","part":{"reason":"stop","cost":-1,"tokens":{"input":7,"output":2}}}`)
-	if u := p.Trace().Usage; u.Cost != nil {
-		t.Fatal("负数花费仍当没报", u)
-	}
-	p = NewParser("opencode")
-	p.Feed(`{"type":"step_finish","part":{"reason":"stop","tokens":{"input":7,"output":2}}}`)
-	if u := p.Trace().Usage; u.Cost != nil {
-		t.Fatal("字段缺席仍当没报", u)
 	}
 }
 
@@ -209,7 +142,7 @@ func TestBillingProfile(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		err = CheckProfile("combos/codex+gpt-6.1-sol", keys)
+		err = CheckProfile("combos/dsh+deepseek-v4", keys)
 		if (err == nil) != c.ok {
 			t.Fatalf("%s: %v", c.src, err)
 		}

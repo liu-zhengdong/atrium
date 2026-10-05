@@ -30,7 +30,7 @@ func (e *env) localTask(dept, repo string, files map[string]string, commit bool)
 	if err != nil {
 		e.t.Fatal(err)
 	}
-	e.start(t.ID, "claude+opus")
+	e.start(t.ID, "dsh+opus")
 	wt := filepath.Join(e.t.TempDir(), "wt")
 	e.gh.Must(repo, "worktree", "add", "--quiet", "-B", "task-"+t.ID, wt, "HEAD")
 	for name, body := range files {

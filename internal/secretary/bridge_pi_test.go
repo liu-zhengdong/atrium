@@ -148,7 +148,7 @@ func TestSendRejectedGivesUp(t *testing.T) {
 				piRegistry(t, b.home, pi.sock, c.registered)
 			}
 			err := b.send("一批")
-			if !errors.Is(err, platform.ErrPiRejected) || !strings.Contains(err.Error(), c.want) {
+			if !errors.Is(err, platform.ErrInboxRejected) || !strings.Contains(err.Error(), c.want) {
 				t.Fatalf("应报拒收并说明原因（%s）：%v", c.want, err)
 			}
 			if len(pi.delivered()) != 0 {
@@ -161,7 +161,7 @@ func TestSendRejectedGivesUp(t *testing.T) {
 func TestSendGoneIsNotRejected(t *testing.T) {
 	b, _ := piBridge(t, filepath.Join(t.TempDir(), "没有.sock"), "tok")
 	err := b.send("一批")
-	if errors.Is(err, platform.ErrPiRejected) || !errors.Is(err, platform.ErrEndpointGone) {
+	if errors.Is(err, platform.ErrInboxRejected) || !errors.Is(err, platform.ErrEndpointGone) {
 		t.Fatalf("收件地址不在仍走 Liveness（ErrEndpointGone），不当拒收：%v", err)
 	}
 }

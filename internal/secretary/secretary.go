@@ -44,12 +44,13 @@ func Module() app.Module { return app.Module{Name: "secretary", Commands: Comman
 func Commands(t *cli.Table) {
 	t.Group("secretary", "秘书")
 	t.Add(cli.Command{Path: "secretary bridge",
-		Summary: "在秘书会话里常驻，把要处理的事件注入会话；Claude Code 用 --install-hook 随会话自动起，Pi 由扩展用 --pi 起",
+		Summary: "在秘书会话里常驻，把要处理的事件注入会话；Claude Code 用 --install-hook 随会话自动起，Pi 用 --pi、DSH 用 --dsh 指名会话",
 		Flags: []cli.Flag{
 			{Name: "detach", Bool: true, Help: "后台起（SessionStart hook 与 Pi 扩展用），起好后输出根部门要点、此刻全景与秘书备忘就返回"},
 			{Name: "install-hook", Bool: true, Help: "在秘书目录的 .claude/settings.local.json 加 SessionStart hook 与 env ATRIUM_AS=secretary（命令署名秘书）"},
 			{Name: "dir", Value: "目录", Help: "--install-hook 的秘书目录（缺省当前目录）"},
 			{Name: "pi", Value: "会话", Help: "Pi 秘书会话：pid、名字或会话 id 前缀（读 ~/.pi/agent/inbox 里的登记）"},
+			{Name: "dsh", Value: "会话", Help: "DSH 秘书会话：pid、会话 id 前缀或 profile 名（读 $DSH_HOME/atrium/inbox 里的登记）"},
 			{Name: "stop", Bool: true, Help: "停掉在跑的 bridge 让出收件地址（Pi 里 /secretary off 用）"},
 			{Name: "status", Bool: true, Help: "看 bridge 在不在跑、秘书在不在听"},
 			{Name: "batch", Value: "秒", Help: "首条事件到了之后攒多久再送（缺省 30）"},
@@ -96,8 +97,10 @@ func bridgeCommand(c *cli.Ctx) error {
 	if c.Has("dir") && !c.Bool("install-hook") {
 		return api.Usage("--dir: 只和 --install-hook 一起用")
 	}
-	if c.Has("pi") && (c.Bool("install-hook") || c.Bool("status") || c.Bool("stop")) {
-		return api.Usage("--pi: 只和 --detach 一起用（或单独跑 bridge）")
+	for _, name := range []string{"pi", "dsh"} {
+		if c.Has(name) && (c.Bool("install-hook") || c.Bool("status") || c.Bool("stop")) {
+			return api.Usage("--%s: 只和 --detach 一起用（或单独跑 bridge）", name)
+		}
 	}
 	batch, err := c.Int("batch", int(BatchWindow.Seconds()))
 	if err != nil {
@@ -128,23 +131,48 @@ func bridgeCommand(c *cli.Ctx) error {
 	return foreground(c, p, in, time.Duration(batch)*time.Second)
 }
 
-// inbox 是秘书会话的收件地址。两种会话的协议不同：Pi 逐条回执（platform/piinbox.go），Claude Code 只收不回。
+// inbox 是秘书会话的收件地址。两种协议：Pi 与 DSH 逐条回执（线上协议同一套，见 platform/inbox.go；
+// 登记不同，piinbox.go 与 dshinbox.go），Claude Code 只收不回。
 type inbox struct {
-	kind     string // kindPi 或 kindClaude
+	kind     string // kindPi、kindDSH 或 kindClaude
 	endpoint string
 	token    string
 }
 
 const (
 	kindPi     = "pi"
+	kindDSH    = "dsh"
 	kindClaude = "claude-code"
 	// Pi 收件地址与口令：Pi 扩展（/secretary on）起 bridge 时写进环境，bridge 再传给它自己的子进程。
 	piInboxEnv = "ATRIUM_PI_INBOX"
 	piTokenEnv = "ATRIUM_PI_TOKEN"
+	// DSH 收件地址与口令：dsh-atrium 插件起 bridge 时写进环境（做法同 pi-inbox）。
+	dshInboxEnv = "ATRIUM_DSH_INBOX"
+	dshTokenEnv = "ATRIUM_DSH_TOKEN"
 )
 
-// resolveInbox 定这次 bridge 往哪送：--pi 指名本机一个 Pi 会话，否则从环境变量认本会话的收件地址。
+// resolveInbox 定这次 bridge 往哪送：--pi/--dsh 指名本机一个会话，否则从环境变量认本会话的收件地址。
 func resolveInbox(c *cli.Ctx) (inbox, error) {
+	if q := c.Str("dsh"); q != "" {
+		userHome, err := os.UserHomeDir()
+		if err != nil {
+			return inbox{}, err
+		}
+		dshHome := platform.DSHHome(userHome, c.Env.Getenv)
+		list, err := platform.ListDSHInbox(dshHome)
+		if err != nil {
+			return inbox{}, err
+		}
+		hit, err := MatchDSHInbox(list, q)
+		if err != nil {
+			return inbox{}, err
+		}
+		token, err := hit.Token()
+		if err != nil {
+			return inbox{}, api.Usage("DSH 会话 %d 的口令读不出：%v", hit.PID, err)
+		}
+		return inbox{kind: kindDSH, endpoint: hit.Socket, token: token}, nil
+	}
 	if q := c.Str("pi"); q != "" {
 		home, err := os.UserHomeDir()
 		if err != nil {
@@ -167,14 +195,17 @@ func resolveInbox(c *cli.Ctx) (inbox, error) {
 	return sessionInbox(runtime.GOOS, c.Env.Getenv)
 }
 
-// sessionInbox 读本会话的收件地址与口令：Claude Code 的在 hook 与 Bash 子进程里有，Pi 的由扩展起 bridge 时写进环境。
+// sessionInbox 读本会话的收件地址与口令：Claude Code 的在 hook 与 Bash 子进程里有，Pi 与 DSH 的由各自的桥起 bridge 时写进环境。
 func sessionInbox(goos string, getenv func(string) string) (inbox, error) {
 	if endpoint, token := getenv(piInboxEnv), getenv(piTokenEnv); endpoint != "" && token != "" {
 		return inbox{kind: kindPi, endpoint: endpoint, token: token}, nil
 	}
+	if endpoint, token := getenv(dshInboxEnv), getenv(dshTokenEnv); endpoint != "" && token != "" {
+		return inbox{kind: kindDSH, endpoint: endpoint, token: token}, nil
+	}
 	raw, token := getenv("CLAUDE_CODE_MESSAGING_SOCKET"), getenv("CLAUDE_CODE_MESSAGING_TOKEN")
 	if raw == "" || token == "" {
-		return inbox{}, api.Usage("不在秘书会话里：没有 %s/%s（Pi 会话里先 /secretary on）也没有 CLAUDE_CODE_MESSAGING_SOCKET/CLAUDE_CODE_MESSAGING_TOKEN", piInboxEnv, piTokenEnv)
+		return inbox{}, api.Usage("不在秘书会话里：没有 %s/%s（Pi 会话里先 /secretary on）或 %s/%s 也没有 CLAUDE_CODE_MESSAGING_SOCKET/CLAUDE_CODE_MESSAGING_TOKEN", piInboxEnv, piTokenEnv, dshInboxEnv, dshTokenEnv)
 	}
 	endpoint := platform.MessagingEndpoint(goos, raw)
 	if endpoint == "" {
@@ -232,10 +263,14 @@ func foreground(c *cli.Ctx, p config.Paths, in inbox, batch time.Duration) error
 	if cur != nil && cur.PID != os.Getpid() && Claim(cur, in.endpoint, platform.Alive) == "running" {
 		return api.Conflict("本会话的 bridge 已在跑（pid %d）", cur.PID).WithNext("atrium secretary bridge --status")
 	}
+	// home 是重读口令时找登记的根：Pi 是用户主目录，DSH 是 $DSH_HOME。
 	var home string
-	if in.kind == kindPi {
+	if in.kind == kindPi || in.kind == kindDSH {
 		if home, err = os.UserHomeDir(); err != nil {
 			return err
+		}
+		if in.kind == kindDSH {
+			home = platform.DSHHome(home, c.Env.Getenv)
 		}
 	}
 	me := os.Getpid()
@@ -258,7 +293,7 @@ type bridge struct {
 	c       *cli.Ctx
 	p       config.Paths
 	in      inbox
-	home    string // 重读 Pi 口令时找 pi-inbox 登记
+	home    string // 重读口令时找登记的根：Pi 是用户主目录，DSH 是 $DSH_HOME
 	me      int
 	log     *log.Logger
 	sent    Sent
@@ -360,9 +395,9 @@ func (b *bridge) run(ctx context.Context) string {
 		}
 		err = b.send(Prompt(batch, store.Now(), RemindAfter, names))
 		b.noteDelivery(err)
-		if errors.Is(err, platform.ErrPiRejected) {
+		if errors.Is(err, platform.ErrInboxRejected) {
 			// 连得上但拒收，不进 Liveness 计时（2 分钟连不上的判定对它永不触发）；send 已重读口令重试过。
-			return fmt.Sprintf("会话拒收，重读口令后仍送不进（%v）；在秘书会话里 /secretary on 重新接手", err)
+			return fmt.Sprintf("会话拒收，重读口令后仍送不进（%v）；在秘书会话里重新起 bridge（Pi 里 /secretary on，DSH 里 atrium secretary bridge --dsh <会话>）", err)
 		}
 		if reason := b.closed(err); reason != "" {
 			return reason
@@ -380,25 +415,29 @@ func (b *bridge) run(ctx context.Context) string {
 	}
 }
 
-// send 把一批事件送进会话：Pi 走 pi-inbox 协议（逐条读回执），Claude Code 只写完不回执。
-// Pi 会话重载会换口令（收件地址不变）：被拒收就按收件地址重读一次口令再送；仍不行返回包着 platform.ErrPiRejected 的错误。
+// send 把一批事件送进会话：Pi 与 DSH 逐条读回执（线上协议同一套，登记不同），Claude Code 只写完不回执。
+// 会话重载会换口令（收件地址不变）：被拒收就按收件地址重读一次口令再送；仍不行返回包着 platform.ErrInboxRejected 的错误。
 func (b *bridge) send(text string) error {
-	if b.in.kind != kindPi {
+	if b.in.kind == kindClaude {
 		return platform.SendLines(b.in.endpoint, InboxLines(b.in.token, text), 5*time.Second)
 	}
-	err := platform.SendPiMessages(b.in.endpoint, b.in.token, []string{text}, 5*time.Second)
-	if !errors.Is(err, platform.ErrPiRejected) {
+	send, tokenFor, host := platform.SendPiMessages, func() (string, error) { return platform.PiTokenFor(b.home, b.in.endpoint) }, "pi-inbox"
+	if b.in.kind == kindDSH {
+		send, tokenFor, host = platform.SendDSHMessages, func() (string, error) { return platform.DSHTokenFor(b.home, b.in.endpoint) }, "dsh-atrium"
+	}
+	err := send(b.in.endpoint, b.in.token, []string{text}, 5*time.Second)
+	if !errors.Is(err, platform.ErrInboxRejected) {
 		return err
 	}
-	token, rerr := platform.PiTokenFor(b.home, b.in.endpoint)
+	token, rerr := tokenFor()
 	if rerr != nil {
 		return fmt.Errorf("%w；重读口令失败：%v", err, rerr)
 	}
 	b.in.token = token
-	if err2 := platform.SendPiMessages(b.in.endpoint, token, []string{text}, 5*time.Second); err2 != nil {
+	if err2 := send(b.in.endpoint, token, []string{text}, 5*time.Second); err2 != nil {
 		return fmt.Errorf("%w；重读口令后重送：%v", err, err2)
 	}
-	b.log.Printf("会话拒收（%v），已从 pi-inbox 登记重读口令，重送成功", err)
+	b.log.Printf("会话拒收（%v），已从 %s 登记重读口令，重送成功", err, host)
 	return nil
 }
 
@@ -469,9 +508,13 @@ func detach(c *cli.Ctx, p config.Paths, in inbox, batch int) error {
 	defer lf.Close()
 	// bridge 要会话收件地址与数据目录，环境原样带上（它不是执行者）；Pi 的收件地址不在当前环境里，显式传给它。
 	env := platform.EnvMap(os.Environ())
-	if in.kind == kindPi {
+	switch in.kind {
+	case kindPi:
 		env[platform.EnvKey(runtime.GOOS, piInboxEnv)] = in.endpoint
 		env[platform.EnvKey(runtime.GOOS, piTokenEnv)] = in.token
+	case kindDSH:
+		env[platform.EnvKey(runtime.GOOS, dshInboxEnv)] = in.endpoint
+		env[platform.EnvKey(runtime.GOOS, dshTokenEnv)] = in.token
 	}
 	cmd, err := platform.Start(platform.Spec{Path: self, Args: []string{"secretary", "bridge", "--batch", fmt.Sprint(batch)},
 		Env: env, Stdout: lf, Stderr: lf, Detached: true})
@@ -585,8 +628,11 @@ func statusText(cur *Record, alive bool, l *events.Listener, logFile string) (te
 
 // kindText 把登记里的会话种类写成人看的话（早期登记没有这个字段，那时只有 Claude Code 一种）。
 func kindText(kind string) string {
-	if kind == kindPi {
+	switch kind {
+	case kindPi:
 		return "Pi"
+	case kindDSH:
+		return "DSH"
 	}
 	return "Claude Code"
 }

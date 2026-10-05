@@ -1,11 +1,9 @@
 package platform
 
 import (
-	"bufio"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -15,11 +13,7 @@ import (
 )
 
 // 本文件是 Pi 会话收件地址（secretary bridge 用）：pi-inbox 扩展（~/.pi/agent/extensions/pi-inbox.ts）
-// 每个会话登记一份，记着它监听的 Unix socket 与口令文件的路径。
-//
-// 协议：首行鉴权（裸 token），之后一行一条
-// {"message":…,"as":"external|user","from":…,"deliverAs":"auto|steer|followUp"}，
-// 每行回一条 {"ok":true,…} 或 {"ok":false,"error":"…"}。
+// 每个会话登记一份，记着它监听的 Unix socket 与口令文件的路径。线上协议见 inbox.go（与 DSH 共用）。
 
 // PiInbox 是 pi-inbox 写的会话登记。
 type PiInbox struct {
@@ -126,59 +120,7 @@ func (in PiInbox) usable() error {
 	return nil
 }
 
-// piMessage 是投给 Pi 会话的一条消息；一条一个 JSON，换行在 JSON 里转义。
-type piMessage struct {
-	Message   string `json:"message"`
-	As        string `json:"as"`
-	From      string `json:"from"`
-	DeliverAs string `json:"deliverAs"`
-}
-
-// ErrPiRejected：连上了会话，但会话回执拒收（如口令不对的 unauthorized）。和连不上分开：重试连接救不了它。
-var ErrPiRejected = errors.New("会话没收下")
-
-// SendPiMessages 投递若干条消息并逐条读回执；任一条没收下就报错（会话拒收的包着 ErrPiRejected）。
-// deliverAs=followUp：秘书会话忙时不打断，排在当前这轮之后。
+// SendPiMessages 投递若干条消息并逐条读回执；线上协议与 DSH 共用（inbox.go）。
 func SendPiMessages(endpoint, token string, messages []string, timeout time.Duration) error {
-	conn, err := DialEndpoint(endpoint, timeout)
-	if err != nil {
-		return err
-	}
-	defer conn.Close()
-	rw, ok := conn.(io.ReadWriter)
-	if !ok {
-		return fmt.Errorf("Pi 收件地址 %s 不能读回执（只支持 Unix socket）", endpoint)
-	}
-	var w strings.Builder
-	w.WriteString(token)
-	w.WriteByte('\n')
-	for _, m := range messages {
-		raw, err := json.Marshal(piMessage{Message: m, As: "external", From: "atrium-secretary", DeliverAs: "followUp"})
-		if err != nil {
-			return err
-		}
-		w.Write(raw)
-		w.WriteByte('\n')
-	}
-	if _, err := io.WriteString(rw, w.String()); err != nil {
-		return err
-	}
-	rd := bufio.NewReader(rw)
-	for i := range messages {
-		line, err := rd.ReadString('\n')
-		if err != nil {
-			return fmt.Errorf("送出 %d 条后没收到回执：%w", i, err)
-		}
-		var reply struct {
-			OK    bool   `json:"ok"`
-			Error string `json:"error"`
-		}
-		if err := json.Unmarshal([]byte(line), &reply); err != nil {
-			return fmt.Errorf("回执认不出（%q）：%w", strings.TrimSpace(line), err)
-		}
-		if !reply.OK {
-			return fmt.Errorf("%w：%s", ErrPiRejected, reply.Error)
-		}
-	}
-	return nil
+	return sendInboxMessages("Pi", endpoint, token, messages, timeout)
 }

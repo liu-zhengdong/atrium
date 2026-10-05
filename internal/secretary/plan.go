@@ -258,6 +258,51 @@ func piInboxListText(list []platform.PiInbox) string {
 	return strings.Join(parts, "、")
 }
 
+// MatchDSHInbox 从登记里挑一个 DSH 会话：先按 pid，再按会话 id 前缀，最后按 profile 名。
+func MatchDSHInbox(list []platform.DSHInbox, q string) (platform.DSHInbox, error) {
+	var hit []platform.DSHInbox
+	if pid, err := strconv.Atoi(q); err == nil {
+		for _, in := range list {
+			if in.PID == pid {
+				hit = append(hit, in)
+			}
+		}
+	}
+	if len(hit) == 0 {
+		for _, in := range list {
+			if in.HasSession(q) || (in.Profile != "" && in.Profile == q) {
+				hit = append(hit, in)
+			}
+		}
+	}
+	switch len(hit) {
+	case 1:
+		return hit[0], nil
+	case 0:
+		return platform.DSHInbox{}, api.Usage("没有这个 DSH 会话：%q（本机在登记的是 %s；装 dsh-atrium 插件后才有）", q, dshInboxListText(list))
+	}
+	return platform.DSHInbox{}, api.Usage("%q 对上多个 DSH 会话：%s；用 pid 指名", q, dshInboxListText(hit))
+}
+
+// dshInboxListText 把候选会话写成一行的样子，用于认不出来时告诉用户有哪些。
+func dshInboxListText(list []platform.DSHInbox) string {
+	if len(list) == 0 {
+		return "无"
+	}
+	parts := make([]string, 0, len(list))
+	for _, in := range list {
+		who := in.Profile
+		if who == "" && len(in.Sessions) > 0 {
+			who = in.Sessions[0].ID
+		}
+		if who == "" {
+			who = "无名"
+		}
+		parts = append(parts, fmt.Sprintf("%d（%s，%d 个会话）", in.PID, who, len(in.Sessions)))
+	}
+	return strings.Join(parts, "、")
+}
+
 // WithHook 在 Claude Code 设置里加一条起 bridge 的 SessionStart hook，并在 env 里写 ATRIUM_AS=secretary
 // （会话里发的命令署名秘书）；两样都有就不改，changed 为 false。
 // 结构认不出（hooks、env 不是对象，SessionStart 不是数组）或 env.ATRIUM_AS 已是别的值时报错，不覆盖用户的内容。

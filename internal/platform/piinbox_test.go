@@ -73,7 +73,7 @@ func TestSendPiMessages(t *testing.T) {
 	if lines[0] != "tok" {
 		t.Fatalf("首行应是裸 token：%q", lines[0])
 	}
-	var m piMessage
+	var m inboxMessage
 	if err := json.Unmarshal([]byte(lines[1]), &m); err != nil {
 		t.Fatalf("第二条不是一行 JSON：%v（%q）", err, lines[1])
 	}
@@ -91,8 +91,8 @@ func TestSendPiMessagesRefused(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "rate limited") {
 		t.Fatalf("会话拒收应报出它的理由：%v", err)
 	}
-	if !errors.Is(err, ErrPiRejected) || errors.Is(err, ErrEndpointGone) {
-		t.Fatalf("会话拒收应是 ErrPiRejected，不是连不上：%v", err)
+	if !errors.Is(err, ErrInboxRejected) || errors.Is(err, ErrEndpointGone) {
+		t.Fatalf("会话拒收应是 ErrInboxRejected，不是连不上：%v", err)
 	}
 }
 

@@ -83,6 +83,9 @@ func TestSendPiMessages(t *testing.T) {
 	if err := json.Unmarshal([]byte(lines[2]), &m); err != nil || m.Message != "第二条\n带换行" {
 		t.Fatalf("换行应在 JSON 里转义、整条一行：%v %+v", err, m)
 	}
+	if strings.Contains(lines[1], "sessionId") {
+		t.Fatalf("Pi 的收件地址本身就是一个会话，不该带 sessionId：%q", lines[1])
+	}
 }
 
 func TestSendPiMessagesRefused(t *testing.T) {

@@ -135,7 +135,7 @@ func TestDSHHome(t *testing.T) {
 
 func TestSendDSHMessages(t *testing.T) {
 	sock, got := fakeDSH(t, func(int) (string, bool) { return `{"ok":true,"deliverAs":"followUp"}`, true })
-	if err := SendDSHMessages(sock, "tok", []string{"第一条", "第二条\n带换行"}, 2*time.Second); err != nil {
+	if err := SendDSHMessages(sock, "tok", "session-aaaa1111-2222", []string{"第一条", "第二条\n带换行"}, 2*time.Second); err != nil {
 		t.Fatal(err)
 	}
 	lines := <-got
@@ -149,15 +149,59 @@ func TestSendDSHMessages(t *testing.T) {
 	if m.Message != "第一条" || m.As != "external" || m.From != "atrium-secretary" || m.DeliverAs != "followUp" {
 		t.Fatalf("消息字段不对：%+v", m)
 	}
+	if m.SessionID != "session-aaaa1111-2222" {
+		t.Fatalf("要给插件带上指名投给哪个会话：%+v", m)
+	}
+}
+
+// 没指名会话时不许带 sessionId 字段：空值写进 JSON 就成了「指名了一个空会话」，插件会照着它挑。
+func TestSendDSHMessagesWithoutSession(t *testing.T) {
+	sock, got := fakeDSH(t, func(int) (string, bool) { return `{"ok":true}`, true })
+	if err := SendDSHMessages(sock, "tok", "", []string{"一"}, 2*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	lines := <-got
+	if strings.Contains(lines[1], "sessionId") {
+		t.Fatalf("没指名会话时不该有 sessionId：%q", lines[1])
+	}
 }
 
 func TestSendDSHMessagesRefused(t *testing.T) {
-	sock, _ := fakeDSH(t, func(int) (string, bool) { return `{"ok":false,"error":"unauthorized"}`, true })
-	err := SendDSHMessages(sock, "错的口令", []string{"一"}, 2*time.Second)
-	if err == nil || !strings.Contains(err.Error(), "unauthorized") {
+	sock, _ := fakeDSH(t, func(int) (string, bool) {
+		return `{"ok":false,"error":"没有指定要投的会话：消息里带 sessionId，或在插件配置里写 session"}`, true
+	})
+	err := SendDSHMessages(sock, "tok", "", []string{"一"}, 2*time.Second)
+	if err == nil || !strings.Contains(err.Error(), "没有指定要投的会话") {
 		t.Fatalf("会话拒收应报出它的理由：%v", err)
 	}
 	if !errors.Is(err, ErrInboxRejected) || errors.Is(err, ErrEndpointGone) {
 		t.Fatalf("会话拒收应是 ErrInboxRejected，不是连不上：%v", err)
+	}
+}
+
+// 挑会话：q 是会话 id 前缀就用它；q 指的是 pid/profile 而进程里只有一个会话时用那一个；多个会话又没指名就空着。
+func TestDSHInboxSessionID(t *testing.T) {
+	one := DSHInbox{PID: 7, Sessions: []DSHSession{{ID: "session-aaaa1111-2222"}}}
+	if got := one.SessionID("session-aaaa"); got != "session-aaaa1111-2222" {
+		t.Fatalf("按前缀挑出全名：%q", got)
+	}
+	if got := one.SessionID("7"); got != "session-aaaa1111-2222" {
+		t.Fatalf("按 pid 挑、进程里只有一个会话就用它：%q", got)
+	}
+	if got := one.SessionID("atrium"); got != "session-aaaa1111-2222" {
+		t.Fatalf("按 profile 挑、进程里只有一个会话就用它：%q", got)
+	}
+	if got := (DSHInbox{PID: 8}).SessionID("8"); got != "" {
+		t.Fatalf("一个会话都没有时定不下来：%q", got)
+	}
+	many := DSHInbox{PID: 9, Profile: "desktop", Sessions: []DSHSession{{ID: "session-aaaa1111"}, {ID: "session-bbbb2222"}}}
+	if got := many.SessionID("desktop"); got != "" {
+		t.Fatalf("多个会话又没指名哪一个，不许瞎挑：%q", got)
+	}
+	if got := many.SessionID("session-bbbb"); got != "session-bbbb2222" {
+		t.Fatalf("多个会话里按前缀指名：%q", got)
+	}
+	if got := many.SessionID("session-cccc"); got != "" {
+		t.Fatalf("前缀对不上也不能拿别的顶上：%q", got)
 	}
 }

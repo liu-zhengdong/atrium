@@ -282,11 +282,19 @@ func TestMatchDSHInbox(t *testing.T) {
 // sessionInbox：Pi 与 DSH 的收件地址优先（各自的桥起 bridge 时带着它），其次 Claude Code 的。
 func TestSessionInboxDSH(t *testing.T) {
 	dsh := func(k string) string {
-		return map[string]string{dshInboxEnv: "/tmp/dsh.sock", dshTokenEnv: "t-dsh"}[k]
+		return map[string]string{dshInboxEnv: "/tmp/dsh.sock", dshTokenEnv: "t-dsh", dshSessionEnv: "session-aaaa1111"}[k]
 	}
 	in, err := sessionInbox("linux", dsh)
 	if err != nil || in.kind != kindDSH || in.endpoint != "/tmp/dsh.sock" || in.token != "t-dsh" {
 		t.Fatalf("DSH 环境：%v %+v", err, in)
+	}
+	if in.session != "session-aaaa1111" {
+		t.Fatalf("DSH 环境里指了名的会话要认下来：%+v", in)
+	}
+	if in, err := sessionInbox("linux", func(k string) string {
+		return map[string]string{dshInboxEnv: "/tmp/dsh.sock", dshTokenEnv: "t-dsh"}[k]
+	}); err != nil || in.session != "" {
+		t.Fatalf("没有指名会话也是合法的收件地址（投不投得成看插件配没配 session）：%v %+v", err, in)
 	}
 	if in, err := sessionInbox("linux", func(k string) string {
 		return map[string]string{piInboxEnv: "/tmp/pi.sock", piTokenEnv: "t-pi"}[k]
@@ -295,6 +303,26 @@ func TestSessionInboxDSH(t *testing.T) {
 	}
 	if _, err := sessionInbox("linux", func(string) string { return "" }); err == nil || !strings.Contains(err.Error(), dshInboxEnv) {
 		t.Fatalf("不在会话里应同时提到两套变量：%v", err)
+	}
+}
+
+// 起 bridge 时的提醒与 --status 里的「谁在听」：DSH 没指名会话要说清楚，指了名要能看出是哪个。
+func TestInboxWarningsAndWhoText(t *testing.T) {
+	if w := inboxWarnings(inbox{kind: kindDSH, endpoint: "/tmp/a.sock", session: "session-aaaa1111"}); len(w) != 0 {
+		t.Fatalf("指名了会话就不该有提醒：%q", w)
+	}
+	w := inboxWarnings(inbox{kind: kindDSH, endpoint: "/tmp/a.sock"})
+	if len(w) != 1 || !strings.Contains(w[0], "没有指名") {
+		t.Fatalf("DSH 没指名会话要提醒：%q", w)
+	}
+	if w := inboxWarnings(inbox{kind: kindPi, endpoint: "/tmp/p.sock"}); len(w) != 0 {
+		t.Fatalf("Pi 没有这回事：%q", w)
+	}
+	if got := whoText(&Record{Kind: kindDSH, Session: "session-aaaa1111-2222"}); got != "DSH 会话（aaaa1111）" {
+		t.Fatalf("--status 里要看得出是哪个会话：%q", got)
+	}
+	if got := whoText(&Record{Kind: kindPi}); got != "Pi 会话" {
+		t.Fatalf("Pi 没有会话短号：%q", got)
 	}
 }
 

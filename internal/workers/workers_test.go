@@ -618,6 +618,10 @@ func TestClassify(t *testing.T) {
 		{"dsh 继续跟进、报错收尾照判", ExitUnknown, `{"type":"status","phase":"turn_end","turn":1,"reason":{"kind":"aborted"}}`, SignalTransient, time.Time{}},
 		{"dsh 轮次内的额度报文", 1, `{"type":"status","phase":"turn_end","turn":1,"reason":{"kind":"error","error":{"code":"RATE_LIMITED","message":"You've hit your usage limit. Try again in ~5 min."}}}`, SignalQuota, now.Add(5 * time.Minute)},
 		{"dsh 正常收尾不判", 1, `{"type":"status","phase":"turn_end","turn":1,"reason":{"kind":"completed"}}` + "\n" + `{"type":"final","text":"好了"}`, SignalNone, time.Time{}},
+		// dsh 的默认 provider（DeepSeek，按 API key 计费）两种真实报文：余额不足按额度用尽处置；
+		// key 失效（Authentication Fails…api key is invalid）按没登录处置，不当临时错误反复重试。
+		{"dsh 余额不足算额度用尽", 1, `{"type":"status","phase":"turn_end","turn":1,"reason":{"kind":"error","error":{"code":"insufficient_quota","message":"Insufficient Balance"}}}`, SignalQuota, time.Time{}},
+		{"dsh key 失效算没登录", 1, `{"type":"error","message":"Error: Authentication Fails, Your api key is invalid"}`, SignalSetup, time.Time{}},
 	}
 	for _, c := range cases {
 		s := Classify(c.code, "", LogTail{Text: c.tail}, now)

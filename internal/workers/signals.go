@@ -108,8 +108,9 @@ var (
 		re     *regexp.Regexp
 		reason string
 	}{
-		// 登录失效也算：claude 的 OAuth 过期、被吊销报「Failed to authenticate」，不一定带「请重新登录」
-		{regexp.MustCompile(`(?i)\bnot (?:signed|logged) in\b|please (?:run /login|log ?in|sign ?in)\b|\blogin[_ ]required\b|\brequires? (?:a )?login\b|\bfailed to authenticate\b`), "没登录"},
+		// 登录失效也算：claude 的 OAuth 过期、被吊销报「Failed to authenticate」，不一定带「请重新登录」；
+		// dsh 的默认 provider（DeepSeek）key 失效报「Authentication Fails, Your api key is invalid」。
+		{regexp.MustCompile(`(?i)\bnot (?:signed|logged) in\b|please (?:run /login|log ?in|sign ?in)\b|\blogin[_ ]required\b|\brequires? (?:a )?login\b|\bfailed to authenticate\b|\bauthentication fails?\b|\b(?:api[_ ]?key|token)\b[^\n]{0,20}\b(?:is )?(?:invalid|expired|incorrect)\b`), "没登录"},
 		// 工具或它依赖的解释器找不到：版本管理器没选版本、shell／Windows 找不到命令、shebang 的 env 找不到、拉起子进程 ENOENT
 		{regexp.MustCompile(`(?i)No active Node\.js version|\bcommand not found\b|^\S*sh: (?:\d+: )?\S+: not found$|不是内部或外部命令|is not recognized as an internal or external command|^env: \S+: No such file or directory|\bspawn \S+ ENOENT\b|executable file not found in`), "缺运行环境"},
 		// 服务端拒收旧版本：grok 的 426 Upgrade Required「Your Grok CLI version (1.0.5) is outdated」

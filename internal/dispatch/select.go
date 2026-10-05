@@ -98,7 +98,9 @@ func (d *dispatcher) view(ctx context.Context, t ledger.Task, o Options, exclude
 					f.Waiting = why // 不可用标记会到期或被解除，等它
 				}
 			}
-			if choice.Kind == "queue" {
+			if choice.Kind == "queue" && choice.Held {
+				// 标记不可用/离线/自检未就绪这类等恢复的排队才进 Waiting（挑人侧按 Held 上报知会）；
+				// 满载正忙的排队在 Pick 里按 Busy 归位，不算等恢复。
 				f.Waiting = choice.Reason
 			} else if choice.Kind != "run" {
 				f.Unavailable = choice.Reason

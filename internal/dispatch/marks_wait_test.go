@@ -12,6 +12,7 @@ import (
 
 	"github.com/liu-zhengdong/atrium/internal/events"
 	"github.com/liu-zhengdong/atrium/internal/ledger"
+	"github.com/liu-zhengdong/atrium/internal/org"
 	"github.com/liu-zhengdong/atrium/internal/store"
 	"github.com/liu-zhengdong/atrium/internal/watch"
 	"github.com/liu-zhengdong/atrium/internal/workers"
@@ -191,6 +192,101 @@ func TestRequeueStartStuckSwitches(t *testing.T) {
 	items, err := queued(ctx, env.DB)
 	if err != nil || len(items) != 1 || items[0].Opts.Worker != "" || !slices.Equal(items[0].Opts.Avoid, []string{"kimi"}) || !items[0].Opts.Switch {
 		t.Fatalf("启动卡住应换人、避开 kimi：%+v %v", items, err)
+	}
+}
+
+// t880：能接的执行者都在等恢复（都被标记挡着）——留在队列等之外，还要向秘书发一条知会用户的上报；
+// 同一原因只报一次，标记恢复时刻变化（正文变了）才算新原因再报。
+func TestHeldEscalatesToSecretary(t *testing.T) {
+	env, d := setup(t)
+	ctx := context.Background()
+	markAll(t, env.DB, "")
+	tk, _ := ledger.Add(ctx, env.DB, ledger.NewTask{Title: "审阅"}, "u1")
+	if _, err := Enqueue(ctx, env, tk.ID, Options{}, "u1"); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		if err := d.pump(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var n int
+	err := env.DB.QueryRowContext(ctx, `SELECT count(*) FROM events WHERE task = ? AND kind = ? AND target = ?`,
+		tk.ID, events.LeaderEscalate, org.Secretary).Scan(&n)
+	if err != nil || n != 1 {
+		t.Fatalf("空池应向秘书报一条知会用户的上报：%d %v", n, err)
+	}
+	var level, body string
+	err = env.DB.QueryRowContext(ctx, `SELECT level, body FROM events WHERE task = ? AND kind = ?`,
+		tk.ID, events.LeaderEscalate).Scan(&level, &body)
+	if err != nil || level != events.Act || !strings.Contains(body, `"kind":"notify"`) || !strings.Contains(body, tk.ID) {
+		t.Fatalf("上报应是要处理的 notify 知会且带任务号：level=%q body=%s %v", level, body, err)
+	}
+	// 恢复时刻变了算新原因：换一条标记（不同恢复时刻）再派一轮，应再报一条。
+	if _, err := workers.ClearMarks(ctx, env.DB, "claude"); err != nil {
+		t.Fatal(err)
+	}
+	now := store.Now()
+	m := workers.Mark{Tool: "claude", Host: LocalHost, Kind: workers.SignalQuota, Reason: "额度用尽", Since: now, Until: now + 2*time.Hour.Milliseconds()}
+	if err := workers.SetMark(ctx, env.DB, m); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.pump(ctx); err != nil {
+		t.Fatal(err)
+	}
+	err = env.DB.QueryRowContext(ctx, `SELECT count(*) FROM events WHERE task = ? AND kind = ? AND target = ?`,
+		tk.ID, events.LeaderEscalate, org.Secretary).Scan(&n)
+	if err != nil || n != 2 {
+		t.Fatalf("原因变了应再报一条：%d %v", n, err)
+	}
+}
+
+// t880b：能接的只是正忙（独占工具在跑），不是等恢复——正常排队，不上报。
+func TestHeldNotBusyQueue(t *testing.T) {
+	env, d := setup(t)
+	ctx := context.Background()
+	// 只剩 claude 没被标且它是独占：先跑一件占住，再入队一件等。
+	markAll(t, env.DB, "claude")
+	t1, _ := ledger.Add(ctx, env.DB, ledger.NewTask{Title: "先占"}, "u1")
+	if _, err := Enqueue(ctx, env, t1.ID, Options{Worker: "claude"}, "u1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.pump(ctx); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, env, t1.ID, func(x ledger.Task) bool { return x.Status == ledger.Running })
+	t2, _ := ledger.Add(ctx, env.DB, ledger.NewTask{Title: "等位"}, "u1")
+	if _, err := Enqueue(ctx, env, t2.ID, Options{}, "u1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.pump(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	err := env.DB.QueryRowContext(ctx, `SELECT count(*) FROM events WHERE task = ? AND kind = ?`,
+		t2.ID, events.LeaderEscalate).Scan(&n)
+	if err != nil || n != 0 {
+		t.Fatalf("正忙排队不该上报：%d %v", n, err)
+	}
+}
+
+// t880c：点名被标记挡着（pinned 等待）也走同一条上报——用户点名的人接不了同样是空池。
+func TestHeldEscalatesPinned(t *testing.T) {
+	env, d := setup(t)
+	ctx := context.Background()
+	markAll(t, env.DB, "")
+	tk, _ := ledger.Add(ctx, env.DB, ledger.NewTask{Title: "点名"}, "u1")
+	if _, err := Enqueue(ctx, env, tk.ID, Options{Worker: "claude"}, "u1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.pump(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	err := env.DB.QueryRowContext(ctx, `SELECT count(*) FROM events WHERE task = ? AND kind = ? AND target = ?`,
+		tk.ID, events.LeaderEscalate, org.Secretary).Scan(&n)
+	if err != nil || n != 1 {
+		t.Fatalf("点名的执行者被标记挡着也应报一条：%d %v", n, err)
 	}
 }
 

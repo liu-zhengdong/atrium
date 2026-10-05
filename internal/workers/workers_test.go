@@ -355,8 +355,11 @@ func TestCheckName(t *testing.T) {
 		"harness/claude",
 		"models/opus",
 		"models/GLM-5.3[1m]",
+		"models/zcode/GLM-5.3[1m]",
 		"combos/claude+opus",
 		"combos/claude+GLM-5.3[1m]",
+		"combos/claude+zcode/GLM-5.3[1m]",
+		"combos/opencode+opencode-go/deepseek-v4-pro",
 		"harness/my-tool.v2",
 	}
 	bad := []string{
@@ -370,7 +373,6 @@ func TestCheckName(t *testing.T) {
 		"models/GLM-5.3[1m",
 		"models/GLM-5.3[1m][2m]",
 		"models/[1m]",
-		"models/zcode/GLM-5.3[1m]",
 		"models/claude+opus",
 		"harness/claude+opus",
 		"combos/claude",
@@ -387,6 +389,37 @@ func TestCheckName(t *testing.T) {
 		if err := CheckName(name); err == nil {
 			t.Errorf("%q 应拒绝", name)
 		}
+	}
+}
+
+func TestLegacySlashComboAddressable(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "a.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+	// 旧库（渠道池时代）导入的组合名带 provider 前缀，模型串里的 / 曾被当分层符拒收，edit/--delete 都寻址不到。
+	name := "combos/opencode+opencode-go/deepseek-v4-pro"
+	if _, err := db.ExecContext(ctx, `INSERT INTO worker_profiles (name, spec, updated_by, updated_at) VALUES (?, ?, ?, ?)`,
+		name, "---\ntrust: medium\n---\n旧组合\n", "u1", store.Now()); err != nil {
+		t.Fatal(err)
+	}
+	d, err := Show(ctx, db, name)
+	if err != nil || d.Profile == nil || d.Profile.Name != name {
+		t.Fatalf("Show 应把带斜杠的组合名当档案：%+v %v", d, err)
+	}
+	if _, err := SaveProfile(ctx, db, name, Edit{Set: map[string]string{"trust": "low"}}, "u1"); err != nil {
+		t.Fatalf("edit 应能寻址：%v", err)
+	}
+	if p, err := GetProfile(ctx, db, name); err != nil || p == nil || p.Keys["trust"] != "low" {
+		t.Fatalf("改后原文：%+v %v", p, err)
+	}
+	if _, err := SaveProfile(ctx, db, name, Edit{Delete: true}, "u1"); err != nil {
+		t.Fatalf("--delete 应能寻址：%v", err)
+	}
+	if p, err := GetProfile(ctx, db, name); err != nil || p != nil {
+		t.Fatalf("删后应没有了：%+v %v", p, err)
 	}
 }
 

@@ -430,7 +430,7 @@ func readOpencode(p *Parser, e event, line string) bool {
 		p.result(id, code, out)
 	case "step_finish":
 		tk := part.obj("tokens")
-		u := Usage{Tokens: Tokens{Input: number(tk, "input"), Output: number(tk, "output"), CacheRead: number(tk.obj("cache"), "read"), CacheWrite: number(tk.obj("cache"), "write")}, Cost: reportedCost(part, "cost"), Currency: "USD"}
+		u := Usage{Tokens: Tokens{Input: number(tk, "input"), Output: number(tk, "output"), CacheRead: number(tk.obj("cache"), "read"), CacheWrite: number(tk.obj("cache"), "write")}, Cost: reportedCostOrZero(part, "cost"), Currency: "USD"}
 		if reasoning := number(tk, "reasoning"); reasoning != nil {
 			u.Output = sumToken(u.Output, reasoning)
 		}
@@ -472,7 +472,7 @@ func readPi(p *Parser, e event, _ string) bool {
 		if u := m.obj("usage"); len(u) > 0 {
 			p.addUsage(Usage{Tokens: Tokens{Input: number(u, "input"), Output: number(u, "output"),
 				CacheRead: number(u, "cacheRead"), CacheWrite: number(u, "cacheWrite")},
-				Cost: reportedCost(u.obj("cost"), "total"), Currency: "USD"})
+				Cost: reportedCostOrZero(u.obj("cost"), "total"), Currency: "USD"})
 		}
 		p.t.Error = ""
 		if m.str("stopReason") == "error" {

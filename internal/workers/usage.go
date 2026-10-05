@@ -74,8 +74,9 @@ func (r Rules) billingProblems() []string {
 	return out
 }
 
-// Charge 优先保留工具非零花费；否则按档案单价估算能算的类别，读不到 token 或缺单价的记进 Missing。
+// Charge 优先保留工具上报的花费，明确报的零也算报了；否则按档案单价估算能算的类别，读不到 token 或缺单价的记进 Missing。
 // token 与单价都没有的类别视为这个执行者没有，不算缺；一个类别都算不进就不估算。
+// 占位零在读取层挡住：reader 对 0 语义拿不准的工具继续丢弃，进不到这里。
 // 非 USD 花费的货币与档案 prices 同币种且写了 usd_rate 时，按此刻的汇率折出 USD 一并保存。
 func Charge(u Usage, r Rules) Usage {
 	u = charge(u, r)
@@ -90,7 +91,7 @@ func Charge(u Usage, r Rules) Usage {
 func charge(u Usage, r Rules) Usage {
 	u.Billing = r.Billing
 	u.Missing = nil
-	if u.Cost != nil && *u.Cost > 0 {
+	if u.Cost != nil {
 		u.Source = "tool"
 		return u
 	}
@@ -201,8 +202,18 @@ func (p *Parser) addUsage(u Usage) {
 	}
 }
 
+// reportedCost 取工具报的花费；0 当没报——Claude、Cursor、grok 的 total_cost_usd 恒为 0 时是没计费，不是免费。
 func reportedCost(e event, key string) *float64 {
 	if v, ok := e[key].(float64); ok && v > 0 {
+		return &v
+	}
+	return nil
+}
+
+// reportedCostOrZero 同 reportedCost，但字段在场且是有限非负数时，明确报的 0 也算报了
+// （pi 的 cost.total、opencode 的 step cost 是工具自己的结论，免费渠道报 0）。
+func reportedCostOrZero(e event, key string) *float64 {
+	if v, ok := e[key].(float64); ok && v >= 0 && !math.IsInf(v, 0) {
 		return &v
 	}
 	return nil

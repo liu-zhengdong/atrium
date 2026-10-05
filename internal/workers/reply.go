@@ -63,7 +63,7 @@ func (a *Driver) LastReply(tail string) string {
 
 // reply 判一行事件是不是执行者的回复（纯函数）：stream-json 取收尾事件的 result（agy 取 response），
 // opencode 取一段文字，codex 取 agent_message，pi 取 assistant 有文字的 message_end／turn_end，kimi 取 assistant 消息（带工具调用的算空回复），
-// command-code 的收尾行 type 是 result 但正文在 finalText。
+// command-code 的收尾行 type 是 result 但正文在 finalText，dsh 的终稿在 type=final 一行。
 func (a *Driver) reply(line string) (string, bool) {
 	e := parseEvent(line)
 	switch {
@@ -77,6 +77,8 @@ func (a *Driver) reply(line string) (string, bool) {
 			return t, true
 		}
 		return e.str("finalText"), true
+	case e.str("type") == "final":
+		return e.str("text"), true
 	case e.str("event") == "result":
 		return e.obj("result").str("response"), true
 	case e.str("type") == "text":

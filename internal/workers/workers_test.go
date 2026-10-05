@@ -88,6 +88,11 @@ func TestBuild(t *testing.T) {
 		{tool: "agy", in: in("claude-opus", "high"), bad: "不接受思考强度"},
 		{tool: "cursor", in: in("gpt-5.3-codex-fast", "high"), want: []string{"-p", "--workspace", dir, "--model", "gpt-5.3-codex-high-fast"}},
 		{tool: "cursor", in: in("auto", "high"), bad: "auto"},
+		{tool: "dsh", in: in("", ""), want: []string{"--profile", "headless", "--json", "-"}},
+		{tool: "dsh", in: in("deepseek-official/deepseek-pro", "high"), want: []string{"--profile", "headless", "--patch", filepath.Join(dir, "dsh-model.yml"), "--json", "-"}},
+		{tool: "dsh", in: Request{Prompt: "x", PromptFile: pf, Dir: dir, Session: "0123abcd-0123-0123-0123-0123456789ab"}, want: []string{"--session-id", "session-0123abcd-0123-0123-0123-0123456789ab", "-"}},
+		{tool: "dsh", in: in("deepseek-pro", ""), bad: "要写 provider/模型"},
+		{tool: "dsh", in: in("", "high"), bad: "要写模型才能给思考强度"},
 		{tool: "claude", in: Request{Prompt: "x", PromptFile: pf, Dir: "rel"}, bad: "绝对路径"},
 		{tool: "kimi", in: Request{Prompt: "x", PromptFile: pf, Dir: dir, Live: true}, bad: "不能即时送补充说明"},
 	}
@@ -119,8 +124,20 @@ func TestBuild(t *testing.T) {
 			t.Errorf("%s 没写模型不应传 -m：%q %v", tool, l.Args, err)
 		}
 	}
+	// dsh 的模型覆盖层：patch 整份替换 agent-default-model 的 config，provider 与 model 都要给。
+	d, _ := Builtin("dsh")
+	dl, derr := d.Build(in("deepseek-official/deepseek-pro", "high"))
+	if derr != nil {
+		t.Fatal(derr)
+	}
+	src := dl.Files[filepath.Join(dir, "dsh-model.yml")]
+	for _, want := range []string{"provider: deepseek-official", "model: deepseek-pro", "reasoningEffort: high"} {
+		if !strings.Contains(src, want) {
+			t.Errorf("dsh 覆盖层里没有 %s：%q", want, src)
+		}
+	}
 	// 走标准输入的接提示词文件，走文件路径的只传路径。
-	for tool, stdin := range map[string]bool{"claude": true, "codex": true, "cursor": true, "opencode": true, "kimi": false, "grok": false, "agy": false} {
+	for tool, stdin := range map[string]bool{"claude": true, "codex": true, "cursor": true, "opencode": true, "kimi": false, "grok": false, "agy": false, "dsh": true} {
 		a, _ := Builtin(tool)
 		l, _ := a.Build(in("", ""))
 		if (l.StdinFile == pf) != stdin {
@@ -596,6 +613,11 @@ func TestClassify(t *testing.T) {
 		{"之后正常收尾", 1, "Error: fetch failed\n" + `{"type":"result","is_error":false,"stop_reason":"end_turn"}`, SignalNone, time.Time{}},
 		{"思考耗尽", 0, `{"type":"step_finish","part":{"reason":"length","tokens":{"reasoning":32000,"output":0}}}`, SignalThinking, time.Time{}},
 		{"长度用尽但有正文", 0, `{"type":"step_finish","part":{"reason":"length","tokens":{"reasoning":100,"output":900}}}`, SignalNone, time.Time{}},
+		// dsh 的终稿（final）无论成败都写，成败看 turn_end 的 reason：中止的按做过事之后出错退出重试
+		{"dsh 收尾被中止", 1, `{"type":"status","phase":"turn_end","turn":1,"reason":{"kind":"aborted"}}` + "\n" + `{"type":"final","text":""}`, SignalTransient, time.Time{}},
+		{"dsh 继续跟进、报错收尾照判", ExitUnknown, `{"type":"status","phase":"turn_end","turn":1,"reason":{"kind":"aborted"}}`, SignalTransient, time.Time{}},
+		{"dsh 轮次内的额度报文", 1, `{"type":"status","phase":"turn_end","turn":1,"reason":{"kind":"error","error":{"code":"RATE_LIMITED","message":"You've hit your usage limit. Try again in ~5 min."}}}`, SignalQuota, now.Add(5 * time.Minute)},
+		{"dsh 正常收尾不判", 1, `{"type":"status","phase":"turn_end","turn":1,"reason":{"kind":"completed"}}` + "\n" + `{"type":"final","text":"好了"}`, SignalNone, time.Time{}},
 	}
 	for _, c := range cases {
 		s := Classify(c.code, "", LogTail{Text: c.tail}, now)
@@ -819,6 +841,7 @@ func TestEnded(t *testing.T) {
 	agy, _ := Builtin("agy")
 	codex, _ := Builtin("codex")
 	pi, _ := Builtin("pi")
+	dsh, _ := Builtin("dsh")
 	cases := []struct {
 		a     *Driver
 		tail  string
@@ -835,6 +858,11 @@ func TestEnded(t *testing.T) {
 		{pi, `{"type":"agent_settled"}`, true, true},
 		{pi, `{"type":"auto_retry_end","success":false,"finalError":"upstream service timeout"}`, true, false},
 		{pi, `{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"跑完了"}]}}`, false, false},
+		// dsh：终稿（final）无论成败都写，所以先认到 turn_end 的一行才算收尾
+		{dsh, `{"type":"status","phase":"turn_end","turn":1,"reason":{"kind":"completed"}}` + "\n" + `{"type":"final","text":"好了"}`, true, true},
+		{dsh, `{"type":"status","phase":"turn_end","turn":1,"reason":{"kind":"aborted"}}` + "\n" + `{"type":"final","text":""}`, true, false},
+		{dsh, `{"type":"status","phase":"turn_end","turn":1,"reason":{"kind":"error","error":{"code":"X","message":"boom"}}}`, true, false},
+		{dsh, `{"type":"status","phase":"step_end","turn":1,"usage":{"inputTokens":1}}`, false, false},
 	}
 	for _, c := range cases {
 		e := c.a.Ended(c.tail)
@@ -860,6 +888,12 @@ func TestEnded(t *testing.T) {
 	cc, _ := Builtin("command-code")
 	if r := cc.LastReply(`{"type":"assistant","message":{"content":[{"type":"text","text":"中间轮"}]}}` + "\n" + `{"type":"result","subtype":"success","finalText":"交付结论：完成\n审阅结论：通过"}`); r != "交付结论：完成\n审阅结论：通过" {
 		t.Errorf("command-code 最后回复（收尾行 finalText）：%q", r)
+	}
+	if s := dsh.SessionOf(`{"type":"session","sessionId":"session-0123abcd-0123-0123-0123-0123456789ab","cwd":"/x"}`); s != "0123abcd-0123-0123-0123-0123456789ab" {
+		t.Errorf("dsh 会话 id：%q", s)
+	}
+	if r := dsh.LastReply(`{"type":"text","text":"中间轮"}` + "\n" + `{"type":"final","text":"审阅结论：通过"}`); r != "审阅结论：通过" {
+		t.Errorf("dsh 最后回复：%q", r)
 	}
 }
 

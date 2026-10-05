@@ -121,6 +121,7 @@ func (in PiInbox) usable() error {
 }
 
 // SendPiMessages 投递若干条消息并逐条读回执；线上协议与 DSH 共用（inbox.go）。
+// 不带 sessionId：Pi 的收件地址本身就是一个会话。
 func SendPiMessages(endpoint, token string, messages []string, timeout time.Duration) error {
-	return sendInboxMessages("Pi", endpoint, token, messages, timeout)
+	return sendInboxMessages("Pi", endpoint, token, "", messages, timeout)
 }

@@ -24,6 +24,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"syscall"
 	"time"
 
@@ -137,6 +138,7 @@ type inbox struct {
 	kind     string // kindPi、kindDSH 或 kindClaude
 	endpoint string
 	token    string
+	session  string // DSH：投给哪个会话（id 全名）；一个进程里开着好几个会话时必须指名，Pi/Claude Code 为空
 }
 
 const (
@@ -146,9 +148,10 @@ const (
 	// Pi 收件地址与口令：Pi 扩展（/secretary on）起 bridge 时写进环境，bridge 再传给它自己的子进程。
 	piInboxEnv = "ATRIUM_PI_INBOX"
 	piTokenEnv = "ATRIUM_PI_TOKEN"
-	// DSH 收件地址与口令：dsh-atrium 插件起 bridge 时写进环境（做法同 pi-inbox）。
-	dshInboxEnv = "ATRIUM_DSH_INBOX"
-	dshTokenEnv = "ATRIUM_DSH_TOKEN"
+	// DSH 收件地址与口令：dsh-atrium 插件起 bridge 时写进环境（做法同 pi-inbox）；会话指名另外带一个（插件那边没有这个变量）。
+	dshInboxEnv   = "ATRIUM_DSH_INBOX"
+	dshTokenEnv   = "ATRIUM_DSH_TOKEN"
+	dshSessionEnv = "ATRIUM_DSH_SESSION"
 )
 
 // resolveInbox 定这次 bridge 往哪送：--pi/--dsh 指名本机一个会话，否则从环境变量认本会话的收件地址。
@@ -171,7 +174,7 @@ func resolveInbox(c *cli.Ctx) (inbox, error) {
 		if err != nil {
 			return inbox{}, api.Usage("DSH 会话 %d 的口令读不出：%v", hit.PID, err)
 		}
-		return inbox{kind: kindDSH, endpoint: hit.Socket, token: token}, nil
+		return inbox{kind: kindDSH, endpoint: hit.Socket, token: token, session: hit.SessionID(q)}, nil
 	}
 	if q := c.Str("pi"); q != "" {
 		home, err := os.UserHomeDir()
@@ -201,7 +204,7 @@ func sessionInbox(goos string, getenv func(string) string) (inbox, error) {
 		return inbox{kind: kindPi, endpoint: endpoint, token: token}, nil
 	}
 	if endpoint, token := getenv(dshInboxEnv), getenv(dshTokenEnv); endpoint != "" && token != "" {
-		return inbox{kind: kindDSH, endpoint: endpoint, token: token}, nil
+		return inbox{kind: kindDSH, endpoint: endpoint, token: token, session: getenv(dshSessionEnv)}, nil
 	}
 	raw, token := getenv("CLAUDE_CODE_MESSAGING_SOCKET"), getenv("CLAUDE_CODE_MESSAGING_TOKEN")
 	if raw == "" || token == "" {
@@ -212,6 +215,15 @@ func sessionInbox(goos string, getenv func(string) string) (inbox, error) {
 		return inbox{}, api.Usage("CLAUDE_CODE_MESSAGING_SOCKET 认不出：%q", raw)
 	}
 	return inbox{kind: kindClaude, endpoint: endpoint, token: token}, nil
+}
+
+// inboxWarnings 说起 bridge 时就该知道的事（写进日志；不拦着起，投不成时错误里还会再说一遍）。
+func inboxWarnings(in inbox) []string {
+	if in.kind == kindDSH && in.session == "" {
+		return []string{"没有指名投给哪个会话：--dsh 给的是 pid 或 profile，而那个 DSH 进程里开着不止一个会话；" +
+			"投递要插件配置里写了 session 才收得下，否则会以「没有指定要投的会话」拒收（用会话 id 前缀起 bridge 才稳）"}
+	}
+	return nil
 }
 
 // ---- 登记（数据目录 secretary/bridge.json）----
@@ -274,7 +286,7 @@ func foreground(c *cli.Ctx, p config.Paths, in inbox, batch time.Duration) error
 		}
 	}
 	me := os.Getpid()
-	if err := writeRecord(p, Record{PID: me, Socket: in.endpoint, Kind: in.kind, StartedAt: store.Now()}); err != nil {
+	if err := writeRecord(p, Record{PID: me, Socket: in.endpoint, Kind: in.kind, Session: in.session, StartedAt: store.Now()}); err != nil {
 		return err
 	}
 	lg := log.New(c.Env.Stderr, "", log.LstdFlags)
@@ -284,6 +296,9 @@ func foreground(c *cli.Ctx, p config.Paths, in inbox, batch time.Duration) error
 	defer stop()
 	c.Context = ctx // 收到结束信号时打断挂着的 events wait
 	lg.Printf("bridge 开始（pid %d，%s 会话，收件地址 %s）", me, in.kind, in.endpoint)
+	for _, w := range inboxWarnings(in) {
+		lg.Printf("%s", w)
+	}
 	reason := b.run(ctx)
 	lg.Printf("bridge 退出：%s", reason)
 	return c.Done(map[string]any{"reason": reason}, "bridge 已退出："+reason, "atrium secretary bridge --status")
@@ -421,11 +436,11 @@ func (b *bridge) send(text string) error {
 	if b.in.kind == kindClaude {
 		return platform.SendLines(b.in.endpoint, InboxLines(b.in.token, text), 5*time.Second)
 	}
-	send, tokenFor, host := platform.SendPiMessages, func() (string, error) { return platform.PiTokenFor(b.home, b.in.endpoint) }, "pi-inbox"
+	tokenFor, host := func() (string, error) { return platform.PiTokenFor(b.home, b.in.endpoint) }, "pi-inbox"
 	if b.in.kind == kindDSH {
-		send, tokenFor, host = platform.SendDSHMessages, func() (string, error) { return platform.DSHTokenFor(b.home, b.in.endpoint) }, "dsh-atrium"
+		tokenFor, host = func() (string, error) { return platform.DSHTokenFor(b.home, b.in.endpoint) }, "dsh-atrium"
 	}
-	err := send(b.in.endpoint, b.in.token, []string{text}, 5*time.Second)
+	err := b.deliverOnce(b.in.token, text)
 	if !errors.Is(err, platform.ErrInboxRejected) {
 		return err
 	}
@@ -434,11 +449,19 @@ func (b *bridge) send(text string) error {
 		return fmt.Errorf("%w；重读口令失败：%v", err, rerr)
 	}
 	b.in.token = token
-	if err2 := send(b.in.endpoint, token, []string{text}, 5*time.Second); err2 != nil {
+	if err2 := b.deliverOnce(token, text); err2 != nil {
 		return fmt.Errorf("%w；重读口令后重送：%v", err, err2)
 	}
 	b.log.Printf("会话拒收（%v），已从 %s 登记重读口令，重送成功", err, host)
 	return nil
+}
+
+// deliverOnce 按收件地址的种类送一条：DSH 带上指名的那个会话（插件按 id 或前缀认，没指名就拒收并说明原因）。
+func (b *bridge) deliverOnce(token, text string) error {
+	if b.in.kind == kindDSH {
+		return platform.SendDSHMessages(b.in.endpoint, token, b.in.session, []string{text}, 5*time.Second)
+	}
+	return platform.SendPiMessages(b.in.endpoint, token, []string{text}, 5*time.Second)
 }
 
 // release 退出时让出登记；最近一次投递失败时留着登记，--status 仍能报出失败原因与时刻（下一个 bridge 起来时覆盖）。
@@ -515,6 +538,12 @@ func detach(c *cli.Ctx, p config.Paths, in inbox, batch int) error {
 	case kindDSH:
 		env[platform.EnvKey(runtime.GOOS, dshInboxEnv)] = in.endpoint
 		env[platform.EnvKey(runtime.GOOS, dshTokenEnv)] = in.token
+		// 会话指名也带过去：子进程按环境重认收件地址时还要靠它（没有就清掉，免得捡到父进程里别的会话）。
+		if in.session == "" {
+			delete(env, platform.EnvKey(runtime.GOOS, dshSessionEnv))
+		} else {
+			env[platform.EnvKey(runtime.GOOS, dshSessionEnv)] = in.session
+		}
 	}
 	cmd, err := platform.Start(platform.Spec{Path: self, Args: []string{"secretary", "bridge", "--batch", fmt.Sprint(batch)},
 		Env: env, Stdout: lf, Stderr: lf, Detached: true})
@@ -607,17 +636,17 @@ func statusText(cur *Record, alive bool, l *events.Listener, logFile string) (te
 	if cur != nil && cur.Failure != "" {
 		at := time.UnixMilli(cur.FailedAt).Format("01-02 15:04:05")
 		if alive {
-			return fmt.Sprintf("最近一次投递失败（%s）：%s；bridge pid %d（%s 会话）在重试，事件没进会话；看日志：%s",
-				at, cur.Failure, cur.PID, kindText(cur.Kind), logFile), "atrium secretary bridge --status"
+			return fmt.Sprintf("最近一次投递失败（%s）：%s；bridge pid %d（%s）在重试，事件没进会话；看日志：%s",
+				at, cur.Failure, cur.PID, whoText(cur), logFile), "atrium secretary bridge --status"
 		}
-		return fmt.Sprintf("bridge 已退出（pid %d，%s 会话），退出前最近一次投递失败（%s）：%s；事件没进会话，在秘书会话里重新起 bridge（Pi：/secretary on）；看日志：%s",
-			cur.PID, kindText(cur.Kind), at, cur.Failure, logFile), "atrium events wait --timeout 0"
+		return fmt.Sprintf("bridge 已退出（pid %d，%s），退出前最近一次投递失败（%s）：%s；事件没进会话，在秘书会话里重新起 bridge（Pi：/secretary on）；看日志：%s",
+			cur.PID, whoText(cur), at, cur.Failure, logFile), "atrium events wait --timeout 0"
 	}
 	switch {
 	case l != nil:
 		text := fmt.Sprintf("秘书在听（%s）", l.Via)
 		if alive {
-			text += fmt.Sprintf(" · bridge pid %d（%s 会话）", cur.PID, kindText(cur.Kind))
+			text += fmt.Sprintf(" · bridge pid %d（%s）", cur.PID, whoText(cur))
 		}
 		return text, "atrium events wait --timeout 0"
 	case alive:
@@ -635,6 +664,27 @@ func kindText(kind string) string {
 		return "DSH"
 	}
 	return "Claude Code"
+}
+
+// whoText 是 --status 里的「谁在听」：宿主名 + 会话；（DSH 指了名的话）带上会话短号。
+func whoText(cur *Record) string {
+	if cur == nil {
+		return ""
+	}
+	text := kindText(cur.Kind) + " 会话"
+	if cur.Session != "" {
+		text += "（" + shortSession(cur.Session) + "）"
+	}
+	return text
+}
+
+// shortSession 把 session-xxxxxxxx-… 这样的会话 id 缩成前 8 位：够认人，又不把一行撑长。
+func shortSession(id string) string {
+	s := strings.TrimPrefix(id, "session-")
+	if len(s) > 8 {
+		s = s[:8]
+	}
+	return s
 }
 
 // bridgeStop 停掉登记里的 bridge 并清登记：Pi 里 /secretary off 靠它让出收件地址（Claude Code 的 bridge 随会话退出，不用停）。
@@ -662,7 +712,7 @@ func bridgeStop(c *cli.Ctx) error {
 	}
 	releaseRecord(p, cur.PID)
 	return c.Done(map[string]any{"stopped": true, "pid": cur.PID, "socket": cur.Socket},
-		fmt.Sprintf("已停 bridge（pid %d，%s 会话）：收件地址让出，别的会话用 /secretary on 接手", cur.PID, kindText(cur.Kind)),
+		fmt.Sprintf("已停 bridge（pid %d，%s）：收件地址让出，别的会话用 /secretary on 接手", cur.PID, whoText(cur)),
 		"atrium secretary bridge --status")
 }
 

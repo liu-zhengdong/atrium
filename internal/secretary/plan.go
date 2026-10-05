@@ -192,7 +192,8 @@ func InboxLines(token, text string) []string {
 type Record struct {
 	PID       int    `json:"pid"`
 	Socket    string `json:"socket"`
-	Kind      string `json:"kind,omitempty"` // pi 或 claude-code；早期登记没有这个字段
+	Kind      string `json:"kind,omitempty"`    // pi 或 claude-code；早期登记没有这个字段
+	Session   string `json:"session,omitempty"` // DSH：投给哪个会话（id 全名）；没指名或别的宿主为空
 	StartedAt int64  `json:"started_at"`
 	Failure   string `json:"failure,omitempty"`   // 最近一次送入会话失败的原因；送成功后清掉
 	FailedAt  int64  `json:"failed_at,omitempty"` // 那次失败的时刻（毫秒）

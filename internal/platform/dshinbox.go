@@ -132,6 +132,23 @@ func (in DSHInbox) HasSession(q string) bool {
 	return false
 }
 
+// SessionID 挑出 q 指的那个会话的完整 id（插件按 id 或前缀认）：q 是会话 id 的前缀时就是它。
+// q 指的是别的（pid、profile）而进程里正好只开着一个会话时，就用那一个——不然投递会被插件按「没指名」拒收。
+// 定不下来（好几个会话而 q 又没指名是哪个）返回空：此时能不能投成，看插件自己配了 session 没有。
+func (in DSHInbox) SessionID(q string) string {
+	if q != "" {
+		for _, s := range in.Sessions {
+			if strings.HasPrefix(s.ID, q) {
+				return s.ID
+			}
+		}
+	}
+	if len(in.Sessions) == 1 {
+		return in.Sessions[0].ID
+	}
+	return ""
+}
+
 func (in DSHInbox) usable() error {
 	switch {
 	case in.PID <= 0:
@@ -144,7 +161,9 @@ func (in DSHInbox) usable() error {
 	return nil
 }
 
-// SendDSHMessages 投递若干条消息并逐条读回执；线上协议与 Pi 共用（inbox.go）。
-func SendDSHMessages(endpoint, token string, messages []string, timeout time.Duration) error {
-	return sendInboxMessages("DSH", endpoint, token, messages, timeout)
+// SendDSHMessages 投递若干条消息并逐条读回执；sessionID 指名投给这个 DSH 进程里的哪个会话
+// （空字符串＝由插件按自己配置的 session 挑；两边都没指名时插件拒收，理由原样带回）。
+// 线上协议与 Pi 共用（inbox.go）。
+func SendDSHMessages(endpoint, token, sessionID string, messages []string, timeout time.Duration) error {
+	return sendInboxMessages("DSH", endpoint, token, sessionID, messages, timeout)
 }

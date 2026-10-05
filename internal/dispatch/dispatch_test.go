@@ -27,11 +27,11 @@ func f(p float64) *float64 { return &p }
 func TestPick(t *testing.T) {
 	base := func() []Fact {
 		return []Fact{
-			{ID: "claude+opus", Tool: "claude", Account: "claude", Trust: "medium", MaxRisk: "medium"},
-			{ID: "codex+gpt", Tool: "codex", Account: "codex", Trust: "medium", MaxRisk: "medium"},
-			{ID: "opencode+m", Tool: "opencode", Account: "opencode", Trust: "unknown", MaxRisk: "low", Exclusive: true},
-			{ID: "kimi", Tool: "kimi", Account: "kimi", Unavailable: "没有可用主机"},
-			{ID: "grok", Tool: "grok", Account: "grok", Refusal: "档案 max_risk=low，低于任务 risk=medium"},
+			{ID: "dsh+deepseek-v4", Tool: "dsh", Account: "deepseek", Trust: "medium", MaxRisk: "medium"},
+			{ID: "dsh+glm", Tool: "dsh", Account: "zhipu", Trust: "medium", MaxRisk: "medium"},
+			{ID: "dsh+free", Tool: "dsh", Account: "free", Trust: "unknown", MaxRisk: "low", Exclusive: true},
+			{ID: "dsh+slow", Tool: "dsh", Account: "slow", Unavailable: "没有可用主机"},
+			{ID: "dsh+risky", Tool: "dsh", Account: "risky", Refusal: "档案 max_risk=low，低于任务 risk=medium"},
 		}
 	}
 	cases := []struct {
@@ -41,40 +41,40 @@ func TestPick(t *testing.T) {
 		reason  string
 		waiting bool
 	}{
-		{name: "没数据按档案顺序", in: PickInput{Risk: "low", Facts: base()}, want: "claude+opus", reason: "没有额度数据"},
+		{name: "没数据按档案顺序", in: PickInput{Risk: "low", Facts: base()}, want: "dsh+deepseek-v4", reason: "没有额度数据"},
 		{name: "富余多的在前", in: PickInput{Risk: "low", Facts: base(), Spares: map[string]Spare{
-			"claude": {Percent: f(10)}, "codex": {Percent: f(50)}}}, want: "codex+gpt", reason: "富余最多（50.0"},
+			"deepseek": {Percent: f(10)}, "zhipu": {Percent: f(50)}}}, want: "dsh+glm", reason: "富余最多（50.0"},
 		{name: "富余为负也比没数据的靠前", in: PickInput{Risk: "low", Facts: base()[1:3], Spares: map[string]Spare{
-			"codex": {Percent: f(-3.1)}}}, want: "codex+gpt", reason: "富余最多（-3.1"},
+			"zhipu": {Percent: f(-3.1)}}}, want: "dsh+glm", reason: "富余最多（-3.1"},
 		{name: "见底与用尽不派", in: PickInput{Risk: "low", Facts: base(), Spares: map[string]Spare{
-			"claude": {Percent: f(40), Stop: "额度见底"}, "codex": {Stop: "额度用尽"}}}, want: "opencode+m"},
-		{name: "本机不可用不派", in: PickInput{Risk: "low", Facts: func() []Fact { b := base(); b[0].Unavailable = "本机不可用：额度用尽"; return b }()}, want: "codex+gpt"},
+			"deepseek": {Percent: f(40), Stop: "额度见底"}, "zhipu": {Stop: "额度用尽"}}}, want: "dsh+free"},
+		{name: "本机不可用不派", in: PickInput{Risk: "low", Facts: func() []Fact { b := base(); b[0].Unavailable = "本机不可用：额度用尽"; return b }()}, want: "dsh+glm"},
 		{name: "紧急的活只给 trust≥medium，额度排序在这之后", in: PickInput{Risk: "low", Priority: ledger.Urgent, Facts: base(), Spares: map[string]Spare{
-			"opencode": {Percent: f(90)}, "claude": {Percent: f(5)}, "codex": {Percent: f(1)}}}, want: "claude+opus", reason: "紧急的活只在 trust≥medium 的里挑"},
+			"free": {Percent: f(90)}, "deepseek": {Percent: f(5)}, "zhipu": {Percent: f(1)}}}, want: "dsh+deepseek-v4", reason: "紧急的活只在 trust≥medium 的里挑"},
 		{name: "修复的活同样", in: PickInput{Risk: "low", Priority: ledger.Fix, Facts: base()[2:3]}, reason: "修复的活要 trust≥medium，它是 unknown"},
-		{name: "普通的活不限 trust", in: PickInput{Risk: "low", Priority: ledger.Normal, Facts: base()[2:3]}, want: "opencode+m"},
-		{name: "独占正忙跳过", in: PickInput{Risk: "low", Facts: base()[2:3], Busy: map[string]bool{"opencode": true}}, waiting: true},
-		{name: "试过的不再挑", in: PickInput{Risk: "low", Facts: base(), Exclude: map[string]bool{"claude+opus": true}}, want: "codex+gpt"},
+		{name: "普通的活不限 trust", in: PickInput{Risk: "low", Priority: ledger.Normal, Facts: base()[2:3]}, want: "dsh+free"},
+		{name: "独占正忙跳过", in: PickInput{Risk: "low", Facts: base()[2:3], Busy: map[string]bool{"dsh": true}}, waiting: true},
+		{name: "试过的不再挑", in: PickInput{Risk: "low", Facts: base(), Exclude: map[string]bool{"dsh+deepseek-v4": true}}, want: "dsh+glm"},
 		{name: "技能优先", in: func() PickInput {
 			fs := base()
 			fs[1].Preferred = 1
-			return PickInput{Risk: "low", Facts: fs, Spares: map[string]Spare{"claude": {Percent: f(90)}}}
-		}(), want: "codex+gpt", reason: "技能指定"},
-		{name: "没人能接", in: PickInput{Risk: "medium", Facts: base()[3:]}, reason: "没有能接的执行者（kimi：没有可用主机"},
+			return PickInput{Risk: "low", Facts: fs, Spares: map[string]Spare{"deepseek": {Percent: f(90)}}}
+		}(), want: "dsh+glm", reason: "技能指定"},
+		{name: "没人能接", in: PickInput{Risk: "medium", Facts: base()[3:]}, reason: "没有能接的执行者（dsh+slow：没有可用主机"},
 		{name: "近 5 次启动失败 2 次往后排", in: PickInput{Risk: "low", Facts: func() []Fact { b := base(); b[0].Fails = 2; return b }()},
-			want: "codex+gpt", reason: "claude+opus 近 5 次拉起启动失败 2 次，排在后面"},
+			want: "dsh+glm", reason: "dsh+deepseek-v4 近 5 次拉起启动失败 2 次，排在后面"},
 		{name: "失败 1 次不影响", in: PickInput{Risk: "low", Facts: func() []Fact { b := base(); b[0].Fails = 1; return b }()},
-			want: "claude+opus", reason: "没有额度数据"},
+			want: "dsh+deepseek-v4", reason: "没有额度数据"},
 		{name: "往后排压过技能优先与富余", in: func() PickInput {
 			fs := base()
 			fs[0].Preferred, fs[0].Fails = 1, 3
-			return PickInput{Risk: "low", Facts: fs, Spares: map[string]Spare{"claude": {Percent: f(90)}, "codex": {Percent: f(5)}}}
-		}(), want: "codex+gpt", reason: "富余最多（5.0"},
+			return PickInput{Risk: "low", Facts: fs, Spares: map[string]Spare{"deepseek": {Percent: f(90)}, "zhipu": {Percent: f(5)}}}
+		}(), want: "dsh+glm", reason: "富余最多（5.0"},
 		{name: "都不稳照常挑并写明", in: PickInput{Risk: "low", Facts: func() []Fact {
 			b := base()[:2]
 			b[0].Fails, b[1].Fails = 2, 4
 			return b
-		}()}, want: "claude+opus", reason: "它近 5 次拉起启动失败 2 次，但没有更稳的能接"},
+		}()}, want: "dsh+deepseek-v4", reason: "它近 5 次拉起启动失败 2 次，但没有更稳的能接"},
 	}
 	for _, c := range cases {
 		v := Pick(c.in)
@@ -89,7 +89,7 @@ func TestPick(t *testing.T) {
 	shaky := base()
 	shaky[0].Fails = 2
 	v = Pick(PickInput{Risk: "low", Facts: shaky})
-	if v.Candidates[2].ID != "claude+opus" || v.Candidates[2].Rank != 3 || !v.Candidates[2].Eligible || v.Candidates[2].Fails != 2 {
+	if v.Candidates[2].ID != "dsh+deepseek-v4" || v.Candidates[2].Rank != 3 || !v.Candidates[2].Eligible || v.Candidates[2].Fails != 2 {
 		t.Errorf("近期启动失败多的排在能接的最后、仍能接：%+v", v.Candidates)
 	}
 }
@@ -216,18 +216,6 @@ func TestRepoSource(t *testing.T) {
 	}
 }
 
-func TestLineSignal(t *testing.T) {
-	if r, _ := LineSignal(`{"type":"result","is_error":false}`); !r {
-		t.Error("result")
-	}
-	if _, e := LineSignal(`{"type":"user","isReplay":true,"uuid":"tell-3"}`); e != "tell-3" {
-		t.Error("echo")
-	}
-	if r, e := LineSignal(`{"type":"assistant","text":"\"type\":\"result\""}`); r || e != "" {
-		t.Error("正文里的字样不算")
-	}
-}
-
 func TestOptionsCheck(t *testing.T) {
 	for _, o := range []Options{{Risk: "huge"}, {Host: "x1"}, {Secrets: []string{"lower"}}, {Secrets: []string{"ATRIUM_X"}}} {
 		if err := o.check(); err == nil {
@@ -258,7 +246,7 @@ func TestBounceCause(t *testing.T) {
 	cases := []struct{ stage, note, want string }{
 		{"merge_queue", "合入冲突：rebase 到 origin/main 时冲突", "冲突"},
 		{"merge_queue", "快检查没过（rebase 到 origin/main 后跑 .agents/check）", "检查没过"},
-		{"review", "审阅打回（t9，codex）：缺测试", "审阅打回"},
+		{"review", "审阅打回（t9，dsh）：缺测试", "审阅打回"},
 		{"accept", "验收打回（u1）：本地跑不起来", "验收打回"},
 		{"gate", "交付检查未通过：没有 PR", "交付检查未通过"},
 	}
@@ -283,7 +271,7 @@ func TestQueuedBounceKeepsHost(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	ledger.Record(ctx, db, tk.ID, workers.RunKind, "dispatch", `{"n":1,"why":"first","worker":"claude+opus","host":"h3","risk":"medium","secrets":["DEMO_TOKEN"]}`)
+	ledger.Record(ctx, db, tk.ID, workers.RunKind, "dispatch", `{"n":1,"why":"first","worker":"dsh+deepseek-v4","host":"h3","risk":"medium","secrets":["DEMO_TOKEN"]}`)
 	for _, k := range []ledger.EventKind{ledger.ExitOK, ledger.Bounce} {
 		if _, err := ledger.Apply(ctx, db, tk.ID, ledger.Event{Kind: k}, "gates", "交付检查未通过"); err != nil {
 			t.Fatal(err)
@@ -293,7 +281,7 @@ func TestQueuedBounceKeepsHost(t *testing.T) {
 	if err != nil || len(items) != 1 {
 		t.Fatalf("队列：%+v %v", items, err)
 	}
-	want := Options{Worker: "claude+opus", Risk: "medium", Host: "h3", Secrets: []string{"DEMO_TOKEN"}}
+	want := Options{Worker: "dsh+deepseek-v4", Risk: "medium", Host: "h3", Secrets: []string{"DEMO_TOKEN"}}
 	if got := items[0]; got.Row || got.Opts.Host != want.Host || got.Opts.Worker != want.Worker || got.Opts.Risk != want.Risk || !slices.Equal(got.Opts.Secrets, want.Secrets) {
 		t.Fatalf("交回应沿用上一轮：%+v，期望 %+v", got, want)
 	}
@@ -344,7 +332,7 @@ func TestChildGate(t *testing.T) {
 	}
 }
 
-// 隔离实例自动挑人不挑内置工具（冒烟、测试不拉起本机真实执行者）；通用命令行执行者照挑；用户的服务照常挑内置工具。
+// 隔离实例自动挑人不挑内置执行者（冒烟、测试不拉起本机真实执行者）；用户的服务照常挑内置工具。
 func TestViewIsolated(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
@@ -360,10 +348,6 @@ func TestViewIsolated(t *testing.T) {
 		t.Fatal(err)
 	}
 	testLocalHost(t, env)
-	src := "---\nprotocol: cli\ncommand: go\nargs: [\"{prompt}\"]\n---\n"
-	if _, err := workers.SaveProfile(ctx, db, "harness/fake", workers.Edit{Source: &src}, "u1"); err != nil {
-		t.Fatal(err)
-	}
 	tk, _ := ledger.Add(ctx, db, ledger.NewTask{Title: "巡检"}, "u1")
 	d := get(env)
 	refused := func(v PickView, id string) bool {
@@ -387,13 +371,10 @@ func TestViewIsolated(t *testing.T) {
 			t.Errorf("隔离实例不该自动挑 %s：%+v", tool, v.Candidates)
 		}
 	}
-	if refused(v, "fake") || v.Recommended != "fake" {
-		t.Errorf("通用命令行执行者应照挑：%+v", v)
-	}
 	oldIsolated := isolated
 	isolated = func(*app.Env) bool { return false }
 	t.Cleanup(func() { isolated = oldIsolated })
-	if v, err = d.view(ctx, tk, Options{Risk: "low"}, nil, false); err != nil || refused(v, "claude") {
+	if v, err = d.view(ctx, tk, Options{Risk: "low"}, nil, false); err != nil || refused(v, "dsh") {
 		t.Errorf("用户的服务照常挑内置工具：%+v %v", v, err)
 	}
 }
@@ -483,6 +464,7 @@ func TestTellLeader(t *testing.T) {
 
 // 执行者日志有认不出的事件：退出时记一条组织发现草稿；同一工具还没结束的不再记，别的工具另记；草稿满了报错。
 func TestNoteUnknown(t *testing.T) {
+	nonIsolated(t)
 	ctx := context.Background()
 	dir := t.TempDir()
 	db, err := store.Open(filepath.Join(dir, "atrium.db"))
@@ -502,30 +484,19 @@ func TestNoteUnknown(t *testing.T) {
 		return must(ledger.List(ctx, db, ledger.Filter{Class: workers.ParseClass, Status: []ledger.Status{ledger.Draft}}))
 	}
 	for range 2 {
-		if err := noteUnknown(ctx, db, tk.ID, workers.Run{Worker: "cursor+auto", Log: log}); err != nil {
+		if err := noteUnknown(ctx, db, tk.ID, workers.Run{Worker: "dsh", Log: log}); err != nil {
 			t.Fatal(err)
 		}
 	}
 	got := drafts()
-	if len(got) != 1 || got[0].Title != "cursor 日志有认不出的事件（"+tk.ID+"）" || got[0].Source != ledger.SourceOrg ||
-		!strings.Contains(got[0].Detail, "有 3 行事件认不出") || !strings.Contains(got[0].Detail, `{"type":"brand_new","x":2}`) ||
+	if len(got) != 1 || got[0].Title != "dsh 日志有认不出的事件（"+tk.ID+"）" || got[0].Source != ledger.SourceOrg ||
+		!strings.Contains(got[0].Detail, "有 4 行事件认不出") || !strings.Contains(got[0].Detail, `{"type":"brand_new","x":1}`) ||
 		strings.Contains(got[0].Detail, `"x":3`) {
 		t.Fatalf("同一工具只记一条，详述带行数与前两行：%+v", got)
 	}
-	// 认得出的日志、纯文本工具不记。
+	// 纯文本工具不记（内置只剩 dsh，「别的工具另记一条」没得造：认得出的工具只有它一个）。
 	if err := noteUnknown(ctx, db, tk.ID, workers.Run{Worker: "my-cli", Log: log}); err != nil || len(drafts()) != 1 {
 		t.Fatalf("纯文本工具不该记：%v %d", err, len(drafts()))
-	}
-	if err := noteUnknown(ctx, db, tk.ID, workers.Run{Worker: "codex", Log: log}); err != nil || len(drafts()) != 2 {
-		t.Fatalf("别的工具另记一条：%v %d", err, len(drafts()))
-	}
-	// 草稿满了：照常报上限错误，不静默吞掉。
-	for len(must(ledger.List(ctx, db, ledger.Filter{Status: []ledger.Status{ledger.Draft}, Limit: 500}))) < org.MaxDrafts {
-		must(ledger.Add(ctx, db, ledger.NewTask{Title: "占位", Org: dept.ID, Draft: true}, "u1"))
-	}
-	err = noteUnknown(ctx, db, tk.ID, workers.Run{Worker: "opencode", Log: log})
-	if ae := (*api.Error)(nil); !errors.As(err, &ae) || ae.Code != "limit" {
-		t.Fatalf("草稿满了应报错：%v", err)
 	}
 }
 

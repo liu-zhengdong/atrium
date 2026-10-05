@@ -59,7 +59,7 @@ func TestUserAcceptsPR(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "wt")
 	e.gh.Branch(dir, "t1-work", map[string]string{"a.go": "package a\n"})
 	e.gh.Open("t1-work", goodBody)
-	task := e.inDept(o, "o/r", "claude+opus", dir)
+	task := e.inDept(o, "o/r", "dsh+opus", dir)
 	e.sweep()
 	if got := e.state(task.ID); got != "running/accept" || !strings.Contains(e.lastNote(task.ID), "等你验收") {
 		t.Fatalf("应停在等验收：%s %s", got, e.lastNote(task.ID))
@@ -121,7 +121,7 @@ func TestLeaderAcceptsAfterReview(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "wt")
 	e.gh.Branch(dir, "t1-work", map[string]string{"a.go": "package a\n"})
 	e.gh.Open("t1-work", goodBody)
-	task := e.inDept(o, "o/r", "claude+haiku", dir) // 低信任：先审阅
+	task := e.inDept(o, "o/r", "dsh+haiku", dir) // 低信任：先审阅
 	e.sweep()
 	e.reviewExit(task.ID, "审阅结论：通过")
 	e.sweep()
@@ -138,7 +138,7 @@ func TestAcceptNoRepo(t *testing.T) {
 	e := setup(t)
 	o := e.dept(org.AcceptUser)
 	e.choiceMaterial(o)
-	msg := e.inDept(o, "", "claude+opus", t.TempDir())
+	msg := e.inDept(o, "", "dsh+opus", t.TempDir())
 	e.sweep()
 	if got := e.state(msg.ID); got != "done/gate" {
 		t.Fatalf("message 没有应用，不等验收，应直接完成：%s %s", got, e.lastNote(msg.ID))
@@ -147,7 +147,7 @@ func TestAcceptNoRepo(t *testing.T) {
 	choiceDir := t.TempDir()
 	opt := `{"title":"T","gain":"g","why_now":"w","cost":"c","if_not":"i","evidence":"m1/27.svg"}`
 	os.WriteFile(filepath.Join(choiceDir, agenda.ChoiceFile), []byte(`{"title":"下一步","options":[`+opt+`,`+opt+`,`+opt+`],"recommend":[1],"reason":"快"}`), 0o600)
-	research := e.inDept(o, "", "claude+opus", choiceDir)
+	research := e.inDept(o, "", "dsh+opus", choiceDir)
 	e.sweep()
 	if got := e.state(research.ID); got != "running/accept" {
 		t.Fatalf("choice 应等验收：%s %s", got, e.lastNote(research.ID))
@@ -161,7 +161,7 @@ func TestAcceptNoRepo(t *testing.T) {
 
 	badDir := t.TempDir()
 	os.WriteFile(filepath.Join(badDir, agenda.ChoiceFile), []byte(`{"title":""}`), 0o600)
-	bad := e.inDept(o, "", "claude+opus", badDir)
+	bad := e.inDept(o, "", "dsh+opus", badDir)
 	e.sweep()
 	if got := e.state(bad.ID); got != "queued/" {
 		t.Fatalf("choice.json 不合法应在交付检查交回：%s %s", got, e.lastNote(bad.ID))
@@ -178,7 +178,7 @@ func TestAcceptDir(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	e.start(task.ID, "claude+opus")
+	e.start(task.ID, "dsh+opus")
 	ledger.Record(e.ctx, e.db, task.ID, gates.KindWorktree, "dispatch", `{"host":"h1","dir":"`+filepath.ToSlash(place)+`"}`)
 	e.exit(task.ID)
 	e.sweep()

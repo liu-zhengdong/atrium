@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"runtime"
 	"testing"
 
 	"github.com/liu-zhengdong/atrium/internal/app"
@@ -20,30 +19,19 @@ import (
 
 // 用真实分派任务循环与假执行者验证：非法启动输入只影响本任务，下一件仍能执行。
 func TestLaunchFailureKeepsDispatchRunning(t *testing.T) {
-	if runtime.GOOS != "windows" {
-		t.Skip("验证 Windows .cmd 参数边界")
-	}
+	nonIsolated(t)
 	for _, tc := range []struct {
-		name, config string
-		remote       bool
+		name, model string
+		remote      bool
 	}{
-		{"换行参数", "args: [\"bad\\nargument\"]\n", false},
-		{"空字符参数", "args: [\"bad\\0argument\"]\n", false},
-		{"空字符环境", "env: {DEMO: \"bad\\0value\"}\n", false},
-		{"远程拉起失败", "", true},
+		{"坏档案", "novendor", false},
+		{"远程拉起失败", "fake/ok", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
 			t.Setenv("HOME", dir)
 			t.Setenv("USERPROFILE", dir)
-			bin := filepath.Join(dir, "bin")
-			if err := os.MkdirAll(bin, 0700); err != nil {
-				t.Fatal(err)
-			}
-			if err := os.WriteFile(filepath.Join(bin, "fake.cmd"), []byte("@echo off\r\necho done\r\n"), 0600); err != nil {
-				t.Fatal(err)
-			}
-			t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+			fakeDshOnPath(t)
 			db, err := store.Open(filepath.Join(dir, "data", "atrium.db"))
 			if err != nil {
 				t.Fatal(err)
@@ -66,16 +54,15 @@ func TestLaunchFailureKeepsDispatchRunning(t *testing.T) {
 			}
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
+			// 坏档案：模型里没有 provider/模型，dsh 的自检过不去；好档案带完整模型。
+			bad := "dsh+bad-c"
+			source := "---\nmodel: " + tc.model + "\n---\n"
+			if _, err := workers.SaveProfile(ctx, db, "combos/"+bad, workers.Edit{Source: &source}, "u1"); err != nil {
+				t.Fatal(err)
+			}
+			good := fakeCombo(t, ctx, db, "ok", "")
 			ids := []string{}
-			for i, name := range []string{"bad", "good"} {
-				source := "---\nprotocol: cli\ncommand: fake\ndone_match: done\n"
-				if i == 0 {
-					source += tc.config
-				}
-				source += "---\n"
-				if _, err := workers.SaveProfile(ctx, db, "harness/"+name, workers.Edit{Source: &source}, "u1"); err != nil {
-					t.Fatal(err)
-				}
+			for i, name := range []string{bad, good} {
 				task, err := ledger.Add(ctx, db, ledger.NewTask{Title: name}, "u1")
 				if err != nil {
 					t.Fatal(err)
@@ -83,6 +70,14 @@ func TestLaunchFailureKeepsDispatchRunning(t *testing.T) {
 				opts := Options{Worker: name}
 				if i == 0 && tc.remote {
 					opts.Host = "h9"
+				}
+				if i == 0 && !tc.remote {
+					// 坏档案在入队时就过不去 Resolved.Check，报错即「受阻」，不实际拉起。
+					if _, err := Enqueue(ctx, env, task.ID, opts, "u1"); err == nil {
+						t.Fatal("坏档案入队应报错")
+					}
+					ids = append(ids, task.ID)
+					continue
 				}
 				if _, err := Enqueue(ctx, env, task.ID, opts, "u1"); err != nil {
 					t.Fatal(err)
@@ -98,7 +93,9 @@ func TestLaunchFailureKeepsDispatchRunning(t *testing.T) {
 				}
 				get(env).wg.Wait()
 			}()
-			waitFor(t, env, ids[0], func(x ledger.Task) bool { return x.Status == ledger.Blocked })
+			if tc.remote {
+				waitFor(t, env, ids[0], func(x ledger.Task) bool { return x.Status == ledger.Blocked })
+			}
 			waitFor(t, env, ids[1], func(x ledger.Task) bool { return x.Stage == ledger.StageGate })
 			select {
 			case err := <-done:

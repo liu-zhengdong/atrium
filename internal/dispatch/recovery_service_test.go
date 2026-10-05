@@ -2,7 +2,6 @@ package dispatch
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -24,28 +23,35 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/workers"
 )
 
-// 同一测试二进制兼作假 pi，不调用模型、不继承开发者的登录。
-func recoveryPi() int {
-	model := ""
+// 同一测试二进制兼作假 dsh：行为由 --patch 里的模型决定，不调用模型、不继承开发者的登录。
+func recoveryDsh() int {
+	patch := ""
 	for i, arg := range os.Args {
-		if arg == "--model" && i+1 < len(os.Args) {
-			model = os.Args[i+1]
+		if arg == "--patch" && i+1 < len(os.Args) {
+			patch = os.Args[i+1]
 		}
 	}
-	mode := model[strings.LastIndex(model, "/")+1:]
-	if mode == "quota" {
-		return recoveryCLI("quota")
-	}
-	fmt.Println(`{"type":"session","id":"fake-session"}`)
-	if mode == "stopped" || mode == "silent-quota" || mode == "fresh-pr" {
-		time.Sleep(time.Second)
-	}
-	if mode == "output" {
-		if err := os.WriteFile("delivery.txt", []byte("有效产出"), 0600); err != nil {
-			return 2
+	mode := ""
+	if b, err := os.ReadFile(patch); err == nil {
+		for _, line := range strings.Split(string(b), "\n") {
+			if v, ok := strings.CutPrefix(strings.TrimSpace(line), "model:"); ok {
+				mode = strings.TrimSpace(v)
+			}
 		}
 	}
-	if mode == "error-busy" {
+	mode = mode[strings.LastIndex(mode, "/")+1:]
+	io.Copy(io.Discard, os.Stdin)
+	session := `{"type":"session","sessionId":"session-0123abcd-0123-0123-0123-0123456789ab"}`
+	switch mode {
+	case "quota":
+		fmt.Println(session)
+		fmt.Println("ERROR: You've hit your usage limit. Try again in ~5 min.")
+		return 1
+	case "silent", "silent-quota", "old-pr":
+		// 零步骤静默退出：既没有正常收尾，也没有一次工具调用。
+		fmt.Println(session)
+		return 1
+	case "error-busy":
 		// 501 个旧文件让产出扫描触顶（按可能有产出处理），明确的 429 仍要判额度。
 		old := time.Now().Add(-time.Hour)
 		for i := range 501 {
@@ -54,31 +60,51 @@ func recoveryPi() int {
 				return 2
 			}
 		}
-	}
-	content := []any{}
-	if mode == "zero-action" || mode == "missing" {
-		content = append(content, map[string]string{"type": "text", "text": "交付完成"})
-	}
-	m := map[string]any{"role": "assistant", "model": mode, "provider": "opencode-go", "content": content}
-	if mode == "error-busy" {
-		m["stopReason"] = "error"
-		m["errorMessage"] = `429: {"type":"GoUsageLimitError","message":"Go usage limit exceeded"}`
-	}
-	if mode != "missing" {
-		m["usage"] = map[string]int{"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0}
-	}
-	raw, _ := json.Marshal(map[string]any{"type": "message_end", "message": m})
-	fmt.Println(string(raw))
-	fmt.Println(`{"type":"agent_settled"}`)
-	return 0
-}
-
-func recoveryCLI(mode string) int {
-	if mode == "quota" {
-		fmt.Println("ERROR: usage limit reached")
+		fmt.Println(session)
+		fmt.Println(`{"type":"error","message":"429: Go usage limit exceeded"}`)
 		return 1
+	case "stopped", "fresh-pr":
+		// 长活：留出停下任务或补 PR 事实的时间。
+		fmt.Println(session)
+		time.Sleep(time.Second)
+	case "output":
+		if err := os.WriteFile("delivery.txt", []byte("有效产出"), 0600); err != nil {
+			return 2
+		}
+		fmt.Println(session)
+	case "zero-action":
+		fmt.Println(session)
+		fmt.Println(`{"type":"status","phase":"step_end","turn":1,"usage":{"inputTokens":0,"outputTokens":0,"cacheReadTokens":0,"cacheWriteTokens":0}}`)
+	case "missing":
+		// 用量字段缺失：退出记录里读不到用量，但不影响这一轮正常收尾。
+		fmt.Println(session)
+		fmt.Println(`{"type":"status","phase":"step_end","turn":1}`)
+	case "reclaim", "reclaim-wait":
+		// 回收用例：写产出、核对子进程临时目录一致、重建自己的只读缓存；wait 模式留在长活里被回收。
+		if err := os.WriteFile("continued.txt", []byte("继续干"), 0600); err != nil {
+			return 2
+		}
+		temp := os.Getenv("TMPDIR")
+		if temp == "" || os.Getenv("TMP") != temp || os.Getenv("TEMP") != temp {
+			return 2
+		}
+		if err := os.Remove(filepath.Join(temp, "readonly")); err != nil && !os.IsNotExist(err) {
+			return 2
+		}
+		if err := os.WriteFile(filepath.Join(temp, "readonly"), []byte("只读缓存"), 0o400); err != nil {
+			return 2
+		}
+		if mode == "reclaim-wait" {
+			time.Sleep(time.Minute)
+		}
+		fmt.Println(session)
+	case "continue-pr":
+		return continuePRWorker()
+	default:
+		fmt.Println(session)
 	}
-	fmt.Println("DONE\n交付结论：完成")
+	fmt.Println(`{"type":"text","text":"交付结论：完成"}`)
+	fmt.Println(`{"type":"final","text":"交付结论：完成"}`)
 	return 0
 }
 
@@ -101,7 +127,7 @@ func TestRecoveryServiceEntry(t *testing.T) {
 			if err := os.Mkdir(bin, 0700); err != nil {
 				t.Fatal(err)
 			}
-			fake := filepath.Join(bin, "pi")
+			fake := filepath.Join(bin, "dsh")
 			if runtime.GOOS == "windows" {
 				fake += ".exe"
 			}
@@ -140,10 +166,10 @@ func TestRecoveryServiceEntry(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(dir, "token"), []byte("recovery-test-token"), 0600); err != nil {
 				t.Fatal(err)
 			}
-			if err := hosts.EnsureLocal(ctx, db, hosts.Info{CLIs: map[string]hosts.CLI{"pi": {Installed: true}, "aaa-paid": {Installed: true}, "zzz-free": {Installed: true}}}); err != nil {
+			if err := hosts.EnsureLocal(ctx, db, hosts.Info{CLIs: map[string]hosts.CLI{"dsh": {Installed: true}}}); err != nil {
 				t.Fatal(err)
 			}
-			// 唯一允许自动挑的内置工具是上面复制的假 pi；其他工具未安装。
+			// 唯一允许自动挑的内置工具是上面复制的假 dsh；其他工具未安装。
 			oldIsolated := isolated
 			isolated = func(*app.Env) bool { return false }
 			t.Cleanup(func() { isolated = oldIsolated })
@@ -153,30 +179,45 @@ func TestRecoveryServiceEntry(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			// 真实池关系未知，不能用 provider 映射伪造同套餐验收。
-			save("harness/pi", "---\nmodel: opencode-go/quota\n---\n")
-			for _, name := range []string{"aaa-paid", "zzz-free"} {
+			// 假 dsh 的行为从 --patch 里的模型取；paid/free 靠单价分先后，free 更便宜。
+			workerMode := mode
+			if mode == "no-candidate" || mode == "bounded" || mode == "unknown-other-host" || mode == "known-pool" || mode == "different-account" {
+				workerMode = "quota"
+			}
+			exit := "ok"
+			if mode == "bounded" {
+				exit = "quota"
+			}
+			for _, name := range []string{"paid", "free"} {
 				charge := 10
-				if name == "zzz-free" {
+				if name == "free" {
 					charge = 0
 				}
-				cliMode := "success"
-				if mode == "bounded" {
-					cliMode = "quota"
-				}
-				quoted, _ := json.Marshal(filepath.Base(exe))
-				profile := fmt.Sprintf("---\nprotocol: cli\ncommand: %s\nargs: ['--recovery-fake-worker','%s','{prompt}']\ndone_match: '^DONE$'\nbilling: subscription\nprices: {currency: USD, input: %d, output: %d, cache_read: %d, cache_write: %d}\n", quoted, cliMode, charge, charge, charge, charge)
+				yaml := fmt.Sprintf("model: fake/%s\nbilling: subscription\nprices: {currency: USD, input: %d, output: %d, cache_read: %d, cache_write: %d}\n", exit, charge, charge, charge, charge)
+				// 身份未知时要能切到同一组合的另一台机器，不能被「换人」抢先。
 				if mode == "no-candidate" || mode == "unknown-other-host" {
-					profile += "auto: false\n"
+					yaml += "auto: false\n"
 				}
-				save("harness/"+name, profile+"---\n")
+				save("combos/dsh+"+name, "---\n"+yaml+"---\n")
 			}
+			mainYAML := "model: rev/" + workerMode + "\n"
 			if mode == "no-candidate" || mode == "bounded" || mode == "silent" || mode == "silent-quota" || mode == "error-busy" || mode == "old-pr" || mode == "fresh-pr" {
-				save("harness/pi", "---\nmodel: opencode-go/quota\nauto: false\n---\n")
+				mainYAML += "auto: false\n"
 			}
-			if mode == "magpie-full" {
-				// 走缺省 ResolveExecution：端点是 magpie 网关、模型是 <provider>/<模型> 才挂绑定（pi 不会真连它）。
-				save("harness/pi", "---\nmodel: cursor/quota\nendpoint: "+quota.MagpieURL+"/v1\nendpoint_api: openai\n---\n")
+			save("combos/dsh+main", "---\n"+mainYAML+"---\n")
+			if mode == "known-pool" || mode == "different-account" || mode == "magpie-full" {
+				// dsh 不能声明自定义端点：档案写 endpoint 挂 magpie 会被 dsh 的 Check 拒（不支持自定义模型端点），
+				// 所以这里的额度绑定一律由测试桩合成（见 installSyntheticExecution）。
+				installSyntheticExecution(t, mode)
+			}
+			if mode == "known-pool" || mode == "different-account" {
+				save("combos/dsh+sibling", "---\nmodel: rev/zero-action\n---\n")
+				if mode == "different-account" {
+					// 同工具的另一个已证实账号：本账号失败不连坐，它有读数就排在没读数的前面。
+					if err := quota.Record(ctx, db, LocalHost, []quota.Reading{magpieReading("other", 10, 0)}); err != nil {
+						t.Fatal(err)
+					}
+				}
 			}
 			remoteHost := ""
 			if mode == "unknown-other-host" {
@@ -184,12 +225,12 @@ func TestRecoveryServiceEntry(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if _, _, err := hosts.Join(ctx, db, code, hosts.Info{CLIs: map[string]hosts.CLI{"pi": {Installed: true}}}); err != nil {
+				if _, _, err := hosts.Join(ctx, db, code, hosts.Info{CLIs: map[string]hosts.CLI{"dsh": {Installed: true}}}); err != nil {
 					t.Fatal(err)
 				}
 				remoteHost = h.ID
 				for _, host := range []string{LocalHost, h.ID} {
-					if err := quota.Record(ctx, db, host, []quota.Reading{{Account: "opencode", OK: true, Plan: "Go", Finger: host, ReadAt: store.Now(), Windows: []quota.Window{{ID: "month", Used: 0}}}}); err != nil {
+					if err := quota.Record(ctx, db, host, []quota.Reading{{Account: quota.MagpieAccount, OK: true, Plan: "Go", Finger: host, ReadAt: store.Now(), Windows: []quota.Window{{ID: "month", Used: 0}}}}); err != nil {
 						t.Fatal(err)
 					}
 				}
@@ -198,7 +239,7 @@ func TestRecoveryServiceEntry(t *testing.T) {
 					if host != remoteHost {
 						return 0, 0, "", fmt.Errorf("派错机器 %s", host)
 					}
-					log := `{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"另一机器（身份未知）交付完成"}]}}` + "\n" + `{"type":"agent_settled"}` + "\n"
+					log := `{"type":"session","sessionId":"session-0123abcd-0123-0123-0123-0123456789ab"}` + "\n" + `{"type":"text","text":"另一机器（身份未知）交付结论：完成"}` + "\n" + `{"type":"final","text":"另一机器（身份未知）交付结论：完成"}` + "\n"
 					return 1, 4242, filepath.Join(dir, "remote-work"), os.WriteFile(r.Log, []byte(log), 0600)
 				}
 				waitRemote = func(context.Context, *app.Env, string, int) (hosts.Exit, error) {
@@ -206,10 +247,6 @@ func TestRecoveryServiceEntry(t *testing.T) {
 					return hosts.Exit{Code: &code}, nil
 				}
 				t.Cleanup(func() { launchRemote, waitRemote = oldLaunch, oldWait })
-			}
-			if mode == "known-pool" || mode == "different-account" {
-				installSyntheticExecution(t, mode)
-				save("combos/pi+sibling", "---\nmodel: opencode-go/zero-action\n---\n")
 			}
 			done := make(chan error, 1)
 			go func() { done <- service.Serve([]app.Module{ledger.Module(), Module()}, os.Getenv) }()
@@ -263,16 +300,14 @@ func TestRecoveryServiceEntry(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			workerMode := mode
-			if mode == "no-candidate" || mode == "bounded" || mode == "unknown-other-host" || mode == "known-pool" || mode == "different-account" {
-				workerMode = "quota"
-			}
-			body := map[string]any{"worker": "pi+opencode-go/" + workerMode}
+			body := map[string]any{"worker": "dsh+main"}
 			if mode == "magpie-full" {
-				// 同一入口先看窗口有余（假读数 40%）时推荐经 magpie 的 pi，再造窗口将满（92%）看它被避开。
+				// dsh 不能声明自定义端点，档案写 endpoint 挂 magpie 会被 dsh 的 Check 拒（不支持自定义模型端点），
+				// 所以额度绑定由测试桩合成。magpie 路径只报「窗口将满」，不给富余百分比，这里验的是这条阈值：
+				// 窗口有余时主组合能接，将满时它被拒、挑人换到别的组合。
 				preview := func(used float64) *PickView {
 					t.Helper()
-					if err := quota.Record(ctx, db, LocalHost, []quota.Reading{magpieReading("cursor", used, store.Now()+3600_000)}); err != nil {
+					if err := quota.Record(ctx, db, LocalHost, []quota.Reading{magpieReading("rev", used, store.Now()+3600_000)}); err != nil {
 						t.Fatal(err)
 					}
 					var res RunResult
@@ -282,20 +317,29 @@ func TestRecoveryServiceEntry(t *testing.T) {
 					}
 					return res.Pick
 				}
-				if v := preview(40); v.Recommended != "pi+cursor/quota" {
-					t.Fatalf("窗口有余时应推荐经 magpie 的 pi：%+v", v)
+				main := func(v *PickView) *Candidate {
+					t.Helper()
+					for i := range v.Candidates {
+						if v.Candidates[i].ID == "dsh+main" {
+							return &v.Candidates[i]
+						}
+					}
+					t.Fatalf("候选里没有 dsh+main：%+v", v)
+					return nil
+				}
+				if c := main(preview(40)); !c.Eligible {
+					t.Fatalf("窗口有余时主组合应能接：%+v", c)
 				}
 				v := preview(92)
-				waiting := ""
-				for _, c := range v.Candidates {
-					if c.ID == "pi+cursor/quota" {
-						waiting = c.Waiting
-					}
+				c := main(v)
+				// 将满现在是一条会恢复的标记：进 Waiting（挑人侧当「等恢复」候选），不是 Refusals。
+				if !c.Eligible || !strings.Contains(c.Waiting, "额度将满") {
+					t.Fatalf("窗口将满应把主组合留作等恢复候选：%+v", c)
 				}
-				if v.Recommended != "zzz-free" || !strings.Contains(waiting, "额度将满") {
-					t.Fatalf("窗口将满应换组合：recommended=%s waiting=%q", v.Recommended, waiting)
+				if v.Recommended != "dsh+free" {
+					t.Fatalf("窗口将满应换组合：recommended=%s（%s）", v.Recommended, v.Reason)
 				}
-				t.Logf("窗口将满：pi+cursor/quota 等=%s；推荐=%s", waiting, v.Recommended)
+				t.Logf("窗口将满：dsh+main 等待=%v；推荐=%s", c.Waiting, v.Recommended)
 				delete(body, "worker")
 			}
 			call("POST", "/api/tasks/"+tk.ID+"/run", body, nil)
@@ -309,7 +353,7 @@ func TestRecoveryServiceEntry(t *testing.T) {
 						t.Fatal(err)
 					}
 				} else {
-					if err := quota.Record(ctx, db, LocalHost, []quota.Reading{{Account: "opencode", OK: true, Plan: "Go", Finger: "fake-account", ReadAt: store.Now(), Windows: []quota.Window{{ID: "month", Used: 100}}}}); err != nil {
+					if err := quota.Record(ctx, db, LocalHost, []quota.Reading{{Account: quota.MagpieAccount, OK: true, Plan: "Go", Finger: "fake-account", ReadAt: store.Now(), Windows: []quota.Window{{ID: "month", Used: 100}}}}); err != nil {
 						t.Fatal(err)
 					}
 				}
@@ -350,11 +394,15 @@ func TestRecoveryServiceEntry(t *testing.T) {
 			if len(runs) != wantRuns {
 				t.Fatalf("拉起次数 %d want %d：%+v", len(runs), wantRuns, runs)
 			}
-			if wantRuns == 2 && mode != "unknown-other-host" && mode != "different-account" && (runs[1].Worker != "zzz-free" || runs[1].Why != workers.WhySwitch) {
+			if wantRuns == 2 && mode != "unknown-other-host" && mode != "different-account" && (runs[1].Worker != "dsh+free" || runs[1].Why != workers.WhySwitch) {
 				t.Fatalf("应实际选择已声明免费：%+v", runs)
 			}
-			if mode == "different-account" && (runs[1].Worker != "pi+sibling" || len(marks) != 1) {
-				t.Fatalf("不同已证实账号不连坐：runs=%+v marks=%+v", runs, marks)
+			if mode == "different-account" {
+				// 不同已证实账号不连坐：只标失败的那个账号（main），换人不必等它；
+				// 换到哪个组合由档案顺序定，这里不钉名字。
+				if len(marks) != 1 || marks[0].Model != "main" || runs[1].Worker == "dsh+main" {
+					t.Fatalf("不同已证实账号不连坐：runs=%+v marks=%+v", runs, marks)
+				}
 			}
 			if mode == "known-pool" {
 				if len(marks) != 2 {
@@ -364,7 +412,7 @@ func TestRecoveryServiceEntry(t *testing.T) {
 					t.Fatal("共享失败不能延长保留期", marks)
 				}
 			}
-			if mode == "magpie-full" && (runs[0].Worker != "zzz-free" || len(marks) != 0) {
+			if mode == "magpie-full" && (runs[0].Worker != "dsh+free" || len(marks) != 0) {
 				t.Fatalf("实际派活也应避开窗口将满的组合，且不记不可用：runs=%+v marks=%+v", runs, marks)
 			}
 			if mode == "unknown-other-host" && (runs[1].Worker != runs[0].Worker || runs[1].Host != remoteHost || runs[1].Why != workers.WhySwitch) {

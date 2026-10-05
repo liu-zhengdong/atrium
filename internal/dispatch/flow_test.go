@@ -26,25 +26,55 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/workers"
 )
 
-// 假执行者：claude 读第一条消息、打会话与收尾、等标准输入关掉才退；codex 报额度用尽；kimi 一直睡。
-var fakes = map[string]string{
-	"claude": `#!/bin/sh
-read first
-echo '{"type":"system","subtype":"init","session_id":"0123abcd-0123-0123-0123-0123456789ab","model":"claude-opus-5-5"}'
+// 假 dsh：读第一条消息、打会话与收尾、等标准输入关掉才退。
+// 行为按 --patch 指向的 dsh-model.yml 里的模型名分：ok 正常收尾、quota 报额度用尽、auth 报没登录、slow 慢慢收尾。
+const fakeDsh = `#!/bin/sh
+patch=
+while [ $# -gt 0 ]; do
+	case "$1" in
+	--patch) patch=$2; shift ;;
+	esac
+	shift
+done
+mode=${patch:+$(sed -n 's/^ *model: //p' "$patch" 2>/dev/null)}
+mode=${mode##*/}
+first=$(cat)
+echo '{"type":"session","sessionId":"session-0123abcd-0123-0123-0123-0123456789ab"}'
 echo "worker=$ATRIUM_WORKER task=$ATRIUM_TASK secret=${DEMO_TOKEN:-none} home=${ANTHROPIC_API_KEY:-clean} cwd=$(pwd -P)"
-case "$first" in *'"type":"user"'*) echo got-prompt ;; esac
-echo '{"type":"result","is_error":false,"stop_reason":"end_turn","result":"ok"}'
+[ -n "$first" ] && echo got-prompt
+case "$mode" in
+*quota)
+	echo "ERROR: You've hit your usage limit. Try again in ~5 min."
+	exit 1 ;;
+*auth)
+	echo "Not signed in. Run dsh login first."
+	exit 1 ;;
+*slow) sleep 6 ;;
+esac
+echo '{"type":"text","text":"ok"}'
+echo '{"type":"final","text":"ok"}'
 cat >/dev/null
-`,
-	"codex": `#!/bin/sh
-cat >/dev/null
-echo "ERROR: You've hit your usage limit. Try again in ~5 min."
-exit 1
-`,
-	"kimi": `#!/bin/sh
-echo "started server=$ATRIUM_SERVER token=${ATRIUM_WORKER_TOKEN:+yes}"
-sleep 30
-`,
+`
+
+// 内置执行者只剩 dsh：假脚本按 --patch 里的模型名（combos/ 档案写的）分支。
+// 裸工具 dsh 不带模型 → 按 ok 收尾；要造出多个候选就得写 combos/ 档案。
+const (
+	fakeOK    = "dsh" // 裸工具：不写档案
+	fakeOther = "dsh+o"
+	fakeQuota = "dsh+q"
+	fakeAuth  = "dsh+a"
+	fakeSlow  = "dsh+s"
+)
+
+var fakes = map[string]string{"dsh": fakeDsh}
+
+// saveCombo 写一份组合档案（combos/<name>），给假 dsh 造出另一个候选。
+func saveCombo(t *testing.T, env *app.Env, name, model string) {
+	t.Helper()
+	src := "---\nmodel: " + model + "\n---\n"
+	if _, err := workers.SaveProfile(context.Background(), env.DB, "combos/"+name, workers.Edit{Source: &src}, "u1"); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func setup(t *testing.T) (*app.Env, *dispatcher) {
@@ -147,12 +177,12 @@ func waitFor(t *testing.T, env *app.Env, id string, ok func(ledger.Task) bool) l
 	}
 }
 
-func TestFlowClaudeToGate(t *testing.T) {
+func TestFlowToGate(t *testing.T) {
 	env, d := setup(t)
 	ctx := context.Background()
 	repo := gitRepo(t)
 	tk, _ := ledger.Add(ctx, env.DB, ledger.NewTask{Title: "改 README", Repo: repo}, "u1")
-	if _, err := Enqueue(ctx, env, tk.ID, Options{Worker: "claude"}, "u1"); err != nil {
+	if _, err := Enqueue(ctx, env, tk.ID, Options{Worker: fakeOK}, "u1"); err != nil {
 		t.Fatal(err)
 	}
 	// 停机时不派。
@@ -168,7 +198,7 @@ func TestFlowClaudeToGate(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := waitFor(t, env, tk.ID, func(x ledger.Task) bool { return x.Stage == ledger.StageGate })
-	if got.Worker != "claude+opus" || got.Host != LocalHost {
+	if got.Worker != fakeOK || got.Host != LocalHost {
 		t.Fatalf("事实：%+v", got)
 	}
 	run, _ := workers.LastRun(ctx, env.DB, tk.ID)
@@ -190,7 +220,7 @@ func TestFlowClaudeToGate(t *testing.T) {
 		t.Errorf("提示词：%s", prompt)
 	}
 	c, err := ReadLog(ctx, env, tk.ID, -1, 0)
-	if err != nil || !strings.Contains(c.Text, `"type":"result"`) || c.Running {
+	if err != nil || !strings.Contains(c.Text, `"type":"final"`) || c.Running {
 		t.Errorf("task log：%+v %v", c, err)
 	}
 	// 交回：Bounce 回队列（没有队列行）→ 沿用原执行者、原工作树，提示词带交回原因。
@@ -216,7 +246,7 @@ func TestFlowInPlace(t *testing.T) {
 	ctx := context.Background()
 	place, _ := filepath.EvalSymlinks(t.TempDir())
 	tk, _ := ledger.Add(ctx, env.DB, ledger.NewTask{Title: "写文章", Dir: place}, "u1")
-	if _, err := Enqueue(ctx, env, tk.ID, Options{Worker: "claude"}, "u1"); err != nil {
+	if _, err := Enqueue(ctx, env, tk.ID, Options{Worker: fakeOK}, "u1"); err != nil {
 		t.Fatal(err)
 	}
 	if err := d.pump(ctx); err != nil {
@@ -241,7 +271,7 @@ func TestFlowInPlace(t *testing.T) {
 	}
 
 	gone, _ := ledger.Add(ctx, env.DB, ledger.NewTask{Title: "写文章", Dir: filepath.Join(place, "nosuch")}, "u1")
-	if _, err := Enqueue(ctx, env, gone.ID, Options{Worker: "claude"}, "u1"); err != nil {
+	if _, err := Enqueue(ctx, env, gone.ID, Options{Worker: fakeOK}, "u1"); err != nil {
 		t.Fatal(err)
 	}
 	if err := d.pump(ctx); err != nil {
@@ -252,12 +282,15 @@ func TestFlowInPlace(t *testing.T) {
 	}
 }
 
-// 执行者额度用尽：标记本机套餐到恢复时刻，直接换人；进入关卡前记下两次拉起。
+// 执行者额度用尽：标记本机套餐到恢复时刻，直接换到另一个组合；进入关卡前记下两次拉起。
 func TestFlowQuotaRequeue(t *testing.T) {
 	env, d := setup(t)
 	ctx := context.Background()
+	// 内置只剩 dsh 一个工具：要观察到「避开额度用尽的组合、换到另一个」，得写两份组合档案。
+	saveCombo(t, env, "dsh+q", "fake/quota")
+	saveCombo(t, env, "dsh+o", "fake/ok")
 	tk, _ := ledger.Add(ctx, env.DB, ledger.NewTask{Title: "调研"}, "u1")
-	if _, err := Enqueue(ctx, env, tk.ID, Options{Worker: "codex"}, "u1"); err != nil {
+	if _, err := Enqueue(ctx, env, tk.ID, Options{Worker: fakeQuota}, "u1"); err != nil {
 		t.Fatal(err)
 	}
 	if err := d.pump(ctx); err != nil {
@@ -265,15 +298,15 @@ func TestFlowQuotaRequeue(t *testing.T) {
 	}
 	waitFor(t, env, tk.ID, func(x ledger.Task) bool { return x.Stage == ledger.StageGate })
 	marks, _ := workers.Marks(ctx, env.DB, store.Now())
-	if len(marks) != 1 || marks[0].Target() != "codex@"+LocalHost || marks[0].Until <= store.Now() {
-		t.Fatalf("应标记本机的 codex 额度用尽：%+v", marks)
+	if len(marks) != 1 || marks[0].Target() != fakeQuota+"@"+LocalHost || marks[0].Until <= store.Now() {
+		t.Fatalf("应标记本机的 %s 额度用尽：%+v", fakeQuota, marks)
 	}
 	v, err := d.view(ctx, tk, Options{Risk: "low"}, nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, c := range v.Candidates {
-		if c.ID == "codex" && (v.Recommended == "codex" || !strings.Contains(c.Waiting, "额度用尽")) {
+		if c.ID == fakeQuota && (v.Recommended == fakeQuota || !strings.Contains(c.Waiting, "额度用尽")) {
 			t.Errorf("挑执行者应避开额度用尽的组合、写明在等它恢复：%+v", c)
 		}
 	}
@@ -282,18 +315,18 @@ func TestFlowQuotaRequeue(t *testing.T) {
 	}
 	waitFor(t, env, tk.ID, func(x ledger.Task) bool { return x.Stage == ledger.StageGate })
 	runs, _ := workers.Runs(ctx, env.DB, tk.ID, 10)
-	if len(runs) != 2 || runs[0].Worker != "codex" || runs[1].Worker == "codex" {
-		t.Fatalf("额度用尽应换人重派：%+v", runs)
+	if len(runs) != 2 || runs[0].Worker != fakeQuota || runs[1].Worker != fakeOther {
+		t.Fatalf("额度用尽应换到另一个组合重派：%+v", runs)
 	}
 	stats, err := workers.Stats(ctx, env.DB)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s := stats["codex"]; len(s) != 1 || s[0].Outcome != workers.OutQuota || s[0].Task != tk.ID || s[0].Model != "" {
-		t.Errorf("这次拉起应记额度失败（codex 不报模型）：%+v", s)
+	if s := stats[fakeQuota]; len(s) != 1 || s[0].Outcome != workers.OutQuota || s[0].Task != tk.ID || s[0].Model != "" {
+		t.Errorf("这次拉起应记额度失败（dsh 不报模型）：%+v", s)
 	}
-	if s := stats[workers.Combo(runs[1].Worker)]; len(s) != 1 || s[0].Outcome != workers.OutOK || s[0].Model != "claude-opus-5-5" {
-		t.Errorf("换上的执行者应记交付，带上它报的模型：%+v", s)
+	if s := stats[workers.Combo(runs[1].Worker)]; len(s) != 1 || s[0].Outcome != workers.OutOK || s[0].Model != "" {
+		t.Errorf("换上的执行者应记交付（dsh 不报模型）：%+v", s)
 	}
 	if _, err := os.Stat(filepath.Join(TaskDir(env.Paths.Data, tk.ID), "work")); err != nil {
 		t.Error("没有仓库时用 work/")
@@ -305,12 +338,12 @@ func TestWatchQuotaMarks(t *testing.T) {
 	env, d := setup(t)
 	ctx := context.Background()
 	bin := t.TempDir()
-	if err := os.WriteFile(filepath.Join(bin, "grok"), []byte("#!/bin/sh\necho 'Error: HTTP/1.1 429 Too Many Requests'\nsleep 30\n"), 0o755); err != nil {
+	if err := os.WriteFile(filepath.Join(bin, "dsh"), []byte("#!/bin/sh\necho 'Error: HTTP/1.1 429 Too Many Requests'\nsleep 30\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
 	tk, _ := ledger.Add(ctx, env.DB, ledger.NewTask{Title: "调研"}, "u1")
-	if _, err := Enqueue(ctx, env, tk.ID, Options{Worker: "grok"}, "u1"); err != nil {
+	if _, err := Enqueue(ctx, env, tk.ID, Options{Worker: fakeOK}, "u1"); err != nil {
 		t.Fatal(err)
 	}
 	if err := d.pump(ctx); err != nil {
@@ -341,12 +374,15 @@ func TestWatchStartStuckMarks(t *testing.T) {
 	env, d := setup(t)
 	ctx := context.Background()
 	bin := t.TempDir()
-	if err := os.WriteFile(filepath.Join(bin, "grok"), []byte("#!/bin/sh\nsleep 5\n"), 0o755); err != nil {
+	if err := os.WriteFile(filepath.Join(bin, "dsh"), []byte("#!/bin/sh\nsleep 5\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
+	// 只有一个内置工具：换人重派要靠另一个组合档案。
+	saveCombo(t, env, "dsh+s", "fake/slow")
+	saveCombo(t, env, "dsh+o", "fake/ok")
 	tk, _ := ledger.Add(ctx, env.DB, ledger.NewTask{Title: "调研"}, "u1")
-	if _, err := Enqueue(ctx, env, tk.ID, Options{Worker: "grok"}, "u1"); err != nil {
+	if _, err := Enqueue(ctx, env, tk.ID, Options{Worker: fakeSlow}, "u1"); err != nil {
 		t.Fatal(err)
 	}
 	if err := d.pump(ctx); err != nil {
@@ -395,12 +431,12 @@ func TestWatchStartStuckQuotaWins(t *testing.T) {
 	env, d := setup(t)
 	ctx := context.Background()
 	bin := t.TempDir()
-	if err := os.WriteFile(filepath.Join(bin, "grok"), []byte("#!/bin/sh\necho 'Error: HTTP/1.1 429 Too Many Requests'\nsleep 5\n"), 0o755); err != nil {
+	if err := os.WriteFile(filepath.Join(bin, "dsh"), []byte("#!/bin/sh\necho 'Error: HTTP/1.1 429 Too Many Requests'\nsleep 5\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
 	tk, _ := ledger.Add(ctx, env.DB, ledger.NewTask{Title: "调研"}, "u1")
-	if _, err := Enqueue(ctx, env, tk.ID, Options{Worker: "grok"}, "u1"); err != nil {
+	if _, err := Enqueue(ctx, env, tk.ID, Options{Worker: fakeOK}, "u1"); err != nil {
 		t.Fatal(err)
 	}
 	if err := d.pump(ctx); err != nil {
@@ -438,12 +474,12 @@ func TestWatchPlainFailNoMark(t *testing.T) {
 	env, d := setup(t)
 	ctx := context.Background()
 	bin := t.TempDir()
-	if err := os.WriteFile(filepath.Join(bin, "grok"), []byte("#!/bin/sh\nsleep 5\n"), 0o755); err != nil {
+	if err := os.WriteFile(filepath.Join(bin, "dsh"), []byte("#!/bin/sh\nsleep 5\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
 	tk, _ := ledger.Add(ctx, env.DB, ledger.NewTask{Title: "调研"}, "u1")
-	if _, err := Enqueue(ctx, env, tk.ID, Options{Worker: "grok"}, "u1"); err != nil {
+	if _, err := Enqueue(ctx, env, tk.ID, Options{Worker: fakeOK}, "u1"); err != nil {
 		t.Fatal(err)
 	}
 	if err := d.pump(ctx); err != nil {
@@ -462,12 +498,12 @@ func TestWatchPlainFailNoMark(t *testing.T) {
 	}
 }
 
-// 执行者报没登录：标记本机的这个工具，直接换人并避开它。
+// 执行者报没登录：标记本机上的这个工具、等人处理；内置只剩 dsh，没有别人能接 → 任务受阻。
 func TestFlowLoginRequeue(t *testing.T) {
 	env, d := setup(t)
 	ctx := context.Background()
 	bin := t.TempDir()
-	if err := os.WriteFile(filepath.Join(bin, "grok"), []byte("#!/bin/sh\necho 'Not signed in'\nexit 1\n"), 0o755); err != nil {
+	if err := os.WriteFile(filepath.Join(bin, "dsh"), []byte("#!/bin/sh\necho 'Not signed in'\nexit 1\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
@@ -475,44 +511,41 @@ func TestFlowLoginRequeue(t *testing.T) {
 		t.Fatal(err)
 	}
 	tk, _ := ledger.Add(ctx, env.DB, ledger.NewTask{Title: "审阅"}, "u1")
-	if _, err := Enqueue(ctx, env, tk.ID, Options{Worker: "grok"}, "u1"); err != nil {
+	if _, err := Enqueue(ctx, env, tk.ID, Options{Worker: fakeOK}, "u1"); err != nil {
 		t.Fatal(err)
 	}
 	if err := d.pump(ctx); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, env, tk.ID, func(x ledger.Task) bool { return x.Stage == ledger.StageGate })
+	// 没登录是工具级标记（把模型层清空）：本机上的 dsh 都躲开；内置只剩它一个，没人能接 → 放回队列等人处理。
+	got := waitFor(t, env, tk.ID, func(x ledger.Task) bool { return x.Status == ledger.Queued && x.Worker == "" })
 	marks, _ := workers.Marks(ctx, env.DB, store.Now())
-	if len(marks) != 1 || marks[0].Target() != "grok@"+LocalHost || marks[0].Until != 0 {
-		t.Fatalf("本机的 grok 应标没登录、等人处理：%+v", marks)
+	if len(marks) != 1 || marks[0].Target() != fakeOK+"@"+LocalHost || marks[0].Until != 0 {
+		t.Fatalf("本机的 %s 应标没登录、等人处理：%+v", fakeOK, marks)
+	}
+	if got.Host != "" {
+		t.Errorf("放回队列后不该还挂在工作地点上：%+v", got)
 	}
 	v, err := d.view(ctx, tk, Options{Risk: "low"}, nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, c := range v.Candidates {
-		if strings.HasPrefix(c.ID, "grok") && (v.Recommended == c.ID || !strings.Contains(c.Waiting, "没登录")) {
-			t.Errorf("挑执行者应避开没登录的 grok、写明在等它恢复：%+v", c)
+		if c.ID == fakeOK && (v.Recommended == c.ID || !strings.Contains(c.Waiting, "没登录")) {
+			t.Errorf("挑执行者应避开没登录的 %s、写明在等它恢复：%+v", fakeOK, c)
 		}
-	}
-	if err := d.pump(ctx); err != nil {
-		t.Fatal(err)
-	}
-	waitFor(t, env, tk.ID, func(x ledger.Task) bool { return x.Stage == ledger.StageGate })
-	runs, _ := workers.Runs(ctx, env.DB, tk.ID, 10)
-	if len(runs) != 2 || runs[0].Worker != "grok" || strings.HasPrefix(runs[1].Worker, "grok") {
-		t.Fatalf("没登录应换人重派：%+v", runs)
 	}
 }
 
 func TestFlowStopAndTell(t *testing.T) {
 	env, d := setup(t)
 	ctx := context.Background()
+	saveCombo(t, env, "dsh+s", "fake/slow")
 	tk, _ := ledger.Add(ctx, env.DB, ledger.NewTask{Title: "长活"}, "u1")
 	if r, err := Tell(ctx, env, tk.ID, "先看文档", "u1"); err != nil || r.Via != "next" {
 		t.Fatalf("没在跑的补充说明下次带上：%+v %v", r, err)
 	}
-	if _, err := Enqueue(ctx, env, tk.ID, Options{Worker: "kimi"}, "u1"); err != nil {
+	if _, err := Enqueue(ctx, env, tk.ID, Options{Worker: fakeSlow}, "u1"); err != nil {
 		t.Fatal(err)
 	}
 	if err := d.pump(ctx); err != nil {
@@ -523,9 +556,9 @@ func TestFlowStopAndTell(t *testing.T) {
 	if !strings.Contains(string(prompt), "先看文档") {
 		t.Errorf("补充说明没进提示词：%s", prompt)
 	}
-	// kimi 不能即时送，也不能继续：停掉带着补充重派。
+	// dsh 不能即时送，但能按会话继续：本轮跑完再带着补充起来。
 	r, err := Tell(ctx, env, tk.ID, "改成 B", "u1")
-	if err != nil || r.Via != "restart" {
+	if err != nil || r.Via != "resume" {
 		t.Fatalf("%+v %v", r, err)
 	}
 	waitFor(t, env, tk.ID, func(x ledger.Task) bool {
@@ -572,61 +605,21 @@ func TestFlowStopAndTell(t *testing.T) {
 		t.Errorf("子任务都结束后应能派：%v", err)
 	}
 	t3, _ := ledger.Add(ctx, env.DB, ledger.NewTask{Title: "高风险"}, "u1")
-	if _, err := Enqueue(ctx, env, t3.ID, Options{Worker: "claude", Risk: "high"}, "u1"); err == nil || !strings.Contains(err.Error(), "接不了") {
+	if _, err := Enqueue(ctx, env, t3.ID, Options{Worker: fakeOK, Risk: "high"}, "u1"); err == nil || !strings.Contains(err.Error(), "接不了") {
 		t.Errorf("风险：%v", err)
 	}
 }
 
-// claude 的补充说明即时写进标准输入：假执行者等第二条消息，回显后收尾；运行时记下送达，退出后不再继续。
-func TestFlowTellStdin(t *testing.T) {
-	env, d := setup(t)
-	ctx := context.Background()
-	bin := filepath.Dir(must(exec.LookPath("claude")))
-	os.WriteFile(filepath.Join(bin, "claude"), []byte(`#!/bin/sh
-read first
-echo '{"type":"system","subtype":"init","session_id":"0123abcd-0123-0123-0123-0123456789ab"}'
-read second
-uuid=$(printf '%s' "$second" | sed 's/.*"uuid":"\([^"]*\)".*/\1/')
-echo '{"type":"user","isReplay":true,"uuid":"'$uuid'"}'
-echo '{"type":"result","is_error":false,"stop_reason":"end_turn","result":"ok"}'
-cat >/dev/null
-`), 0o755)
-	tk, _ := ledger.Add(ctx, env.DB, ledger.NewTask{Title: "边做边听"}, "u1")
-	if _, err := Enqueue(ctx, env, tk.ID, Options{Worker: "claude"}, "u1"); err != nil {
-		t.Fatal(err)
-	}
-	if err := d.pump(ctx); err != nil {
-		t.Fatal(err)
-	}
-	waitFor(t, env, tk.ID, func(ledger.Task) bool { return d.procOf(tk.ID) != nil })
-	r, err := Tell(ctx, env, tk.ID, "顺手改个错别字", "u1")
-	if err != nil || r.Via != "stdin" {
-		t.Fatalf("%+v %v", r, err)
-	}
-	waitFor(t, env, tk.ID, func(x ledger.Task) bool { return x.Stage == ledger.StageGate })
-	runs, _ := workers.Runs(ctx, env.DB, tk.ID, 10)
-	if len(runs) != 1 {
-		t.Fatalf("送到了就不该再继续：%+v", runs)
-	}
-	h, _ := ledger.History(ctx, env.DB, tk.ID, 50)
-	sent := false
-	for _, e := range h {
-		sent = sent || e.Kind == "tell_sent"
-	}
-	if !sent {
-		t.Error("没记送达")
-	}
-}
-
-// 执行者在跑时改说明：当一次补充说明走 Tell（kimi 停掉带着补充重派），重派的提示词里有新说明。
+// 执行者在跑时改说明：当一次补充说明走 Tell（dsh 本轮跑完带着补充继续），继续起来的提示词里有新说明。
 func TestFlowEditDetailTells(t *testing.T) {
 	env, d := setup(t)
 	ctx := context.Background()
 	old := ledger.Tell
 	hook(env)
 	t.Cleanup(func() { ledger.Tell = old })
+	saveCombo(t, env, "dsh+s", "fake/slow")
 	tk, _ := ledger.Add(ctx, env.DB, ledger.NewTask{Title: "长活", Detail: "做 A"}, "u1")
-	if _, err := Enqueue(ctx, env, tk.ID, Options{Worker: "kimi"}, "u1"); err != nil {
+	if _, err := Enqueue(ctx, env, tk.ID, Options{Worker: fakeSlow}, "u1"); err != nil {
 		t.Fatal(err)
 	}
 	if err := d.pump(ctx); err != nil {
@@ -658,8 +651,9 @@ func must[T any](v T, err error) T {
 func TestFlowAdopt(t *testing.T) {
 	env, d := setup(t)
 	ctx := context.Background()
+	saveCombo(t, env, "dsh+s", "fake/slow")
 	tk, _ := ledger.Add(ctx, env.DB, ledger.NewTask{Title: "跨重启"}, "u1")
-	if _, err := Enqueue(ctx, env, tk.ID, Options{Worker: "kimi"}, "u1"); err != nil {
+	if _, err := Enqueue(ctx, env, tk.ID, Options{Worker: fakeSlow}, "u1"); err != nil {
 		t.Fatal(err)
 	}
 	if err := d.pump(ctx); err != nil {
@@ -722,7 +716,8 @@ func flowRemote(t *testing.T, repo string) {
 	}
 	launchRemote = func(_ context.Context, _ *app.Env, host string, r Remote) (int, int, string, error) {
 		got = r
-		os.WriteFile(r.Log, []byte(`{"type":"result","is_error":false,"result":"远程做完了"}`+"\n"), 0o600)
+		os.WriteFile(r.Log, []byte(`{"type":"session","sessionId":"session-0123abcd-0123-0123-0123-0123456789ab"}`+"\n"+
+			`{"type":"text","text":"远程做完了"}`+"\n"+`{"type":"final","text":"远程做完了"}`+"\n"), 0o600)
 		return 1, 4242, "/agent/repos/owner-name-" + r.Task, nil
 	}
 	waitRemote = func(context.Context, *app.Env, string, int) (hosts.Exit, error) {
@@ -730,7 +725,7 @@ func flowRemote(t *testing.T, repo string) {
 		return hosts.Exit{Code: &code}, nil
 	}
 	tk, _ := ledger.Add(ctx, env.DB, ledger.NewTask{Title: "远程活", Repo: repo}, "u1")
-	if _, err := Enqueue(ctx, env, tk.ID, Options{Worker: "claude"}, "u1"); err != nil {
+	if _, err := Enqueue(ctx, env, tk.ID, Options{Worker: fakeOK}, "u1"); err != nil {
 		t.Fatal(err)
 	}
 	if err := d.pump(ctx); err != nil {
@@ -740,8 +735,8 @@ func flowRemote(t *testing.T, repo string) {
 	if need.Repo != "owner/name" || need.LocalOnly != "" {
 		t.Fatalf("挑机器的要求：%+v", need)
 	}
-	if got.Tool != "claude" || got.Repo != "https://github.com/owner/name.git" || got.Branch != "task-"+tk.ID || got.Base != "main" ||
-		!strings.Contains(got.Request.Prompt, "远程活") || got.Request.Live || got.Request.Dir != "" {
+	if got.Tool != fakeOK || got.Repo != "https://github.com/owner/name.git" || got.Branch != "task-"+tk.ID || got.Base != "main" ||
+		!strings.Contains(got.Request.Prompt, "远程活") || got.Request.Dir != "" {
 		t.Fatalf("拉起指令：%+v", got)
 	}
 	exit <- 0
@@ -757,14 +752,14 @@ func flowRemote(t *testing.T, repo string) {
 		t.Errorf("工作树登记：%s", wt)
 	}
 	// 代理那边：同一份适配器，提示词从内存走标准输入。
-	a, ok := adapterFor("claude")
+	a, ok := adapterFor(fakeOK)
 	if !ok {
-		t.Fatal("claude")
+		t.Fatal(fakeOK)
 	}
 	req := got.Request
 	req.Dir = t.TempDir()
 	spec, err := a.Spec(req, map[string]string{"PATH": os.Getenv("PATH")})
-	if err != nil || spec.Stdin == nil || !strings.HasSuffix(spec.Path, "claude") {
+	if err != nil || spec.Stdin == nil || !strings.HasSuffix(spec.Path, "dsh") {
 		t.Fatalf("代理算的调用：%+v %v", spec, err)
 	}
 	if _, ok := adapterFor("../x"); ok {
@@ -780,8 +775,8 @@ func TestHostNeedLocalOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { db.Close() })
-	claude := workers.Spec{Tool: "claude"}
-	if n, err := hostNeed(ctx, db, claude, ledger.Task{Dir: t.TempDir()}); err != nil || n.LocalOnly == "" {
+	dsh := workers.Spec{Tool: "dsh"}
+	if n, err := hostNeed(ctx, db, dsh, ledger.Task{Dir: t.TempDir()}); err != nil || n.LocalOnly == "" {
 		t.Errorf("有工作地点应只派本机：%+v %v", n, err)
 	}
 	plain := t.TempDir()
@@ -789,7 +784,7 @@ func TestHostNeedLocalOnly(t *testing.T) {
 		t.Fatalf("%v %s", err, out)
 	}
 	for repo, local := range map[string]bool{"": false, "owner/name": false, plain: true} {
-		n, err := hostNeed(ctx, db, claude, ledger.Task{Repo: repo})
+		n, err := hostNeed(ctx, db, dsh, ledger.Task{Repo: repo})
 		if err != nil || (n.LocalOnly != "") != local {
 			t.Errorf("%q：%+v %v", repo, n, err)
 		}
@@ -809,17 +804,17 @@ func TestHostNeedLocalOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if n, err := hostNeed(ctx, db, claude, tk); err != nil || n.LocalOnly == "" {
+	if n, err := hostNeed(ctx, db, dsh, tk); err != nil || n.LocalOnly == "" {
 		t.Errorf("体验巡检的一轮应只派本机：%+v %v", n, err)
 	}
-	for name, endpoint := range map[string]string{"combos/pi+gw-local": "http://127.0.0.1:3425/v1", "combos/pi+gw-remote": "https://gw.example.com/v1"} {
+	for name, endpoint := range map[string]string{"combos/dsh+gw-local": "http://127.0.0.1:3425/v1", "combos/dsh+gw-remote": "https://gw.example.com/v1"} {
 		src := "---\nendpoint: " + endpoint + "\nendpoint_api: openai\nmodel: zhipu/glm-5.3\n---\n"
 		if _, err := workers.SaveProfile(ctx, db, name, workers.Edit{Source: &src}, "u1"); err != nil {
 			t.Fatal(err)
 		}
 	}
 	for model, local := range map[string]bool{"gw-local": true, "gw-remote": false} {
-		n, err := hostNeed(ctx, db, workers.Spec{Tool: "pi", Model: model}, ledger.Task{Repo: "owner/name"})
+		n, err := hostNeed(ctx, db, workers.Spec{Tool: "dsh", Model: model}, ledger.Task{Repo: "owner/name"})
 		if err != nil || (n.LocalOnly != "") != local {
 			t.Errorf("端点 %s：%+v %v", model, n, err)
 		}
@@ -847,7 +842,7 @@ func TestSwitchHost(t *testing.T) {
 		}
 		return HostChoice{Kind: "refuse", Reason: refuse[h]}, nil
 	}
-	w := workers.Spec{Tool: "agy", Model: "gemini-3.8-flash-high"}
+	w := workers.Spec{Tool: "dsh", Model: "deepseek-v4"}
 	cases := []struct {
 		name, prev string
 		refuse     map[string]string
@@ -856,9 +851,9 @@ func TestSwitchHost(t *testing.T) {
 		wait, err  bool
 	}{
 		{"上一轮那台接得了", "h3", nil, nil, "h3", false, false},
-		{"上一轮那台没登录就另挑", "h3", map[string]string{"h3": "h3 上的 agy 没登录"}, nil, "h1", false, false},
-		{"都永远接不了", "h1", map[string]string{"h1": "h1 上没装 agy", "h3": "h3 上没装 agy"}, nil, "", false, true},
-		{"别的接不了、那台标了不可用就等", "h1", map[string]string{"h1": "h1 上的 agy+gemini-3.8-flash-high 不可用", "h3": "h3 上没装 agy"},
+		{"上一轮那台没登录就另挑", "h3", map[string]string{"h3": "h3 上的 dsh 没登录"}, nil, "h1", false, false},
+		{"都永远接不了", "h1", map[string]string{"h1": "h1 上没装 dsh", "h3": "h3 上没装 dsh"}, nil, "", false, true},
+		{"别的接不了、那台标了不可用就等", "h1", map[string]string{"h1": "h1 上的 dsh+deepseek-v4 不可用", "h3": "h3 上没装 dsh"},
 			map[string]bool{"h1": true}, "", true, false},
 	}
 	for _, c := range cases {
@@ -867,7 +862,7 @@ func TestSwitchHost(t *testing.T) {
 			refuse = map[string]string{}
 		}
 		host, wait, err := d.switchHost(ctx, ledger.Task{}, w, c.prev)
-		if host != c.want || wait != c.wait || (err != nil) != c.err || needs[0].Tool != "agy" || needs[0].Model != w.Model {
+		if host != c.want || wait != c.wait || (err != nil) != c.err || needs[0].Tool != "dsh" || needs[0].Model != w.Model {
 			t.Errorf("%s：%q %v %v %+v", c.name, host, wait, err, needs)
 		}
 	}
@@ -886,10 +881,10 @@ func TestFlowDepsAutoDispatch(t *testing.T) {
 	repo := gitRepo(t)
 	t1, _ := ledger.Add(ctx, env.DB, ledger.NewTask{Title: "前序活", Repo: repo}, "u1")
 	t2, _ := ledger.Add(ctx, env.DB, ledger.NewTask{Title: "后续活", Repo: repo, After: []string{t1.ID}}, "u1")
-	if _, err := Enqueue(ctx, env, t2.ID, Options{Worker: "claude"}, "u1"); err != nil {
+	if _, err := Enqueue(ctx, env, t2.ID, Options{Worker: fakeOK}, "u1"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Enqueue(ctx, env, t1.ID, Options{Worker: "claude"}, "u1"); err != nil {
+	if _, err := Enqueue(ctx, env, t1.ID, Options{Worker: fakeOK}, "u1"); err != nil {
 		t.Fatal(err)
 	}
 	if err := d.pump(ctx); err != nil {
@@ -923,7 +918,7 @@ func TestFlowDepsBroken(t *testing.T) {
 	for _, to := range []ledger.Status{ledger.Failed, ledger.Cancelled} {
 		first, _ := ledger.Add(ctx, env.DB, ledger.NewTask{Title: "前序", Org: "o1"}, "a1")
 		next, _ := ledger.Add(ctx, env.DB, ledger.NewTask{Title: "后续", Org: "o1", After: []string{first.ID}}, "a1")
-		if _, err := Enqueue(ctx, env, next.ID, Options{Worker: "claude"}, "a1"); err != nil {
+		if _, err := Enqueue(ctx, env, next.ID, Options{Worker: fakeOK}, "a1"); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := ledger.Apply(ctx, env.DB, first.ID, ledger.Event{Kind: ledger.Set, To: to}, "u1", ""); err != nil {
@@ -951,31 +946,31 @@ func TestEnqueueSetsWorker(t *testing.T) {
 	env, _ := setup(t)
 	ctx := context.Background()
 	tk, _ := ledger.Add(ctx, env.DB, ledger.NewTask{Title: "改派"}, "u1")
-	prev, host := "agy+gemini-3.8-flash-high", LocalHost
+	prev, host := "dsh+deepseek-v4", LocalHost
 	if err := ledger.SetFacts(ctx, env.DB, tk.ID, ledger.Facts{Worker: &prev, Host: &host}, "u1"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := ledger.Apply(ctx, env.DB, tk.ID, ledger.Event{Kind: ledger.Set, To: ledger.Failed}, "u1", "上一轮失败"); err != nil {
 		t.Fatal(err)
 	}
-	got, err := Enqueue(ctx, env, tk.ID, Options{Worker: "claude"}, "u1")
+	got, err := Enqueue(ctx, env, tk.ID, Options{Worker: fakeOK}, "u1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Status != ledger.Queued || got.Worker != "claude+opus" || got.Host != "" {
+	if got.Status != ledger.Queued || got.Worker != fakeOK || got.Host != "" {
 		t.Fatalf("入队后应显示这一轮的执行者、机器清空：%+v", got)
 	}
-	if _, err := Enqueue(ctx, env, tk.ID, Options{Worker: "kimi"}, "u1"); err == nil {
+	if _, err := Enqueue(ctx, env, tk.ID, Options{Worker: fakeOK}, "u1"); err == nil {
 		t.Fatal("排队中不能再派")
 	}
 	list, err := queued(ctx, env.DB)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(list) != 1 || !list[0].Row || list[0].Opts.Worker != "claude+opus" {
+	if len(list) != 1 || !list[0].Row || list[0].Opts.Worker != fakeOK {
 		t.Fatalf("被拒的 task run 不该动原队列行：%+v", list)
 	}
-	if got, _ := ledger.Get(ctx, env.DB, tk.ID); got.Worker != "claude+opus" {
+	if got, _ := ledger.Get(ctx, env.DB, tk.ID); got.Worker != fakeOK {
 		t.Fatalf("被拒的 task run 不该改执行者：%+v", got)
 	}
 	// 自动挑：执行者留空，拉起时再写。
@@ -1006,13 +1001,13 @@ func TestRemoteLostRetries(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	w, err := workers.Resolve(ctx, env.DB, "claude")
+	w, err := workers.Resolve(ctx, env.DB, fakeOK)
 	if err != nil {
 		t.Fatal(err)
 	}
 	log := filepath.Join(t.TempDir(), "run.log")
-	os.WriteFile(log, []byte(`{"type":"result","is_error":false,"result":"ok"}`), 0o600)
-	run := workers.Run{N: 1, Worker: "claude", Host: "h2", PID: 4242, Log: log, Dir: tk.Dir, Why: workers.WhyFirst}
+	os.WriteFile(log, []byte(`{"type":"final","text":"ok"}`), 0o600)
+	run := workers.Run{N: 1, Worker: fakeOK, Host: "h2", PID: 4242, Log: log, Dir: tk.Dir, Why: workers.WhyFirst}
 	if err := d.record(ctx, tk, run); err != nil {
 		t.Fatal(err)
 	}

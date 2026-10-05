@@ -148,22 +148,14 @@ func TestReclaimEndingsAndReopen(t *testing.T) {
 				t.Fatal(err)
 			}
 			// 测试二进制充当执行者，实际分派任务、拉起、退出，不调用模型。
-			exe, err := os.Executable()
-			if err != nil {
-				t.Fatal(err)
-			}
-			t.Setenv("PATH", filepath.Dir(exe)+string(os.PathListSeparator)+os.Getenv("PATH"))
-			quoted, _ := json.Marshal(filepath.Base(exe))
-			source := "---\nprotocol: cli\ncommand: " + string(quoted) + "\nargs: [\"--reclaim-fake-worker\", \"{prompt}\"]\ndone_match: '^DONE$'\n---\n"
-			if _, err := workers.SaveProfile(ctx, d.env.DB, "harness/reclaimfake", workers.Edit{Source: &source}, "u1"); err != nil {
-				t.Fatal(err)
-			}
+			fakeDshOnPath(t)
+			id := fakeCombo(t, ctx, d.env.DB, "reclaim", "")
 			oldPick := pickHost
 			pickHost = func(context.Context, *app.Env, HostNeed, string) (HostChoice, error) {
 				return HostChoice{Kind: "run", Host: LocalHost}, nil
 			}
 			t.Cleanup(func() { pickHost = oldPick })
-			if _, err := Enqueue(ctx, d.env, tk.ID, Options{Worker: "reclaimfake"}, "u1"); err != nil {
+			if _, err := Enqueue(ctx, d.env, tk.ID, Options{Worker: id}, "u1"); err != nil {
 				t.Fatal(err)
 			}
 			stop = runReclaimLoop(t, d, ctx)
@@ -188,38 +180,11 @@ func TestReclaimEndingsAndReopen(t *testing.T) {
 }
 
 func TestMain(m *testing.M) {
-	if filepath.Base(os.Args[0]) == "pi" || filepath.Base(os.Args[0]) == "pi.exe" {
-		os.Exit(recoveryPi())
-	}
-	if len(os.Args) > 2 && os.Args[1] == "--recovery-fake-worker" {
-		os.Exit(recoveryCLI(os.Args[2]))
+	if filepath.Base(os.Args[0]) == "dsh" || filepath.Base(os.Args[0]) == "dsh.exe" {
+		os.Exit(recoveryDsh())
 	}
 	if filepath.Base(os.Args[0]) == "git" && os.Getenv("RECLAIM_TEST_GIT") != "" {
 		os.Exit(reclaimGitBarrier())
-	}
-	if len(os.Args) > 1 && os.Args[1] == "--continue-pr-worker" {
-		os.Exit(continuePRWorker())
-	}
-	if len(os.Args) > 1 && (os.Args[1] == "--reclaim-fake-worker" || os.Args[1] == "--reclaim-wait-worker") {
-		if err := os.WriteFile("continued.txt", []byte("继续干"), 0600); err != nil {
-			os.Exit(1)
-		}
-		temp := os.Getenv("TMPDIR")
-		if temp == "" || os.Getenv("TMP") != temp || os.Getenv("TEMP") != temp {
-			os.Exit(2)
-		}
-		// 打回会复用临时目录；假执行者重建自己的只读缓存，不能直接覆盖 0400 文件。
-		if err := os.Remove(filepath.Join(temp, "readonly")); err != nil && !os.IsNotExist(err) {
-			os.Exit(3)
-		}
-		if err := os.WriteFile(filepath.Join(temp, "readonly"), []byte("只读缓存"), 0o400); err != nil {
-			os.Exit(3)
-		}
-		if os.Args[1] == "--reclaim-wait-worker" {
-			time.Sleep(time.Minute)
-		}
-		fmt.Println("DONE\n交付结论：完成")
-		os.Exit(0)
 	}
 	os.Exit(m.Run())
 }

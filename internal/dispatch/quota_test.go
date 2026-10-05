@@ -28,8 +28,9 @@ func TestQuotaSummaryNotSelection(t *testing.T) {
 		return HostChoice{Kind: "run", Host: LocalHost}, nil
 	}
 	isolated = func(*app.Env) bool { return false } // 只测试选择，不拉起工具；机器事实也是假的。
-	src := "---\nprotocol: cli\ncommand: go\nargs: [\"{prompt}\"]\nauto: false\n---\n额度：无读数，只接点名派活。\n"
-	if _, err := workers.SaveProfile(ctx, db, "harness/trae", workers.Edit{Source: &src}, "u1"); err != nil {
+	// 点数才派的组合：缓存里可能有额度摘要，但它没绑定任何 provider，不能当这个组合的额度。
+	src := "---\nmodel: rev/x1\nauto: false\n---\n额度：无读数，只接点名派活。\n"
+	if _, err := workers.SaveProfile(ctx, db, "combos/dsh+run", workers.Edit{Source: &src}, "u1"); err != nil {
 		t.Fatal(err)
 	}
 	d := &dispatcher{env: env}
@@ -46,24 +47,21 @@ func TestQuotaSummaryNotSelection(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		foundAgy, foundTrae := false, false
+		found := false
 		for _, c := range v.Candidates {
-			switch {
-			case strings.HasPrefix(c.ID, "agy+"):
-				foundAgy = true
-				if c.Spare != nil || !c.Eligible {
-					t.Fatalf("未绑定 provider 摘要不能作调度额度：%+v", c)
-				}
-			case c.ID == "trae":
-				foundTrae = true
-				if c.Eligible || c.Spare != nil || !strings.Contains(strings.Join(c.Refusals, "；"), "auto=false") {
-					t.Fatalf("无读数的 trae 不应参与自动挑人：%+v", c)
-				}
+			if c.ID != "dsh+run" {
+				continue
+			}
+			found = true
+			if c.Spare != nil {
+				t.Fatalf("未绑定 provider 的缓存摘要不能作调度额度：%+v", c)
+			}
+			if c.Eligible || !strings.Contains(strings.Join(c.Refusals, "；"), "auto=false") {
+				t.Fatalf("auto=false 的组合不该被自动挑中：%+v", c)
 			}
 		}
-		if !foundAgy || !foundTrae {
+		if !found {
 			t.Fatalf("缺执行者：%+v", v)
 		}
-
 	}
 }

@@ -94,7 +94,7 @@ func TestCmdErrorInSkillHistory(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			e.start(task.ID, "claude+opus")
+			e.start(task.ID, "dsh+opus")
 			if err := ledger.Record(e.ctx, e.db, task.ID, gates.KindWorktree, "dispatch", `{"host":"h1","dir":"`+filepath.ToSlash(dir)+`"}`); err != nil {
 				t.Fatal(err)
 			}

@@ -100,7 +100,7 @@ func TestGateWhere(t *testing.T) {
 				nt.Repo = "o/r"
 			}
 			task, _ := ledger.Add(e.ctx, e.db, nt, "u1")
-			e.start(task.ID, "claude+opus")
+			e.start(task.ID, "dsh+opus")
 			dir := filepath.Join(base, "tasks", task.ID, "work")
 			if c.repo {
 				dir = filepath.Join(base, "repos", "o-r-"+task.ID)
@@ -145,7 +145,7 @@ func TestGateWhere(t *testing.T) {
 func TestGateBadWorktree(t *testing.T) {
 	e := setup(t)
 	task, _ := ledger.Add(e.ctx, e.db, ledger.NewTask{Title: "活"}, "u1")
-	e.start(task.ID, "claude+opus")
+	e.start(task.ID, "dsh+opus")
 	ledger.Record(e.ctx, e.db, task.ID, gates.KindWorktree, "dispatch", `{"dir":"/x"}`)
 	e.exit(task.ID)
 	e.sweep()
@@ -180,7 +180,7 @@ func TestGateAwayThenCheck(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	e.start(task.ID, "claude+opus")
+	e.start(task.ID, "dsh+opus")
 	repoDir := filepath.Join(dir, "repos", "o-r-"+task.ID)
 	if err := os.MkdirAll(filepath.Dir(repoDir), 0o700); err != nil {
 		t.Fatal(err)

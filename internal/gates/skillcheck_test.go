@@ -70,7 +70,7 @@ func TestGateSkillChecks(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		e.start(task.ID, "claude+opus")
+		e.start(task.ID, "dsh+opus")
 		ledger.Record(e.ctx, e.db, task.ID, gates.KindWorktree, "dispatch", `{"host":"`+host+`","dir":"`+filepath.ToSlash(place)+`"}`)
 		return e.exit(task.ID)
 	}

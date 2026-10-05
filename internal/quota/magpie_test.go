@@ -186,11 +186,11 @@ func TestViaMagpie(t *testing.T) {
 
 // magpie 只在配了地址时读；读数照常经 Record 存下，供派活感知使用。
 func TestMagpieLocalAndStore(t *testing.T) {
-	if l := NewLocal(Deps{Now: time.Now}); len(l.accounts) != len(Builtin) {
+	if l := NewLocal(Deps{Now: time.Now}); len(l.accounts) != 0 {
 		t.Fatal("没配地址不读 magpie", l.accounts)
 	}
-	if l := NewLocal(LocalDeps("linux", t.TempDir(), map[string]string{})); l.accounts[len(l.accounts)-1] != MagpieAccount || len(Builtin) != 3 {
-		t.Fatal("LocalDeps 应读 magpie，且不改 Builtin", l.accounts, Builtin)
+	if l := NewLocal(LocalDeps("linux", t.TempDir(), map[string]string{})); len(l.accounts) != 1 || l.accounts[0] != MagpieAccount {
+		t.Fatal("LocalDeps 应读 magpie", l.accounts)
 	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte(magpieSample)) }))
 	defer srv.Close()

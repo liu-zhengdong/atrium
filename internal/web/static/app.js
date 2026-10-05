@@ -292,7 +292,7 @@ function renderLegion(d) {
   const catalog = d.workers.filter(p => !p.problem), extra = d.workers.filter(p => p.problem);
   const combos = comboRows(catalog, d.window) + (extra.length ? `<details class="combo-extra"><summary>${icon.chev}不在目录里 ${extra.length} 个</summary>${comboRows(extra, d.window)}</details>` : "");
   $("#page").innerHTML = `<h1 class="hello">执行者</h1>
-  <p class="pulse-line">分派任务按额度富余自动避让；各套餐余量在 OpenQuota 面板和 magpie 图形界面看。</p>
+  <p class="pulse-line">分派任务只在你配的组合里挑（写过组合档案就封闭，一条都没有才按各工具）；按额度富余自动避让；各套餐余量在 OpenQuota 面板和 magpie 图形界面看。</p>
   <section class="section"><h2>机器</h2>${hosts}</section>
   <section class="section"><h2>组合</h2>${combos}</section>`;
 }

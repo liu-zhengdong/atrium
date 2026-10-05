@@ -29,10 +29,10 @@ func TestTaskAcceptanceDelivery(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				e.start(task.ID, "claude+opus")
+				e.start(task.ID, "dsh+opus")
 				task = e.exit(task.ID)
 			} else {
-				task = e.inDept("", repo, "claude+opus", dir)
+				task = e.inDept("", repo, "dsh+opus", dir)
 			}
 			if _, err := ledger.Decide(e.ctx, e.db, task.ID, "hold", "目标未完成，阶段待验收", "u1"); err != nil {
 				t.Fatal(err)

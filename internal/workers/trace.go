@@ -33,9 +33,8 @@ type Trace struct {
 	Ended    bool      `json:"ended"`            // 走到了收尾
 	Result   string    `json:"result,omitempty"` // 收尾总结全文
 	Ms       int64     `json:"ms,omitempty"`     // 用时（工具报了才有）
-	Model    string    `json:"model,omitempty"`  // 这次实际用的模型（工具在开头报了才有：claude、cursor、agy）
-	// Error 是执行者在自己的消息里报的最后一条错、之后没有正常回复盖过它（pi 的 stopReason=error）。
-	// 读整份日志才拿得到：pi 收尾的 agent_end 一行带整场对话，报错那行常被挤出 Tail 的尾巴。
+	Model    string    `json:"model,omitempty"`  // 这次实际用的模型（工具在开头报了才有）
+	// Error 是执行者在自己的消息里报的最后一条错、之后没有正常回复盖过它。
 	Error   string   `json:"error,omitempty"`
 	Lines   []string `json:"lines,omitempty"`   // 其他输出原文（最后 rawLines 行）：非事件行、报错事件、没认出的事件；解析不了的工具全在这里
 	Unknown int      `json:"unknown,omitempty"` // 没认出的事件行数：非零说明工具的日志格式变了，解析要跟上
@@ -77,13 +76,12 @@ type Parser struct {
 	t        Trace
 	open     map[string][2]int // 还没结果的工具调用 → 段、命令下标
 	lastSay  string
-	dir      string            // 工作目录（工具在开头报了才有）：步骤里的路径去掉这个前缀
-	pending  map[string]string // 按片段送来、还没说完的话（agy）
+	dir      string // 工作目录（工具在开头报了才有）：步骤里的路径去掉这个前缀
 	hasUsage bool
 }
 
 func NewParser(worker string) *Parser {
-	return &Parser{read: readerOf(worker), open: map[string][2]int{}, pending: map[string]string{}}
+	return &Parser{read: readerOf(worker), open: map[string][2]int{}}
 }
 
 // Feed 读一段完整的行。
@@ -114,7 +112,7 @@ func (p *Parser) Line(line string) {
 	}
 }
 
-// Trace 是到目前为止的经过。收尾总结与最后一段话同文（claude 的 result 重复最后一条回复）时，那段并进结果。
+// Trace 是到目前为止的经过。收尾总结与最后一段话同文时，那段并进结果。
 func (p *Parser) Trace() Trace {
 	t := p.t
 	if t.Segments == nil {
@@ -250,56 +248,6 @@ func CmdState(cmd string, code int) string {
 		return CmdNone
 	}
 	return CmdErr
-}
-
-var shellRE = regexp.MustCompile(`(?s)^(?:\S*/)?(?:ba|z)?sh -l?c (.+)$`)
-
-// unwrapShell 去掉 codex 给命令包的「bash -lc '…'」，留命令原文；引号拆不干净就原样返回。
-func unwrapShell(cmd string) string {
-	m := shellRE.FindStringSubmatch(cmd)
-	if m == nil || len(m[1]) < 2 {
-		return cmd
-	}
-	a, q := m[1], m[1][0]
-	if (q != '\'' && q != '"') || a[len(a)-1] != q {
-		return cmd
-	}
-	in := a[1 : len(a)-1]
-	if q == '\'' {
-		out := strings.ReplaceAll(in, `'\''`, "'")
-		if strings.Contains(strings.ReplaceAll(in, `'\''`, ""), "'") {
-			return cmd
-		}
-		return out
-	}
-	var b strings.Builder
-	for i := 0; i < len(in); i++ {
-		switch c := in[i]; {
-		case c == '\\' && i+1 < len(in) && strings.IndexByte("\"\\$`", in[i+1]) >= 0:
-			i++
-			b.WriteByte(in[i])
-		case c == '"':
-			return cmd
-		default:
-			b.WriteByte(c)
-		}
-	}
-	return b.String()
-}
-
-// toolText 取工具结果的文字：字符串，或文字块数组。
-func toolText(v any) string {
-	if s, ok := v.(string); ok {
-		return s
-	}
-	list, _ := v.([]any)
-	var parts []string
-	for _, x := range list {
-		if m := event(asMap(x)); m.str("type") == "text" {
-			parts = append(parts, m.str("text"))
-		}
-	}
-	return strings.Join(parts, "\n")
 }
 
 func tailLines(s string, n int) string {

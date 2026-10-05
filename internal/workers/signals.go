@@ -108,42 +108,26 @@ var (
 		re     *regexp.Regexp
 		reason string
 	}{
-		// 登录失效也算：claude 的 OAuth 过期、被吊销报「Failed to authenticate」，不一定带「请重新登录」；
-		// dsh 的默认 provider（DeepSeek）key 失效报「Authentication Fails, Your api key is invalid」。
+		// 登录失效也算：不一定带「请重新登录」；dsh 的默认 provider（DeepSeek）key 失效报
+		//「Authentication Fails, Your api key is invalid」。
 		{regexp.MustCompile(`(?i)\bnot (?:signed|logged) in\b|please (?:run /login|log ?in|sign ?in)\b|\blogin[_ ]required\b|\brequires? (?:a )?login\b|\bfailed to authenticate\b|\bauthentication fails?\b|\b(?:api[_ ]?key|token)\b[^\n]{0,20}\b(?:is )?(?:invalid|expired|incorrect)\b`), "没登录"},
 		// 工具或它依赖的解释器找不到：版本管理器没选版本、shell／Windows 找不到命令、shebang 的 env 找不到、拉起子进程 ENOENT
 		{regexp.MustCompile(`(?i)No active Node\.js version|\bcommand not found\b|^\S*sh: (?:\d+: )?\S+: not found$|不是内部或外部命令|is not recognized as an internal or external command|^env: \S+: No such file or directory|\bspawn \S+ ENOENT\b|executable file not found in`), "缺运行环境"},
-		// 服务端拒收旧版本：grok 的 426 Upgrade Required「Your Grok CLI version (1.0.5) is outdated」
+		// 服务端拒收旧版本（426 Upgrade Required 之类的自述式提示）
 		{regexp.MustCompile(`(?i)\bUpgrade Required\b|\bversion\b[^\n]{0,40}\bis outdated\b|please update to version`), "工具版本过旧"},
 	}
-	modelNameRE  = regexp.MustCompile(`(?i)issue with the selected model|\bmodel\b[^\n]{0,40}\b(?:not found|does not exist|is not supported)|\b(?:unknown|invalid|unsupported) model\b|ModelNotFound`)
-	retryHintRE  = regexp.MustCompile(`(?i)retry-after|try again in|resets? \d`)
-	rateStatusRE = regexp.MustCompile(`(?i)^(rejected|blocked|limited|rate_limited|exceeded|denied)$`)
-	http429RE    = regexp.MustCompile(`(?:^|[^\d.])429(?:[^\d]|$)`)
-	minutesRE    = regexp.MustCompile(`(?i)try again in ~?\s*(\d+)\s*min`)
-	retryRE      = regexp.MustCompile(`(?i)retry-after:\s*(\d+)`)
-	resetsInRE   = regexp.MustCompile(`(?i)resets? in\s+((?:\d+\s*[hms]\s*)+)`)
-	resetsRE     = regexp.MustCompile(`(?i)resets\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\s*(?:\(([^()]{2,64})\))?`)
-	// codex 402 的绝对日期：「try again at Oct 10th, 2026 9:14 AM」（月份在前，可带序数后缀）；报文没写时区，按本机时区。
-	resetDateRE = regexp.MustCompile(`(?i)(?:try again at|will reset at|resets? at)\s+([A-Za-z]{3,9})\.?\s+(\d{1,2})(?:st|nd|rd|th)?[\s,]+(\d{4})\s+(\d{1,2}):(\d{2})\s*(am|pm)?`)
-	// kimi 403 的窗口声明：「reached your 5-hour usage limit … 5-hour window ends」——报文自带窗口长，恢复按窗口算（最晚不早于真实恢复）。
-	hoursWindowRE = regexp.MustCompile(`(?i)\b(\d{1,2})[-_ ]?hour (?:usage )?(?:limit|window)`)
+	modelNameRE = regexp.MustCompile(`(?i)issue with the selected model|\bmodel\b[^\n]{0,40}\b(?:not found|does not exist|is not supported)|\b(?:unknown|invalid|unsupported) model\b|ModelNotFound`)
+	retryHintRE = regexp.MustCompile(`(?i)retry-after|try again in|resets? \d`)
+	http429RE   = regexp.MustCompile(`(?:^|[^\d.])429(?:[^\d]|$)`)
+	minutesRE   = regexp.MustCompile(`(?i)try again in ~?\s*(\d+)\s*min`)
+	retryRE     = regexp.MustCompile(`(?i)retry-after:\s*(\d+)`)
+	resetsInRE  = regexp.MustCompile(`(?i)resets? in\s+((?:\d+\s*[hms]\s*)+)`)
+	resetsRE    = regexp.MustCompile(`(?i)resets\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\s*(?:\(([^()]{2,64})\))?`)
 )
 
-// monthNames 是报文里英文月名的归一（全名与三字母缩写）。
-var monthNames = map[string]time.Month{
-	"jan": time.January, "feb": time.February, "mar": time.March, "apr": time.April,
-	"may": time.May, "jun": time.June, "jul": time.July, "aug": time.August,
-	"sep": time.September, "oct": time.October, "nov": time.November, "dec": time.December,
-	"january": time.January, "february": time.February, "march": time.March, "april": time.April,
-	"june": time.June, "july": time.July, "august": time.August,
-	"september": time.September, "october": time.October, "november": time.November, "december": time.December,
-}
-
 // errorReport 是这一轮退出的报错（纯函数）：执行者用自己的出错事件报了错，就以最后一条出错事件为准——
-// 之后的非 JSON 行多是工具退出时的收尾噪音（如 codex 的 failed to record rollout items），不能盖掉它；
-// 没有出错事件时才取最后一段非 JSON 的报错行。不扫助手正文与工具内容；之后有一轮正常收尾的，更早的报错已被越过。
-// tail 要是整行（见 Tail），开头截断的半行不在里面。
+// 之后的非 JSON 行多是工具退出时的收尾噪音，不能盖掉它；没有出错事件时才取最后一段非 JSON 的报错行。
+// 不扫助手正文与工具内容；之后有一轮正常收尾的，更早的报错已被越过。tail 要是整行（见 Tail）。
 func errorReport(tail string) string {
 	reported, plain := "", ""
 	for _, line := range strings.Split(tail, "\n") {
@@ -158,15 +142,6 @@ func errorReport(tail string) string {
 		}
 		typ := e.str("type")
 		switch {
-		case typ == "result" && e["is_error"] == false, typ == "turn.completed":
-			reported, plain = "", ""
-		case e.str("event") == "result":
-			r := e.obj("result")
-			if r.str("status") == "SUCCESS" {
-				reported, plain = "", ""
-			} else if msg := r.str("error"); msg != "" {
-				reported = msg
-			}
 		case typ == "status" && e.str("phase") == "turn_end":
 			// dsh 的终稿（final）无论成败都写，成败在 turn_end 的 reason 里。
 			r := e.obj("reason")
@@ -175,11 +150,7 @@ func errorReport(tail string) string {
 			} else if msg := oneLine(r.str("kind") + " " + r.obj("error").str("code") + " " + r.obj("error").str("message")); msg != "" {
 				reported = msg
 			}
-		case typ == "rate_limit_event":
-			if s := e.obj("rate_limit_info").str("status"); rateStatusRE.MatchString(s) {
-				reported = "rate limit exceeded: " + s
-			}
-		case typ == "error" || typ == "turn.failed" || (typ == "result" && e["is_error"] == true):
+		case typ == "error":
 			if msg := eventError(e); msg != "" {
 				reported = msg
 			}
@@ -191,32 +162,12 @@ func errorReport(tail string) string {
 	return plain
 }
 
-// eventError 拼出一条出错事件里的报文；grok 的报文在 errors 字符串数组里。
-// claude 报错收尾的 subtype 常是 success，不是报文，不拼。
+// eventError 拼出一条出错事件里的报文。
 func eventError(e event) string {
 	var parts []string
-	for _, v := range asList(e["errors"]) {
-		if s, ok := v.(string); ok {
+	for _, k := range []string{"message", "error", "code"} {
+		if s := e.str(k); s != "" {
 			parts = append(parts, s)
-		}
-	}
-	for _, k := range []string{"error", "message", "result", "subtype"} {
-		switch v := e[k].(type) {
-		case string:
-			if k == "subtype" && v == "success" {
-				continue
-			}
-			parts = append(parts, v)
-		case map[string]any:
-			m := event(v)
-			for _, f := range []string{"name", "message", "type", "code"} {
-				if s := m.str(f); s != "" {
-					parts = append(parts, s)
-				}
-			}
-			if s := m.obj("data").str("message"); s != "" {
-				parts = append(parts, s)
-			}
 		}
 	}
 	return strings.Join(parts, ": ")
@@ -230,10 +181,10 @@ func oneLine(s string) string {
 	return s
 }
 
-// Classify 判执行者退出时的信号（纯函数）：先额度用尽，再思考耗尽，再起不来（没登录、缺运行环境、工具版本过旧）、模型名无效——这几种换人或等人才过得去，按报文认；
+// Classify 判执行者退出时的信号（纯函数）：先额度用尽，再起不来（没登录、缺运行环境、工具版本过旧）、模型名无效——这几种换人或等人才过得去，按报文认；
 // 其余出错退出不再按措辞分，按行为判：这一轮一步没做的算零步骤出错退出（见 idle），做过事的算临时错误、原地重试。
 // worker 是这一轮的执行者标识，数步骤要按它的工具解析日志。
-// 出错退出指退出码非 0 且日志最后不是正常收尾；继续跟进拿不到退出码（ExitUnknown）的，日志最后是报错收尾才算。退出码 0 只判思考耗尽（跑完了就进入交付检查）。
+// 出错退出指退出码非 0 且日志最后不是正常收尾；继续跟进拿不到退出码（ExitUnknown）的，日志最后是报错收尾才算。
 func Classify(exitCode int, worker string, log LogTail, now time.Time) Signal {
 	tail := log.Text
 	report := errorReport(tail)
@@ -241,9 +192,6 @@ func Classify(exitCode int, worker string, log LogTail, now time.Time) Signal {
 		if s, ok := quotaSignal(report, now); ok {
 			return s
 		}
-	}
-	if s, ok := thinkingExhausted(tail); ok {
-		return s
 	}
 	ended, ok := lastEnding(tail)
 	if failed := (ended && !ok) || (!ended && exitCode != ExitUnknown); exitCode == 0 || !failed {
@@ -283,7 +231,7 @@ func setupSignal(text string) (Signal, bool) {
 }
 
 // ReportedSignal 判执行者在自己消息里报、之后没被正常回复盖过的错（Trace.Error）（纯函数）：
-// 如 pi 撞了 429 仍以 agent_settled 收尾、退出码 0，Classify 只看退出码非 0 的报文，判不到。报文按 Classify 的同一套规则认，
+// 如撞了 429 仍以正常事件收尾、退出码 0，Classify 只看退出码非 0 的报文，判不到。报文按 Classify 的同一套规则认，
 // 认出额度用尽、起不来或模型名无效才给信号；它是明确的失败证据，不看这一轮有没有产出（产出扫描可能不完整）。
 func ReportedSignal(report string, now time.Time) (Signal, bool) {
 	if s, ok := quotaSignal(report, now); ok {
@@ -311,7 +259,7 @@ func quotaSignal(report string, now time.Time) (Signal, bool) {
 }
 
 // idle：这一轮一步没做——日志里没有一次工具调用，也没说一句话（按 Trace 的分段数）。
-// 工具不带解析（通用命令行）的数不出步骤，不算；日志比读到的尾巴长的（LogTail.Cut）由调用方排除。
+// 工具不带解析的数不出步骤，不算；日志比读到的尾巴长的（LogTail.Cut）由调用方排除。
 func idle(worker, tail string) bool {
 	if !Traceable(worker) {
 		return false
@@ -328,12 +276,6 @@ func lastEnding(tail string) (ended, ok bool) {
 		e := parseEvent(lines[i])
 		switch {
 		case e == nil:
-		case e.str("type") == "result":
-			return true, e["is_error"] == false
-		case e.str("event") == "result":
-			return true, e.obj("result").str("status") == "SUCCESS"
-		case e.str("type") == "turn.completed", e.str("type") == "turn.failed":
-			return true, e.str("type") == "turn.completed"
 		case e.str("type") == "status" && e.str("phase") == "turn_end":
 			// dsh：终稿（final）跟在后面，但成败看 reason。
 			return true, e.obj("reason").str("kind") == "completed"
@@ -365,32 +307,9 @@ func lastPlainLines(tail string, n int) string {
 	return strings.Join(keep, "\n")
 }
 
-// resetAt 从额度报文里取恢复时刻：codex 的绝对日期「try again at Oct 10th, 2026 9:14 AM」、
-// 「Try again in ~N min」、kimi 的 N 小时窗口、claude 的「resets 3:50pm (Zone)」、Retry-After 秒数。
+// resetAt 从额度报文里取恢复时刻：「Try again in ~N min」、相对时长、Retry-After 秒数、带钟点的 resets。
 // 读不出返回 false：报文没写恢复时刻，标记按「恢复时间未知」处理，不按出错时长猜。
 func resetAt(text string, now time.Time) (time.Time, bool) {
-	if m := resetDateRE.FindStringSubmatch(text); m != nil {
-		mon, ok := monthNames[strings.ToLower(m[1])]
-		if !ok {
-			return time.Time{}, false
-		}
-		day, _ := strconv.Atoi(m[2])
-		year, _ := strconv.Atoi(m[3])
-		h, _ := strconv.Atoi(m[4])
-		min, _ := strconv.Atoi(m[5])
-		switch strings.ToLower(m[6]) {
-		case "pm":
-			if h != 12 {
-				h += 12
-			}
-		case "am":
-			if h == 12 {
-				h = 0
-			}
-		}
-		t := time.Date(year, mon, day, h, min, 0, 0, now.Location())
-		return t, h < 24 && min < 60 && t.Day() == day && t.After(now)
-	}
 	if m := minutesRE.FindStringSubmatch(text); m != nil {
 		n, _ := strconv.Atoi(m[1])
 		return now.Add(time.Duration(n) * time.Minute), n > 0
@@ -398,10 +317,6 @@ func resetAt(text string, now time.Time) (time.Time, bool) {
 	if m := resetsInRE.FindStringSubmatch(text); m != nil {
 		d, err := time.ParseDuration(strings.Join(strings.Fields(m[1]), ""))
 		return now.Add(d), err == nil && d > 0
-	}
-	if m := hoursWindowRE.FindStringSubmatch(text); m != nil {
-		n, _ := strconv.Atoi(m[1])
-		return now.Add(time.Duration(n) * time.Hour), n > 0
 	}
 	if m := resetsRE.FindStringSubmatch(text); m != nil && (m[2] != "" || m[3] != "") {
 		h, _ := strconv.Atoi(m[1])
@@ -436,32 +351,8 @@ func resetAt(text string, now time.Time) (time.Time, bool) {
 	return time.Time{}, false
 }
 
-// thinkingExhausted：opencode 最后一步因长度结束（step_finish reason=length），思考用了、正文为 0 或极少。
-// 其余工具的日志没有等价信号，不判。
-func thinkingExhausted(tail string) (Signal, bool) {
-	lines := strings.Split(tail, "\n")
-	for i := len(lines) - 1; i >= 0; i-- {
-		e := parseEvent(lines[i])
-		if e == nil || e.str("type") != "step_finish" {
-			continue
-		}
-		part := e.obj("part")
-		if part.str("reason") != "length" {
-			return Signal{}, false
-		}
-		tok := part.obj("tokens")
-		reasoning, _ := tok["reasoning"].(float64)
-		output, _ := tok["output"].(float64)
-		if reasoning > 0 && output <= 64 {
-			return Signal{Kind: SignalThinking, Reason: fmt.Sprintf("思考耗尽单次输出（思考 %.0f，正文 %.0f）", reasoning, output)}, true
-		}
-		return Signal{}, false
-	}
-	return Signal{}, false
-}
-
 // Ending 是正常退出后看日志判的结局（纯函数）：Known 为假表示日志判不了，按退出码算。
-// Line 是判出结局的那一行日志（收尾事件、命中 done_match／error_match 的行）；通用命令行没见到结束行的推断没有这一行。
+// Line 是判出结局的那一行日志（收尾事件）。
 type Ending struct {
 	Known  bool   `json:"known"`
 	OK     bool   `json:"ok"`
@@ -469,29 +360,8 @@ type Ending struct {
 	Line   string `json:"-"`
 }
 
-// Ended 按工具的日志结构判结局：stream-json 看最后的 result 事件（codex 看 turn.completed／turn.failed）；通用命令行按 done_match / error_match。
+// Ended 按工具的日志结构判结局：dsh 看最后的 turn_end 事件的 reason。
 func (a *Driver) Ended(tail string) Ending {
-	if a.cli != nil {
-		lines := strings.Split(strings.ReplaceAll(tail, "\r\n", "\n"), "\n") // Windows 原生工具的行尾是 CRLF
-		if a.cli.ErrorMatch != "" {
-			re := regexp.MustCompile(a.cli.ErrorMatch)
-			for i := len(lines) - 1; i >= 0; i-- {
-				if re.MatchString(lines[i]) {
-					return Ending{Known: true, Reason: "日志命中出错标记（error_match）：" + oneLine(lines[i]), Line: lines[i]}
-				}
-			}
-		}
-		if a.cli.DoneMatch != "" {
-			re := regexp.MustCompile(a.cli.DoneMatch)
-			for _, l := range lines {
-				if re.MatchString(l) {
-					return Ending{Known: true, OK: true, Line: l}
-				}
-			}
-			return Ending{Known: true, Reason: "日志里没见到结束标记（done_match），像是没做完就退出了"}
-		}
-		return Ending{}
-	}
 	if !a.JSON {
 		return Ending{}
 	}
@@ -509,33 +379,6 @@ func (a *Driver) Ended(tail string) Ending {
 func eventEnding(e event) (Ending, bool) {
 	switch {
 	case e == nil:
-	case e.str("type") == "result":
-		if e["is_error"] == true {
-			return Ending{Known: true, Reason: "执行者报错收尾：" + oneLine(e.str("result")+" "+e.str("subtype"))}, true
-		}
-		if e.str("stopReason") == "permission_denied" {
-			return Ending{Known: true, Reason: "工具权限被拒，没干成（permission_denied；--print 下要放行参数）"}, true
-		}
-		return Ending{Known: true, OK: true}, true
-	case e.str("event") == "result":
-		r := e.obj("result")
-		if r.str("status") == "SUCCESS" {
-			return Ending{Known: true, OK: true}, true
-		}
-		return Ending{Known: true, Reason: "执行者报错收尾：" + oneLine(r.str("status")+" "+r.str("error"))}, true
-	case e.str("type") == "turn.completed":
-		return Ending{Known: true, OK: true}, true
-	case e.str("type") == "turn.failed":
-		return Ending{Known: true, Reason: "执行者报错收尾：" + oneLine(e.obj("error").str("message"))}, true
-	case e.str("type") == "step_finish":
-		if r := e.obj("part").str("reason"); r == "length" {
-			return Ending{Known: true, Reason: "上下文或输出长度用尽"}, true
-		}
-		return Ending{Known: true, OK: true}, true
-	case e.str("type") == "agent_settled":
-		return Ending{Known: true, OK: true}, true
-	case e.str("type") == "auto_retry_end" && e["success"] == false:
-		return Ending{Known: true, Reason: "执行者重试耗尽：" + oneLine(e.str("finalError"))}, true
 	case e.str("type") == "status" && e.str("phase") == "turn_end":
 		// dsh：收尾原因在 reason 里（completed 之外是 aborted、error 等），差错报文在 reason.error。
 		r := e.obj("reason")
@@ -546,7 +389,3 @@ func eventEnding(e event) (Ending, bool) {
 	}
 	return Ending{}, false
 }
-
-func asMap(v any) map[string]any { m, _ := v.(map[string]any); return m }
-
-func asList(v any) []any { l, _ := v.([]any); return l }

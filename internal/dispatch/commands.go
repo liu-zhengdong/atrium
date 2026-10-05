@@ -120,7 +120,7 @@ func dryRun(q *api.Req, env *app.Env, id string, o Options) (RunResult, error) {
 func Commands(t *cli.Table) {
 	t.Add(cli.Command{Path: "task run", Args: "<tN>", Summary: "分派任务：进分派任务队列（依赖没完成的等完成后再派），自动挑执行者与机器拉起；--dry-run 只看候选与推荐理由",
 		Flags: []cli.Flag{
-			{Name: "worker", Value: "工具+模型[:强度]", Help: "写死执行者（缺省自动挑：档案能接、紧急／修复或 risk 高于 low 只挑 trust≥medium、额度富余、不正忙）。只写工具 = 跟随工具自带的最新模型（harness/<工具> 档案写了 model 就用它）；写了模型 = 固定"},
+			{Name: "worker", Value: "工具+模型[:强度]", Help: "写死执行者（缺省自动挑：写过组合档案就只在这些组合里挑，否则按各工具；再比档案能接、紧急／修复或 risk 高于 low 只挑 trust≥medium、额度富余、不正忙）。只写工具 = 跟随工具自带的最新模型（harness/<工具> 档案写了 model 就用它）；写了模型 = 固定"},
 			{Name: "tokens", Value: "数量", Help: "本轮任务明确的 token 需求（非负整数，0 为未知；仅已证实同池同窗 token 容量用于判断）"},
 			{Name: "risk", Value: "级别", Help: "low（缺省）/ medium / high：执行者档案 max_risk 要够；high 合入前另派审阅"},
 			{Name: "host", Value: "hN", Help: "写死机器（缺省本机优先、空位最多）"},

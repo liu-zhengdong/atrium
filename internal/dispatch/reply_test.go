@@ -18,15 +18,13 @@ import (
 )
 
 func TestExitRecordsCurrentReply(t *testing.T) {
-	piEnd := "{\"type\":\"message_end\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"缺陷\\n审阅结论：打回\"}]}}\n" +
-		"{\"type\":\"agent_end\",\"messages\":[{\"role\":\"user\",\"content\":\"" + strings.Repeat("x", 200*1024) + "\"}]}\n" +
-		"{\"type\":\"agent_settled\"}\n"
-	for _, c := range []struct{ name, tool, log, want string }{
-		{"Pi收尾大于日志尾巴", "pi", piEnd, "缺陷\n审阅结论：打回"},
-		{"Kimi正文", "kimi", "{\"role\":\"assistant\",\"content\":\"审阅结论：打回\"}\n{\"role\":\"meta\",\"type\":\"session.resume_hint\"}\n", "审阅结论：打回"},
-		{"Kimi空回复", "kimi", "{\"role\":\"tool\",\"content\":\"审阅结论：通过\"}\n", ""},
-		{"Codex正文", "codex", "{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"审阅结论：打回\"}}\n", "审阅结论：打回"},
-		{"Codex空回复", "codex", "{\"type\":\"turn.completed\"}\n", ""},
+	// 收尾那一段比日志尾巴还大：回复要从解析结果里取，不能只截日志尾巴。
+	big := `{"type":"tool_call","callId":"c1","tool":"bash","input":{"command":"ls"}}` + "\n" +
+		`{"type":"tool_result","callId":"c1","status":"completed","result":"` + strings.Repeat("x", 200*1024) + `"}`
+	for _, c := range []struct{ name, log, want string }{
+		{"dsh 收尾大于日志尾巴", big + "\n" + `{"type":"text","text":"缺陷\n审阅结论：打回"}` + "\n" +
+			`{"type":"final","text":"缺陷\n审阅结论：打回"}`, "缺陷\n审阅结论：打回"},
+		{"dsh 收尾是空的", `{"type":"final","text":""}`, ""},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			ctx := context.Background()
@@ -52,12 +50,12 @@ func TestExitRecordsCurrentReply(t *testing.T) {
 			if err := os.WriteFile(log, []byte(c.log), 0600); err != nil {
 				t.Fatal(err)
 			}
-			run := workers.Run{N: 2, Worker: c.tool, Dir: dir, Log: log}
+			run := workers.Run{N: 2, Worker: "dsh", Dir: dir, Log: log}
 			b, _ := json.Marshal(run)
 			if err := ledger.Record(ctx, db, task.ID, workers.RunKind, "dispatch", string(b)); err != nil {
 				t.Fatal(err)
 			}
-			adapter, _ := workers.Builtin(c.tool)
+			adapter, _ := workers.Builtin("dsh")
 			d := &dispatcher{env: &app.Env{DB: db, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}}
 			if err := d.exited(ctx, &proc{task: task.ID, run: run, adapter: adapter}, 0); err != nil {
 				t.Fatal(err)

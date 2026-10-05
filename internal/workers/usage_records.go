@@ -33,40 +33,7 @@ func RunUsage(ctx context.Context, q store.Querier, task string, run Run) (Usage
 		}
 		return Charge(ExtractUsage(string(raw), *w.Rules.Usage), w.Rules), nil
 	}
-	if w.Spec.Tool == "claude" && run.Why == WhyResume && t.Usage.Cost != nil {
-		if err := resumeCost(ctx, q, task, run, &t); err != nil {
-			return Usage{}, err
-		}
-	}
 	return Charge(t.Usage, w.Rules), nil
-}
-
-// 续接只扣同一会话前一次拉起的工具累计值；不修改历史退出记录。
-func resumeCost(ctx context.Context, q store.Querier, task string, run Run, t *Trace) error {
-	runs, err := Runs(ctx, q, task, 100)
-	if err != nil {
-		return err
-	}
-	for i := len(runs) - 1; i >= 0; i-- {
-		prev := runs[i]
-		if prev.N >= run.N {
-			continue
-		}
-		old, err := ReadTrace(prev.Worker, prev.Log)
-		if err != nil {
-			return err
-		}
-		if t.Session != "" && old.Session == t.Session && old.Usage.Cost != nil {
-			n := *t.Usage.Cost - *old.Usage.Cost
-			if n > 0 {
-				t.Usage.Cost = &n
-				return nil
-			}
-		}
-		break
-	}
-	t.Usage.Cost, t.Usage.Currency, t.Usage.Source = nil, "", ""
-	return nil
 }
 
 // ExitUsage 读取对应轮号的已保存结果；不自动回填历史（要补算用 Recount）。

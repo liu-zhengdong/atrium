@@ -44,35 +44,10 @@ func run(ctx context.Context, path string, args []string, env map[string]string,
 	return out.Bytes(), 0, err
 }
 
-// keychain 读 macOS 钥匙串（/usr/bin/security，Claude Code 自己也这样写，读时不弹授权框）；别的平台没有钥匙串。
-func keychain(goos string, env map[string]string) func(service, account string) (string, error) {
-	return func(service, account string) (string, error) {
-		if goos != "darwin" {
-			return "", nil
-		}
-		args := []string{"find-generic-password", "-s", service}
-		if account != "" {
-			args = append(args, "-a", account)
-		}
-		args = append(args, "-w")
-		out, code, err := run(context.Background(), "/usr/bin/security", args,
-			map[string]string{"PATH": env["PATH"], "HOME": env["HOME"], "USER": env["USER"]}, 5*time.Second)
-		switch {
-		case err != nil:
-			return "", errors.New("钥匙串读取失败")
-		case code == 44: // 没有这一项
-			return "", nil
-		case code != 0:
-			return "", errors.New("钥匙串读取失败")
-		}
-		return strings.TrimSpace(string(out)), nil
-	}
-}
-
 // OpenquotaBin 是 OpenQuota 命令行的缺省位置；ATRIUM_OPENQUOTA_BIN 可覆盖，否则再按 PATH 找 openquota。
 const OpenquotaBin = "/Applications/OpenQuota.app/Contents/MacOS/openquota"
 
-// Pace 是 `openquota pace --json` 的一行（过渡期保留读取和存储）。
+// Pace 是 `openquota pace --json` 的一行。
 type Pace struct {
 	SourceFacts
 	Account       string   `json:"providerId"`

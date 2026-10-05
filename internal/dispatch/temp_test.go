@@ -2,7 +2,6 @@ package dispatch
 
 import (
 	"context"
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -10,7 +9,6 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/app"
 	"github.com/liu-zhengdong/atrium/internal/gates"
 	"github.com/liu-zhengdong/atrium/internal/ledger"
-	"github.com/liu-zhengdong/atrium/internal/workers"
 )
 
 // 隔离 SQLite 与实际假执行者进程，临时文件由子进程按 TMPDIR 写入。
@@ -29,26 +27,18 @@ func TestTaskTempLifecycle(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				exe, err := os.Executable()
-				if err != nil {
-					t.Fatal(err)
-				}
-				t.Setenv("PATH", filepath.Dir(exe)+string(os.PathListSeparator)+os.Getenv("PATH"))
-				quoted, _ := json.Marshal(filepath.Base(exe))
-				mode := "--reclaim-fake-worker"
+				fakeDshOnPath(t)
+				mode := "reclaim"
 				if ending == ledger.Cancelled {
-					mode = "--reclaim-wait-worker"
+					mode = "reclaim-wait"
 				}
-				source := "---\nprotocol: cli\ncommand: " + string(quoted) + "\nargs: [\"" + mode + "\", \"{prompt}\"]\ndone_match: '^DONE$'\n---\n"
-				if _, err := workers.SaveProfile(ctx, d.env.DB, "harness/reclaimfake", workers.Edit{Source: &source}, "u1"); err != nil {
-					t.Fatal(err)
-				}
+				id := fakeCombo(t, ctx, d.env.DB, mode, "")
 				oldPick := pickHost
 				pickHost = func(context.Context, *app.Env, HostNeed, string) (HostChoice, error) {
 					return HostChoice{Kind: "run", Host: LocalHost}, nil
 				}
 				t.Cleanup(func() { pickHost = oldPick })
-				if _, err := Enqueue(ctx, d.env, tk.ID, Options{Worker: "reclaimfake"}, "u1"); err != nil {
+				if _, err := Enqueue(ctx, d.env, tk.ID, Options{Worker: id}, "u1"); err != nil {
 					t.Fatal(err)
 				}
 				stop := runReclaimLoop(t, d, ctx)

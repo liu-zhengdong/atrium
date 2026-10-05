@@ -2,12 +2,10 @@ package dispatch
 
 import (
 	"context"
-	"fmt"
 	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
-	"runtime"
 	"testing"
 	"time"
 
@@ -19,10 +17,8 @@ import (
 	"github.com/liu-zhengdong/atrium/internal/workers"
 )
 
-// 子进程也是测试二进制，只运行这个假执行者，不调用任何模型或本机登录。
-func TestLoopWorkerHelper(t *testing.T) { fmt.Println("loop-fake-done") }
-
 func TestLoopBadRecordsStillDispatches(t *testing.T) {
+	nonIsolated(t)
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
 	t.Setenv("USERPROFILE", dir)
@@ -35,32 +31,10 @@ func TestLoopBadRecordsStillDispatches(t *testing.T) {
 	if err := os.WriteFile(env.Paths.Token(), []byte("test-token"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	exe, err := os.Executable()
-	if err != nil {
-		t.Fatal(err)
-	}
-	bin := filepath.Join(dir, "bin")
-	if err := os.MkdirAll(bin, 0700); err != nil {
-		t.Fatal(err)
-	}
-	name := "loopfake"
-	if runtime.GOOS == "windows" {
-		name += ".exe"
-	}
-	content, err := os.ReadFile(exe)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(bin, name), content, 0700); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
-	source := "---\nprotocol: cli\ncommand: loopfake\nargs: ['-test.run=^TestLoopWorkerHelper$']\ndone_match: loop-fake-done\n---\n"
+	fakeDshOnPath(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if _, err := workers.SaveProfile(ctx, db, "harness/loopfake", workers.Edit{Source: &source}, "u1"); err != nil {
-		t.Fatal(err)
-	}
+	id := fakeCombo(t, ctx, db, "loop", "")
 	oldPick := pickHost
 	defer func() { pickHost = oldPick }()
 	pickHost = func(context.Context, *app.Env, HostNeed, string) (HostChoice, error) {
@@ -72,7 +46,7 @@ func TestLoopBadRecordsStillDispatches(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		opts := Options{Worker: "loopfake"}
+		opts := Options{Worker: id}
 		if name == "good" {
 			opts.Worker = ""
 		} // 自动挑人也不能被别件的坏统计挡住

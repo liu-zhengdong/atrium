@@ -15,8 +15,7 @@ func TestTracePrinter(t *testing.T) {
 		has         []string
 		once        string // 最后一句与结果同文，只出现一次
 	}{
-		{"claude", "claude-t308.jsonl", []string{"\n先看代码\n  ✓ ls internal/platform internal/hosts && grep", "\n开始改代码：", "\n== 结果（用时 5 分钟）\n两处都修好了"}, "两处都修好了"},
-		{"cursor", "cursor-t347.jsonl", []string{"\n先读动画技能和相关文件。\n  ✓ read /Users/", "  ✓ edit src/openquota/data.ts\n", "  ✗ cd ", "\n== 结果（用时 13 分钟）\nOpenQuota 宣传片做完了"}, "OpenQuota 宣传片做完了"},
+		{"dsh", "dsh-sample.jsonl", []string{"printf hi", "hi", "输出原样如下"}, "输出原样如下"},
 	}
 	for _, c := range cases {
 		raw, err := os.ReadFile("../workers/testdata/" + c.log)
@@ -50,8 +49,8 @@ func TestTracePrinter(t *testing.T) {
 
 // 带解析的工具日志里有没认出的事件：文本里写明几行，原文跟在后面。
 func TestTracePrinterUnknown(t *testing.T) {
-	p := workers.NewParser("codex")
-	p.Feed(`{"type":"item.completed","item":{"id":"a","type":"agent_message","text":"好"}}` + "\n" + `{"type":"brand.new"}`)
+	p := workers.NewParser("dsh")
+	p.Feed(`{"type":"text","text":"好"}` + "\n" + `{"type":"brand.new"}`)
 	got := (&tracePrinter{}).next(p.Trace(), true)
 	if !strings.Contains(got, "== 有 1 行事件没认出（工具的日志格式可能变了），原文在下面\n\n== 其他输出\n{\"type\":\"brand.new\"}") {
 		t.Errorf("%s", got)

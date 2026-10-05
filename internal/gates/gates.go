@@ -495,7 +495,13 @@ func (g *Gate) startReview(ctx context.Context, t ledger.Task) error {
 			authors = append(authors, run.Worker)
 		}
 	}
-	if err := record(ctx, g.DB, t.ID, KindRequire, Requirement{NotTool: author.Tool, NotModel: author.Model, MinTrust: "medium", NotWorkers: authors}); err != nil {
+	// 收线到一个工具后「换个工具审」无从谈起：这时只要求换个模型审（NotModel 照记），
+	// 否则任何任务都找不到审阅者、高风险与低信任的任务会永远卡在审阅。
+	notTool := author.Tool
+	if len(workers.Tools) < 2 {
+		notTool = ""
+	}
+	if err := record(ctx, g.DB, t.ID, KindRequire, Requirement{NotTool: notTool, NotModel: author.Model, MinTrust: "medium", NotWorkers: authors}); err != nil {
 		return err
 	}
 	return g.askReview(ctx, t, "")

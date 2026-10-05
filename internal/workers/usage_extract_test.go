@@ -21,21 +21,17 @@ func traeUsageSpec() UsageSpec {
 }
 
 func TestExtractUsageMeasuredLogs(t *testing.T) {
-	b, err := os.ReadFile("testdata/cli-trae-m92.ndjson")
-	if err != nil {
-		t.Fatal(err)
-	}
-	u := ExtractUsage(string(b), traeUsageSpec())
+	// 只报总花费、没有 token 的日志：total_cost_usd 为 0 不记花费。
+	b := `{"type":"result","subtype":"success","is_error":false,"num_turns":4,"duration_ms":13867,"total_cost_usd":0}`
+	u := ExtractUsage(b, traeUsageSpec())
 	if u.Input != nil || u.Output != nil || u.CacheRead != nil || u.CacheWrite != nil || u.Cost != nil {
-		t.Fatalf("m92 摘录没有 token，total_cost_usd 为 0 不应记花费：%+v", u)
+		t.Fatalf("没有 token，total_cost_usd 为 0 不应记花费：%+v", u)
 	}
-	b, err = os.ReadFile("testdata/kimi-t649-stdout.jsonl")
-	if err != nil {
-		t.Fatal(err)
-	}
-	u = ExtractUsage(string(b), UsageSpec{Input: "usage.input_tokens", Output: "usage.output_tokens", Cost: "total_cost_usd", Currency: "USD"})
+	// 只有一轮闲聊、没有用量字段的日志：什么都不记。
+	b = "{\"role\":\"assistant\",\"content\":\"OK\"}\n{\"role\":\"meta\",\"type\":\"session.resume_hint\",\"session_id\":\"redacted\"}"
+	u = ExtractUsage(b, UsageSpec{Input: "usage.input_tokens", Output: "usage.output_tokens", Cost: "total_cost_usd", Currency: "USD"})
 	if u.Input != nil || u.Output != nil || u.Cost != nil {
-		t.Fatalf("kimi stdout 没有用量：%+v", u)
+		t.Fatalf("没有用量字段的日志不该记：%+v", u)
 	}
 }
 
@@ -77,28 +73,28 @@ func TestExtractUsageIgnoresBroken(t *testing.T) {
 }
 
 func TestUsageSpecProfile(t *testing.T) {
-	ok := "protocol: cli\ncommand: mytool\nargs: [\"{prompt}\"]\nusage: {event: result, input: usage.input_tokens, cost: total_cost_usd, currency: USD}"
+	ok := "model: zcode/GLM-5.3[1m]\nusage: {event: result, input: usage.input_tokens, cost: total_cost_usd, currency: USD}"
 	for _, c := range []struct {
 		src string
 		ok  bool
 		err string
 	}{
 		{ok, true, ""},
-		{"protocol: cli\ncommand: mytool\nargs: [\"{prompt}\"]\nusage: {input: usage.input_tokens}", true, ""},
-		{"protocol: cli\ncommand: mytool\nargs: [\"{prompt}\"]\nusage: {}", false, "至少写一个"},
-		{"protocol: cli\ncommand: mytool\nargs: [\"{prompt}\"]\nusage: {input: \"usage..tokens\"}", false, "点分字段路径"},
-		{"protocol: cli\ncommand: mytool\nargs: [\"{prompt}\"]\nusage: {event: \" result\"}", false, "事件 type"},
-		{"protocol: cli\ncommand: mytool\nargs: [\"{prompt}\"]\nusage: {cost: total_cost_usd}", false, "三位大写货币"},
-		{"protocol: cli\ncommand: mytool\nargs: [\"{prompt}\"]\nusage: {input: usage.input_tokens, currency: USD}", false, "只在写了 cost"},
-		{"protocol: cli\ncommand: mytool\nargs: [\"{prompt}\"]\nusage: {input: usage.input_tokens, extra: 1}", false, "规则写得不对"},
-		{"protocol: cli\ncommand: mytool\nargs: [\"{prompt}\"]\nusage: {input: a, cache_read: b, input_includes_cache_read: true}", true, ""},
-		{"protocol: cli\ncommand: mytool\nargs: [\"{prompt}\"]\nusage: {input: a, input_includes_cache_read: true}", false, "同时写 input 与 cache_read"},
+		{"model: zcode/GLM-5.3[1m]\nusage: {input: usage.input_tokens}", true, ""},
+		{"model: zcode/GLM-5.3[1m]\nusage: {}", false, "至少写一个"},
+		{"model: zcode/GLM-5.3[1m]\nusage: {input: \"usage..tokens\"}", false, "点分字段路径"},
+		{"model: zcode/GLM-5.3[1m]\nusage: {event: \" result\"}", false, "事件 type"},
+		{"model: zcode/GLM-5.3[1m]\nusage: {cost: total_cost_usd}", false, "三位大写货币"},
+		{"model: zcode/GLM-5.3[1m]\nusage: {input: usage.input_tokens, currency: USD}", false, "只在写了 cost"},
+		{"model: zcode/GLM-5.3[1m]\nusage: {input: usage.input_tokens, extra: 1}", false, "规则写得不对"},
+		{"model: zcode/GLM-5.3[1m]\nusage: {input: a, cache_read: b, input_includes_cache_read: true}", true, ""},
+		{"model: zcode/GLM-5.3[1m]\nusage: {input: a, input_includes_cache_read: true}", false, "同时写 input 与 cache_read"},
 	} {
 		keys, _, err := SplitSource("---\n" + c.src + "\n---\n")
 		if err != nil {
 			t.Fatal(err)
 		}
-		err = CheckProfile("harness/mytool", keys)
+		err = CheckProfile("harness/dsh", keys)
 		if c.ok {
 			if err != nil {
 				t.Fatalf("%s：应能用，得到 %v", c.src, err)
@@ -119,9 +115,7 @@ func TestRunUsageDeclared(t *testing.T) {
 	}
 	defer db.Close()
 	src := `---
-protocol: cli
-command: trae-cli
-args: ["{prompt}"]
+model: zcode/GLM-5.3[1m]
 usage:
   event: result
   input: usage.input_tokens
@@ -134,7 +128,7 @@ billing: metered
 prices: {currency: CNY, input: 6, output: 30, cache_read: 1.2}
 ---
 `
-	if _, err := SaveProfile(ctx, db, "harness/trae", Edit{Source: &src}, "u1"); err != nil {
+	if _, err := SaveProfile(ctx, db, "harness/dsh", Edit{Source: &src}, "u1"); err != nil {
 		t.Fatal(err)
 	}
 	log := filepath.Join(t.TempDir(), "run.log")
@@ -142,7 +136,7 @@ prices: {currency: CNY, input: 6, output: 30, cache_read: 1.2}
 	if err := os.WriteFile(log, []byte(line), 0600); err != nil {
 		t.Fatal(err)
 	}
-	u, err := RunUsage(ctx, db, "t1", Run{N: 1, Worker: "trae", Log: log})
+	u, err := RunUsage(ctx, db, "t1", Run{N: 1, Worker: "dsh", Log: log})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,25 +146,23 @@ prices: {currency: CNY, input: 6, output: 30, cache_read: 1.2}
 	if !strings.Contains(u.String(), "花费") || !strings.Contains(u.String(), "估算") {
 		t.Fatal(u.String())
 	}
-	m92, err := os.ReadFile("testdata/cli-trae-m92.ndjson")
-	if err != nil {
+	m92 := `{"type":"result","subtype":"success","result":"这行没有用量字段"}` + "\n"
+	if err := os.WriteFile(log, []byte(m92), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(log, m92, 0600); err != nil {
-		t.Fatal(err)
-	}
-	u, err = RunUsage(ctx, db, "t1", Run{N: 2, Worker: "trae", Log: log})
+	u, err = RunUsage(ctx, db, "t1", Run{N: 2, Worker: "dsh", Log: log})
 	if err != nil || u.Input != nil || u.Cost != nil || strings.Count(u.String(), "读不到") != 4 {
 		t.Fatalf("没有 token 不硬估：%+v %v", u, err)
 	}
-	plain := "---\nprotocol: cli\ncommand: mytool\nargs: [\"{prompt}\"]\n---\n"
-	if _, err := SaveProfile(ctx, db, "harness/mytool", Edit{Source: &plain}, "u1"); err != nil {
+	// 没写 usage 声明就走 dsh 的内置解析：别的工具的事件格式猜不出用量。
+	plain := "---\nmodel: zcode/GLM-5.3[1m]\n---\n"
+	if _, err := SaveProfile(ctx, db, "harness/dsh", Edit{Source: &plain}, "u1"); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(log, []byte(line), 0600); err != nil {
 		t.Fatal(err)
 	}
-	u, err = RunUsage(ctx, db, "t1", Run{N: 3, Worker: "mytool", Log: log})
+	u, err = RunUsage(ctx, db, "t1", Run{N: 3, Worker: "dsh", Log: log})
 	if err != nil || u.Input != nil || u.Cost != nil {
 		t.Fatalf("没写 usage 不从日志猜：%+v %v", u, err)
 	}

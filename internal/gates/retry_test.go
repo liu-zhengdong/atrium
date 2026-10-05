@@ -20,7 +20,7 @@ func TestGateTransientRetries(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "wt")
 	e.gh.Branch(dir, "t1-work", map[string]string{"a.go": "package a\n"})
 	e.gh.Open("t1-work", goodBody)
-	task := e.delivered("做事", "claude+opus", dir)
+	task := e.delivered("做事", "dsh+opus", dir)
 	old := e.g.R
 	e.g.R = fakegh.Flaky(e.gh, 1, "gh repo", "unexpected EOF")
 	e.sweep()

@@ -41,7 +41,7 @@ func (e *env) preparePR(draft bool) (ledger.Task, string) {
 	if err != nil {
 		e.t.Fatal(err)
 	}
-	e.start(task.ID, "claude+opus")
+	e.start(task.ID, "dsh+opus")
 	if err := ledger.Record(e.ctx, e.db, task.ID, gates.KindWorktree, "dispatch", `{"host":"h1","dir":"`+filepath.ToSlash(dir)+`"}`); err != nil {
 		e.t.Fatal(err)
 	}
@@ -162,7 +162,7 @@ func TestMergeEntryRechecks(t *testing.T) {
 		dir := filepath.Join(t.TempDir(), "wt")
 		e.gh.Branch(dir, "t1-work", map[string]string{"a.go": "package a\n"})
 		e.gh.Open("t1-work", goodBody)
-		task := e.inDept(o, "o/r", "claude+opus", dir)
+		task := e.inDept(o, "o/r", "dsh+opus", dir)
 		e.sweep()
 		if e.state(task.ID) != "running/accept" {
 			t.Fatalf("应先停在等验收：%s %s", e.state(task.ID), e.lastNote(task.ID))
@@ -193,7 +193,7 @@ func TestMergeEntryRechecks(t *testing.T) {
 		dir := filepath.Join(t.TempDir(), "wt")
 		e.gh.Branch(dir, "t1-work", map[string]string{"a.go": "package a\n"})
 		e.gh.Open("t1-work", goodBody)
-		task := e.inDept(o, "o/r", "claude+opus", dir)
+		task := e.inDept(o, "o/r", "dsh+opus", dir)
 		e.sweep()
 		if err := ledger.Record(e.ctx, e.db, task.ID, gates.KindResult, "dispatch", "发现没做完\n交付结论：没做成"); err != nil {
 			t.Fatal(err)

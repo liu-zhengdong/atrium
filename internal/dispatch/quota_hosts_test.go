@@ -23,7 +23,7 @@ func TestQuotaHostUnknownIdentitySelection(t *testing.T) {
 	}
 	defer db.Close()
 	env := &app.Env{DB: db, Paths: config.Paths{Data: dir}, Pause: &pause.Store{DB: db}}
-	info := hosts.Info{CLIs: map[string]hosts.CLI{"pi": {Installed: true}}}
+	info := hosts.Info{CLIs: map[string]hosts.CLI{"dsh": {Installed: true}}}
 	if err := hosts.EnsureLocal(ctx, db, info); err != nil {
 		t.Fatal(err)
 	}
@@ -41,20 +41,20 @@ func TestQuotaHostUnknownIdentitySelection(t *testing.T) {
 			used = 0
 			finger = "second"
 		}
-		if err := quota.Record(ctx, db, host, []quota.Reading{{Account: "opencode", OK: true, Plan: "Go", Finger: finger,
+		if err := quota.Record(ctx, db, host, []quota.Reading{{Account: quota.MagpieAccount, OK: true, Plan: "Go", Finger: finger,
 			ReadAt: store.Now(), Windows: []quota.Window{{ID: "month", Used: used}}}}); err != nil {
 			t.Fatal(err)
 		}
 	}
-	need := hosts.Need{Tool: "pi", Model: "opencode-go/a"}
+	need := hosts.Need{Tool: "dsh", Model: "deepseek-official/deepseek-v4"}
 	c, err := hosts.Pick(ctx, env, need, "")
 	if err != nil || c.Kind != "run" || c.Host != LocalHost {
 		t.Fatalf("未绑定额度不能凭缓存避开本机：%+v %v", c, err)
 	}
-	if err := workers.SetMark(ctx, db, workers.Mark{Tool: "pi", Model: "opencode-go/a", Host: LocalHost, Kind: workers.SignalQuota, Reason: "额度用尽", Since: store.Now(), Until: store.Now() + 10000}); err != nil {
+	if err := workers.SetMark(ctx, db, workers.Mark{Tool: "dsh", Model: "deepseek-official/deepseek-v4", Host: LocalHost, Kind: workers.SignalQuota, Reason: "额度用尽", Since: store.Now(), Until: store.Now() + 10000}); err != nil {
 		t.Fatal(err)
 	}
-	need.Model = "opencode-go/a"
+	need.Model = "deepseek-official/deepseek-v4"
 	c, err = hosts.Pick(ctx, env, need, LocalHost)
 	if err != nil || c.Kind != "queue" {
 		t.Fatalf("已失败组合在原机器不能再试，排队等恢复：%+v %v", c, err)

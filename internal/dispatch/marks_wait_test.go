@@ -92,14 +92,14 @@ func TestQueuedWaitsForMarkedWorker(t *testing.T) {
 	if n != 1 {
 		t.Errorf("同样的等待只记一条，得到 %d 条", n)
 	}
-	if _, err := workers.ClearMarks(ctx, env.DB, "claude"); err != nil {
+	if _, err := workers.ClearMarks(ctx, env.DB, "dsh"); err != nil {
 		t.Fatal(err)
 	}
 	if err := d.pump(ctx); err != nil {
 		t.Fatal(err)
 	}
 	waitFor(t, env, tk.ID, func(x ledger.Task) bool { return x.Stage == ledger.StageGate })
-	if run, _ := workers.LastRun(ctx, env.DB, tk.ID); run == nil || !strings.HasPrefix(run.Worker, "claude") || run.Why != workers.WhyFirst {
+	if run, _ := workers.LastRun(ctx, env.DB, tk.ID); run == nil || !strings.HasPrefix(run.Worker, "dsh") || run.Why != workers.WhyFirst {
 		t.Fatalf("标记解除后应派出：%+v", run)
 	}
 }
@@ -110,13 +110,13 @@ func TestPinnedWaitsForMark(t *testing.T) {
 	ctx := context.Background()
 	markAll(t, env.DB, "")
 	tk, _ := ledger.Add(ctx, env.DB, ledger.NewTask{Title: "续做"}, "u1")
-	if _, err := Enqueue(ctx, env, tk.ID, Options{Worker: "claude", Host: LocalHost}, "u1"); err != nil {
+	if _, err := Enqueue(ctx, env, tk.ID, Options{Worker: fakeOK, Host: LocalHost}, "u1"); err != nil {
 		t.Fatal(err)
 	}
 	if err := d.pump(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if got, _ := ledger.Get(ctx, env.DB, tk.ID); got.Status != ledger.Queued || !strings.Contains(lastEvent(t, env.DB, tk.ID, "waiting"), "claude+opus 不可用") {
+	if got, _ := ledger.Get(ctx, env.DB, tk.ID); got.Status != ledger.Queued || !strings.Contains(lastEvent(t, env.DB, tk.ID, "waiting"), "不可用") {
 		t.Fatalf("点名的执行者被标记挡着应排队等：%+v %q", got, lastEvent(t, env.DB, tk.ID, "waiting"))
 	}
 }
@@ -126,9 +126,17 @@ func TestPinnedWaitsForMark(t *testing.T) {
 func TestSwitchWaitsWhenAllMarked(t *testing.T) {
 	env, d := setup(t)
 	ctx := context.Background()
-	markAll(t, env.DB, "codex")
+	// 内置只剩 dsh 一个工具：写两份组合，把本来能接的那份用标记挡住，只留额度用尽的那份先跑。
+	saveCombo(t, env, "dsh+q", "fake/quota")
+	saveCombo(t, env, "dsh+o", "fake/ok")
+	now := store.Now()
+	m := workers.Mark{Tool: "dsh", Model: "o", Host: LocalHost, Kind: workers.SignalNoStart,
+		Reason: "零步骤出错退出", Since: now, Until: now + time.Hour.Milliseconds()}
+	if err := workers.SetMark(ctx, env.DB, m); err != nil {
+		t.Fatal(err)
+	}
 	tk, _ := ledger.Add(ctx, env.DB, ledger.NewTask{Title: "返工"}, "u1")
-	if _, err := Enqueue(ctx, env, tk.ID, Options{Worker: "codex"}, "u1"); err != nil {
+	if _, err := Enqueue(ctx, env, tk.ID, Options{Worker: fakeQuota}, "u1"); err != nil {
 		t.Fatal(err)
 	}
 	if err := d.pump(ctx); err != nil {
@@ -145,14 +153,14 @@ func TestSwitchWaitsWhenAllMarked(t *testing.T) {
 	got, _ := ledger.Get(ctx, env.DB, tk.ID)
 	items, err := queued(ctx, env.DB)
 	if err != nil || got.Status != ledger.Queued || len(items) != 1 || !items[0].Opts.Switch || len(items[0].Opts.Avoid) != 0 {
-		t.Fatalf("放回队列应接着这一轮数、额度用尽的 codex 不进 Avoid：%+v %+v %v", got, items, err)
+		t.Fatalf("放回队列应接着这一轮数、被标记挡着的 dsh 不进 Avoid：%+v %+v %v", got, items, err)
 	}
 	var n int
 	if err := env.DB.QueryRowContext(ctx, `SELECT count(*) FROM events WHERE task = ? AND kind = ? AND (body LIKE '%"to":"failed"%' OR body LIKE '%"to":"blocked"%')`,
 		tk.ID, events.TaskStatus).Scan(&n); err != nil || n != 0 {
 		t.Fatalf("放回队列是过程，不该发失败或受阻：%d %v", n, err)
 	}
-	if _, err := workers.ClearMarks(ctx, env.DB, "claude"); err != nil {
+	if _, err := workers.ClearMarks(ctx, env.DB, "dsh"); err != nil {
 		t.Fatal(err)
 	}
 	if err := d.pump(ctx); err != nil {
@@ -160,7 +168,7 @@ func TestSwitchWaitsWhenAllMarked(t *testing.T) {
 	}
 	waitFor(t, env, tk.ID, func(x ledger.Task) bool { return x.Stage == ledger.StageGate })
 	runs, _ := workers.Runs(ctx, env.DB, tk.ID, 10)
-	if len(runs) != 2 || !strings.HasPrefix(runs[1].Worker, "claude") || runs[1].Why != workers.WhySwitch {
+	if len(runs) != 2 || !strings.HasPrefix(runs[1].Worker, "dsh") || runs[1].Why != workers.WhySwitch {
 		t.Fatalf("恢复后应换人派出并记 switch：%+v", runs)
 	}
 }
@@ -170,7 +178,7 @@ func TestRequeueStartStuckSwitches(t *testing.T) {
 	env, _ := setup(t)
 	ctx := context.Background()
 	tk, _ := ledger.Add(ctx, env.DB, ledger.NewTask{Title: "合入前等 CI"}, "u1")
-	if _, err := Enqueue(ctx, env, tk.ID, Options{Worker: "kimi"}, "u1"); err != nil {
+	if _, err := Enqueue(ctx, env, tk.ID, Options{Worker: fakeOK}, "u1"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := ledger.Apply(ctx, env.DB, tk.ID, ledger.Event{Kind: ledger.Start}, actor, ""); err != nil {
@@ -178,26 +186,26 @@ func TestRequeueStartStuckSwitches(t *testing.T) {
 	}
 	log := filepath.Join(t.TempDir(), "run-1.log")
 	os.WriteFile(log, nil, 0o600)
-	raw, _ := json.Marshal(workers.Run{N: 1, Why: workers.WhyFirst, Worker: "kimi", Host: LocalHost, Risk: "low", Log: log, At: store.Now()})
+	raw, _ := json.Marshal(workers.Run{N: 1, Why: workers.WhyFirst, Worker: "dsh", Host: LocalHost, Risk: "low", Log: log, At: store.Now()})
 	if err := ledger.Record(ctx, env.DB, tk.ID, workers.RunKind, actor, string(raw)); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := ledger.Apply(ctx, env.DB, tk.ID, ledger.Event{Kind: ledger.ExitFail}, actor, "3 分钟没动"); err != nil {
 		t.Fatal(err)
 	}
-	if err := Requeue(ctx, env, tk.ID, watch.Why{Reason: "执行者在做（h1），3 分钟 没动", Worker: "kimi"}); err != nil {
+	if err := Requeue(ctx, env, tk.ID, watch.Why{Reason: "执行者在做（h1），3 分钟 没动", Worker: "dsh"}); err != nil {
 		t.Fatal(err)
 	}
 	items, err := queued(ctx, env.DB)
-	if err != nil || len(items) != 1 || items[0].Opts.Worker != "" || !slices.Equal(items[0].Opts.Avoid, []string{"kimi"}) || !items[0].Opts.Switch {
-		t.Fatalf("启动卡住应换人、避开 kimi：%+v %v", items, err)
+	if err != nil || len(items) != 1 || items[0].Opts.Worker != "" || !slices.Equal(items[0].Opts.Avoid, []string{"dsh"}) || !items[0].Opts.Switch {
+		t.Fatalf("启动卡住应换人、避开 dsh：%+v %v", items, err)
 	}
 }
 
 func TestAvoidOf(t *testing.T) {
-	tried := map[string]bool{"codex": true, "pi+opencode-go/a": true, "kimi": true}
-	marked := func(s workers.Spec) bool { return s.Tool == "codex" }
-	if got := avoidOf(tried, marked); !slices.Equal(got, []string{"kimi", "pi+opencode-go/a"}) {
+	tried := map[string]bool{"dsh+a": true, "dsh+b": true, "dsh+c": true}
+	marked := func(s workers.Spec) bool { return s.Model == "b" }
+	if got := avoidOf(tried, marked); !slices.Equal(got, []string{"dsh+a", "dsh+c"}) {
 		t.Fatalf("被标记的不避开、其余试过的避开：%v", got)
 	}
 }

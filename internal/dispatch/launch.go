@@ -126,7 +126,6 @@ func (d *dispatcher) launch(ctx context.Context, t ledger.Task, o launchOpts) er
 	}
 	req := o.W.Request(prompt, promptFile, dir)
 	req.Task, req.Session = t.ID, o.Session
-	req.Live = o.W.Adapter.Tell == workers.TellStdin && o.Session == "" && !remote
 	extra, err := secretEnv(ctx, d.env, t.Org, secrets)
 	if err != nil {
 		return err
@@ -144,7 +143,7 @@ func (d *dispatcher) launch(ctx context.Context, t ledger.Task, o launchOpts) er
 	}
 	run := workers.Run{Tokens: o.Tokens, N: n, Why: o.Why, Cause: o.Cause, Worker: o.W.ID, Host: o.Host, Dir: dir, Branch: branch,
 		Log: filepath.Join(td, fmt.Sprintf("run-%d.log", n)), Risk: o.Risk, Secrets: secrets, TellsUpto: upto, At: store.Now()}
-	p := &proc{binding: o.W.QuotaBinding, task: t.ID, adapter: o.W.Adapter, remote: remote, pending: map[string]bool{}, done: make(chan struct{})}
+	p := &proc{binding: o.W.QuotaBinding, task: t.ID, adapter: o.W.Adapter, remote: remote, done: make(chan struct{})}
 	var wait func() int
 	if remote {
 		clone := ""
@@ -165,19 +164,12 @@ func (d *dispatcher) launch(ctx context.Context, t ledger.Task, o launchOpts) er
 		run.PID, run.RemoteRun, run.Dir = pid, rr, rdir
 		wait = d.remoteWaiter(p, rr)
 	} else {
-		cmdWait, pid, stdin, err := startLocal(o.W.Spec.Tool, req, extra, conn{fmt.Sprintf("http://127.0.0.1:%d", d.env.Port), token}, run.Log, TempDir(data, t.ID), prompt, n)
+		cmdWait, pid, err := startLocal(o.W.Spec.Tool, req, extra, conn{fmt.Sprintf("http://127.0.0.1:%d", d.env.Port), token}, run.Log, TempDir(data, t.ID))
 		if err != nil {
 			return fmt.Errorf("本机执行者拉起失败：%w", err)
 		}
-		tool, log := o.W.Spec.Tool, run.Log
-		run.PID, p.stdin = pid, stdin
-		wait = func() int {
-			code := cmdWait()
-			if err := workers.AfterExit(tool, log, extra); err != nil {
-				d.env.Log.Error("执行者退出后补记用量失败", "task", t.ID, "err", err)
-			}
-			return code
-		}
+		run.PID = pid
+		wait = cmdWait
 	}
 	p.run = run
 	if err := d.record(ctx, t, run); err != nil {
@@ -194,20 +186,16 @@ type conn struct{ server, token string }
 
 // startLocal 在本机拉起：白名单环境（带 ATRIUM_WORKER=1）+ 工具要的变量 + 凭据 + 连回服务的地址与令牌；
 // 服务所在目录排进 PATH 最前（atrium 就是服务这个二进制）；日志直接写文件（服务重启不影响执行者）。
-func startLocal(tool string, req workers.Request, extra map[string]string, c conn, log, tempDir, prompt string, n int) (wait func() int, pid int, stdin *os.File, err error) {
-	req, err = workers.LocalTools(tool, req)
-	if err != nil {
-		return nil, 0, nil, err
-	}
+func startLocal(tool string, req workers.Request, extra map[string]string, c conn, log, tempDir string) (wait func() int, pid int, err error) {
 	l, err := workers.Build(tool, req)
 	if err != nil {
-		return nil, 0, nil, err
+		return nil, 0, err
 	}
 	if err := l.WriteFiles(); err != nil {
-		return nil, 0, nil, err
+		return nil, 0, err
 	}
 	if err := os.MkdirAll(tempDir, 0o700); err != nil {
-		return nil, 0, nil, err
+		return nil, 0, err
 	}
 	env := platform.WorkerEnv(runtime.GOOS, platform.EnvMap(os.Environ()), tempDir)
 	for k, v := range l.Env {
@@ -215,7 +203,7 @@ func startLocal(tool string, req workers.Request, extra map[string]string, c con
 	}
 	for k, v := range extra {
 		if _, taken := env[k]; taken {
-			return nil, 0, nil, api.Usage("凭据 %s 会盖掉执行者环境里已有的变量，换个名字", k)
+			return nil, 0, api.Usage("凭据 %s 会盖掉执行者环境里已有的变量，换个名字", k)
 		}
 		env[k] = v
 	}
@@ -224,33 +212,22 @@ func startLocal(tool string, req workers.Request, extra map[string]string, c con
 	platform.SelfOnPath(env)
 	exe, err := platform.LookPath(l.Exe, env)
 	if err != nil {
-		return nil, 0, nil, api.Conflict("没装 %s：%v", l.Exe, err)
+		return nil, 0, api.Conflict("没装 %s：%v", l.Exe, err)
 	}
 	logf, err := platform.OpenLog(log)
 	if err != nil {
-		return nil, 0, nil, err
+		return nil, 0, err
 	}
 	// 日志由本进程的拷贝 goroutine 经 redact 写入，退出回收时（wait 里）才关；不能 defer（拉起返回时进程还在跑）。
 	redact := platform.RedactLog(logf, env)
 	var in io.Reader
 	switch {
-	case l.Live:
-		r, w, err := os.Pipe()
-		if err != nil {
-			return nil, 0, nil, err
-		}
-		defer r.Close()
-		if _, err := w.Write(workers.UserLine(prompt, fmt.Sprintf("prompt-%d", n))); err != nil {
-			w.Close()
-			return nil, 0, nil, err
-		}
-		in, stdin = r, w
 	case l.StdinData != "":
 		in = strings.NewReader(l.StdinData)
 	case l.StdinFile != "":
 		f, err := os.Open(l.StdinFile)
 		if err != nil {
-			return nil, 0, nil, err
+			return nil, 0, err
 		}
 		defer f.Close()
 		in = f
@@ -261,12 +238,9 @@ func startLocal(tool string, req workers.Request, extra map[string]string, c con
 	}
 	cmd, err := platform.Start(spec)
 	if err != nil {
-		if stdin != nil {
-			stdin.Close()
-		}
 		redact.Close()
 		logf.Close()
-		return nil, 0, nil, err
+		return nil, 0, err
 	}
 	return func() int {
 		defer logf.Close()
@@ -278,5 +252,5 @@ func startLocal(tool string, req workers.Request, extra map[string]string, c con
 			}
 		}
 		return cmd.ProcessState.ExitCode()
-	}, cmd.Process.Pid, stdin, nil
+	}, cmd.Process.Pid, nil
 }

@@ -89,16 +89,17 @@ func TestLeaderUsage(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	raw, err := os.ReadFile("testdata/pi-bash.jsonl")
+	raw, err := os.ReadFile("testdata/dsh-sample.jsonl")
 	if err != nil {
 		t.Fatal(err)
 	}
-	seg := "\n=== 2026-10-03T10:00:00+08:00 唤醒 a9（pi+opencode-go/glm-5.3-flash:high），事件 [1]\n" + string(raw)
-	model, u, err := LeaderUsage(context.Background(), db, "pi+opencode-go/glm-5.3-flash:high", seg)
+	seg := "\n=== 2026-10-03T10:00:00+08:00 唤醒 a9（dsh+deepseek/deepseek-v4:high），事件 [1]\n" + string(raw)
+	model, u, err := LeaderUsage(context.Background(), db, "dsh+deepseek/deepseek-v4:high", seg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if model != "opencode-go/glm-5.3-flash" || u.Tokens.Input == nil || *u.Tokens.Input != 51026 || u.Cost == nil {
+	// dsh 的日志不报模型（模型由拉起时的档案定），用量按 step_end 相加，日志里没有钱数。
+	if model != "" || u.Tokens.Input == nil || *u.Tokens.Input != 4605 || u.Cost != nil {
 		t.Fatalf("模型 %q 用量 %+v", model, u)
 	}
 	if _, _, err := LeaderUsage(context.Background(), db, "没这个工具+m", seg); err == nil {

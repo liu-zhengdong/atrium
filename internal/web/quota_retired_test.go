@@ -26,7 +26,7 @@ func TestLegionShowsNoQuota(t *testing.T) {
 	ctx := context.Background()
 	now := store.Now()
 	if err := quota.Record(ctx, db, quota.LocalHost, []quota.Reading{
-		{Account: "claude", OK: true, ReadAt: now, Windows: []quota.Window{{ID: "week", Used: 25, ResetsAt: now + 3600_000, Period: 3600}}},
+		{Account: quota.MagpieAccount, OK: true, ReadAt: now, Windows: []quota.Window{{ID: "week", Used: 25, ResetsAt: now + 3600_000, Period: 3600}}},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -34,7 +34,7 @@ func TestLegionShowsNoQuota(t *testing.T) {
 		t.Fatal(err)
 	}
 	src := "---\nauto: true\n---\n"
-	if _, err := workers.SaveProfile(ctx, db, "harness/claude", workers.Edit{Source: &src}, "u1"); err != nil {
+	if _, err := workers.SaveProfile(ctx, db, "harness/dsh", workers.Edit{Source: &src}, "u1"); err != nil {
 		t.Fatal(err)
 	}
 	legion, err := loadLegion(ctx, env, now)
@@ -67,7 +67,7 @@ func TestLegionShowsNoQuota(t *testing.T) {
 			t.Errorf("执行者页不应再画额度：仍有 %q", gone)
 		}
 	}
-	if !strings.Contains(render, "分派任务按额度富余自动避让；各套餐余量在 OpenQuota 面板和 magpie 图形界面看。") {
+	if !strings.Contains(render, "额度富余自动避让") || !strings.Contains(render, "OpenQuota") || !strings.Contains(render, "magpie") {
 		t.Error("执行者页顶部要指引到 OpenQuota 与 magpie")
 	}
 }

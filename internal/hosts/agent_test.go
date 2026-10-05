@@ -84,12 +84,12 @@ func TestMain(m *testing.M) {
 		time.Sleep(time.Minute)
 	case "probe": // 自检的假工具：按自己的文件名表现
 		switch strings.TrimSuffix(filepath.Base(os.Args[0]), ".exe") {
-		case "codex":
-			fmt.Println("codex-cli 9.9.9")
-		case "opencode":
+		case "dsh":
+			fmt.Println("dsh 9.9.9")
+		case "dshbad":
 			fmt.Fprintln(os.Stderr, "\n  No active Node.js version.\nRun nvm use\nline3\nline4")
 			os.Exit(1)
-		case "claude":
+		case "dshslow":
 			time.Sleep(time.Minute)
 		}
 		os.Exit(0)
@@ -472,21 +472,21 @@ func TestAgentRoutesAuth(t *testing.T) {
 	// 额度上报：按机器记进 quota_cache。
 	for _, auto := range []string{"false", "true"} {
 		src := "---\nauto: " + auto + "\n---\n"
-		if _, err := workers.SaveProfile(ctx, g.env.DB, "harness/claude", workers.Edit{Source: &src}, "u1"); err != nil {
+		if _, err := workers.SaveProfile(ctx, g.env.DB, "harness/dsh", workers.Edit{Source: &src}, "u1"); err != nil {
 			t.Fatal(err)
 		}
 		var reply struct {
 			Disabled map[string]bool `json:"disabled"`
 		}
-		if err := hostClient.Do(ctx, "POST", "/api/agent/quota", map[string]any{"readings": []quota.Reading{}}, &reply); err != nil || reply.Disabled["claude"] != (auto == "false") {
+		if err := hostClient.Do(ctx, "POST", "/api/agent/quota", map[string]any{"readings": []quota.Reading{}}, &reply); err != nil || reply.Disabled["dsh"] != (auto == "false") {
 			t.Fatalf("远程读取应跟随 auto=%s：%+v %v", auto, reply, err)
 		}
 	}
-	if err := hostClient.Do(ctx, "POST", "/api/agent/quota", map[string]any{"readings": []quota.Reading{{Account: "codex", OK: true, Finger: "f1", ReadAt: store.Now()}}}, nil); err != nil {
+	if err := hostClient.Do(ctx, "POST", "/api/agent/quota", map[string]any{"readings": []quota.Reading{{Account: quota.MagpieAccount, OK: true, Finger: "f1", ReadAt: store.Now()}}}, nil); err != nil {
 		t.Fatal(err)
 	}
 	var body string
-	if err := g.env.DB.QueryRow(`SELECT body FROM quota_cache WHERE account = ?`, a.Cfg.Host+":codex").Scan(&body); err != nil || !strings.Contains(body, `"host":"`+a.Cfg.Host+`"`) {
+	if err := g.env.DB.QueryRow(`SELECT body FROM quota_cache WHERE account = ?`, a.Cfg.Host+":"+quota.MagpieAccount).Scan(&body); err != nil || !strings.Contains(body, `"host":"`+a.Cfg.Host+`"`) {
 		t.Fatalf("%q %v", body, err)
 	}
 	// 用户接口：show、暂停后挑机器不选、本机不能移除。

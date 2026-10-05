@@ -168,9 +168,6 @@ func TestSourceCacheFailureIdentity(t *testing.T) {
 	}
 	d := Deps{Now: func() time.Time { return now.Add(time.Minute) }}
 	local := NewLocal(d)
-	for _, a := range Builtin {
-		local.next[a] = now.Add(time.Hour)
-	}
 	poll := poller{local: local, now: d.Now, oq: func(context.Context) ([]Pace, error) { return nil, errors.New("假B身份刷新失败") }}
 	if err := poll.round(ctx, db); err != nil {
 		t.Fatal(err)

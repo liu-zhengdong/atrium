@@ -9,6 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -39,7 +41,8 @@ func TestLeaderRefusal(t *testing.T) {
 	}
 }
 
-func TestLeaderPreferenceKeepsCodex(t *testing.T) {
+// 可用且点名的长期首选不能因为目录里还有免费档就被自动换掉。
+func TestLeaderPreferenceKeepsPreferred(t *testing.T) {
 	dir := t.TempDir()
 	db, err := store.Open(filepath.Join(dir, "a.db"))
 	if err != nil {
@@ -47,24 +50,26 @@ func TestLeaderPreferenceKeepsCodex(t *testing.T) {
 	}
 	defer db.Close()
 	ctx := context.Background()
-	for tool, price := range map[string]int{"codex": 2, "pi": 0} {
-		src := "---\ntrust: high\nmax_risk: high\nbilling: subscription\nprices: {currency: USD, input: 0, output: 0, cache_read: 0, cache_write: 0}\n---\n"
-		if price != 0 {
-			src = "---\ntrust: high\nmax_risk: high\nbilling: subscription\nprices: {currency: USD, input: 2, output: 2, cache_read: 2, cache_write: 2}\n---\n"
-		}
-		if _, err := SaveProfile(ctx, db, "harness/"+tool, Edit{Source: &src}, "test"); err != nil {
-			t.Fatal(err)
-		}
-		name := tool
-		if runtime.GOOS == "windows" {
-			name += ".exe"
-		}
-		if err := os.WriteFile(filepath.Join(dir, name), nil, 0700); err != nil {
+	for _, c := range []struct {
+		combo string
+		input int
+	}{{"dsh+aaa", 2}, {"dsh+bbb", 0}} {
+		src := "---\nmodel: fake/" + strings.TrimPrefix(c.combo, "dsh+") +
+			"\ntrust: high\nmax_risk: high\nbilling: subscription\nprices: {currency: USD, input: " +
+			strconv.Itoa(c.input) + ", output: " + strconv.Itoa(c.input) + ", cache_read: " + strconv.Itoa(c.input) + ", cache_write: " + strconv.Itoa(c.input) + "}\n---\n"
+		if _, err := SaveProfile(ctx, db, "combos/"+c.combo, Edit{Source: &src}, "test"); err != nil {
 			t.Fatal(err)
 		}
 	}
-	r, err := selectLeader(ctx, &app.Env{DB: db}, leaders.Launch{Profile: "codex:high", Attempt: &leaders.Attempt{Preferred: []string{"codex:high"}}, Env: map[string]string{platform.EnvKey(runtime.GOOS, "PATH"): dir, platform.EnvKey(runtime.GOOS, "PATHEXT"): ".EXE"}})
-	if err != nil || r.ID != "codex:high" {
-		t.Fatalf("可用长期首选不能因免费pi而自动换回：%s %v", r.ID, err)
+	name := "dsh"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	if err := os.WriteFile(filepath.Join(dir, name), nil, 0700); err != nil {
+		t.Fatal(err)
+	}
+	r, err := selectLeader(ctx, &app.Env{DB: db}, leaders.Launch{Profile: "dsh+aaa", Attempt: &leaders.Attempt{Preferred: []string{"dsh+aaa"}}, Env: map[string]string{platform.EnvKey(runtime.GOOS, "PATH"): dir, platform.EnvKey(runtime.GOOS, "PATHEXT"): ".EXE"}})
+	if err != nil || r.ID != "dsh+fake/aaa" {
+		t.Fatalf("可用长期首选不能因免费档而自动换掉：%s %v", r.ID, err)
 	}
 }

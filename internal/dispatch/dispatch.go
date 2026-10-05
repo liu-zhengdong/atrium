@@ -449,21 +449,11 @@ func (d *dispatcher) track(p *proc, wait func() int) {
 	d.mu.Lock()
 	d.procs[p.task] = p
 	d.mu.Unlock()
-	if p.stdin != nil {
-		go p.watchLive(func(uuid string) {
-			if id, ok := strings.CutPrefix(uuid, "tell-"); ok {
-				if err := ledger.Record(context.Background(), d.env.DB, p.task, "tell_sent", actor, id); err != nil {
-					d.env.Log.Error("记补充说明送达失败", "task", p.task, "err", err)
-				}
-			}
-		})
-	}
 	d.wg.Add(1)
 	go func() {
 		defer d.wg.Done()
 		code := wait()
 		close(p.done)
-		p.closeStdin()
 		d.mu.Lock()
 		if d.procs[p.task] == p {
 			delete(d.procs, p.task)
@@ -595,7 +585,7 @@ func (d *dispatcher) adopt(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("继续跟进 %s：%w", t.ID, err)
 		}
-		p := &proc{task: t.ID, run: *run, adapter: w.Adapter, remote: run.Host != LocalHost, pending: map[string]bool{}, done: make(chan struct{})}
+		p := &proc{task: t.ID, run: *run, adapter: w.Adapter, remote: run.Host != LocalHost, done: make(chan struct{})}
 		d.adoptProc(p)
 		return nil
 	})

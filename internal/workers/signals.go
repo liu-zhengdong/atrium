@@ -166,6 +166,14 @@ func errorReport(tail string) string {
 			} else if msg := r.str("error"); msg != "" {
 				reported = msg
 			}
+		case typ == "status" && e.str("phase") == "turn_end":
+			// dsh 的终稿（final）无论成败都写，成败在 turn_end 的 reason 里。
+			r := e.obj("reason")
+			if r.str("kind") == "completed" {
+				reported, plain = "", ""
+			} else if msg := oneLine(r.str("kind") + " " + r.obj("error").str("code") + " " + r.obj("error").str("message")); msg != "" {
+				reported = msg
+			}
 		case typ == "rate_limit_event":
 			if s := e.obj("rate_limit_info").str("status"); rateStatusRE.MatchString(s) {
 				reported = "rate limit exceeded: " + s
@@ -325,6 +333,9 @@ func lastEnding(tail string) (ended, ok bool) {
 			return true, e.obj("result").str("status") == "SUCCESS"
 		case e.str("type") == "turn.completed", e.str("type") == "turn.failed":
 			return true, e.str("type") == "turn.completed"
+		case e.str("type") == "status" && e.str("phase") == "turn_end":
+			// dsh：终稿（final）跟在后面，但成败看 reason。
+			return true, e.obj("reason").str("kind") == "completed"
 		}
 	}
 	return false, false
@@ -524,6 +535,13 @@ func eventEnding(e event) (Ending, bool) {
 		return Ending{Known: true, OK: true}, true
 	case e.str("type") == "auto_retry_end" && e["success"] == false:
 		return Ending{Known: true, Reason: "执行者重试耗尽：" + oneLine(e.str("finalError"))}, true
+	case e.str("type") == "status" && e.str("phase") == "turn_end":
+		// dsh：收尾原因在 reason 里（completed 之外是 aborted、error 等），差错报文在 reason.error。
+		r := e.obj("reason")
+		if r.str("kind") == "completed" {
+			return Ending{Known: true, OK: true}, true
+		}
+		return Ending{Known: true, Reason: "执行者收尾：" + oneLine(r.str("kind")+" "+r.obj("error").str("code")+" "+r.obj("error").str("message"))}, true
 	}
 	return Ending{}, false
 }

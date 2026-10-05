@@ -394,6 +394,24 @@ func TestTraceOpencodeLog(t *testing.T) {
 	}
 }
 
+// 真实样本（dsh --profile headless --json 的第二次实测）：一步 bash 调用、两步用量相加、
+// 终稿在 final 一行；会话 id 记裸 uuid（与 SessionOf 取到的同一份）。终稿与最后一段话同文，按 Trace 的规矩并进结果。
+func TestTraceDshLog(t *testing.T) {
+	tr, err := ReadTrace("dsh", "testdata/dsh-sample.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := Trace{Session: "1220f338-dc74-4155-ab4e-6396dfe66749",
+		Usage: Usage{Tokens: Tokens{Input: token(4605), Output: token(146), CacheRead: token(14464), CacheWrite: token(0)}},
+		Segments: []Segment{
+			{Cmds: []Command{{Cmd: "printf hi", State: CmdOK, Out: "hi"}}},
+		},
+		Ended: true, Result: "输出原样如下：\n\n```\nhi\n```"}
+	if !reflect.DeepEqual(tr, want) {
+		t.Errorf("得到 %+v", tr)
+	}
+}
+
 // 每个输出 JSON 事件的内置工具都得带解析、有样本，样本里没有认不出的事件；纯文本工具不带解析。
 func TestTraceEveryJSONTool(t *testing.T) {
 	for _, tool := range Tools {

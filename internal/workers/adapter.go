@@ -197,10 +197,10 @@ func (a *Driver) check(in Request) error {
 var builtin = map[string]*Driver{}
 
 // Tools 是内置工具的固定顺序（没有额度数据时按它挑）。
-var Tools = []string{"claude", "codex", "command-code", "opencode", "cursor", "agy", "kimi", "grok", "pi"}
+var Tools = []string{"claude", "codex", "command-code", "opencode", "cursor", "agy", "kimi", "grok", "pi", "dsh"}
 
 func init() {
-	for _, a := range []*Driver{claudeAdapter(), codexAdapter(), commandCodeAdapter(), opencodeAdapter(), cursorAdapter(), agyAdapter(), kimiAdapter(), grokAdapter(), piAdapter()} {
+	for _, a := range []*Driver{claudeAdapter(), codexAdapter(), commandCodeAdapter(), opencodeAdapter(), cursorAdapter(), agyAdapter(), kimiAdapter(), grokAdapter(), piAdapter(), dshAdapter()} {
 		builtin[a.Tool] = a
 	}
 }

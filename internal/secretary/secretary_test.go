@@ -255,6 +255,49 @@ func TestMatchPiInbox(t *testing.T) {
 	}
 }
 
+// MatchDSHInbox：pid、会话 id 前缀、profile 名三种挑法，对不上与对上多个都要说清楚。
+func TestMatchDSHInbox(t *testing.T) {
+	list := []platform.DSHInbox{
+		{PID: 71, Profile: "atrium", Sessions: []platform.DSHSession{{ID: "session-aaaa1111"}}},
+		{PID: 72, Sessions: []platform.DSHSession{{ID: "session-bbbb3333"}}},
+		{PID: 73, Sessions: []platform.DSHSession{{ID: "session-bbbb5555"}}},
+	}
+	if in, err := MatchDSHInbox(list, "71"); err != nil || in.PID != 71 {
+		t.Fatalf("按 pid 挑：%v %+v", err, in)
+	}
+	if in, err := MatchDSHInbox(list, "atrium"); err != nil || in.PID != 71 {
+		t.Fatalf("按 profile 挑：%v %+v", err, in)
+	}
+	if in, err := MatchDSHInbox(list, "session-aaaa"); err != nil || in.PID != 71 {
+		t.Fatalf("按会话 id 前缀挑：%v %+v", err, in)
+	}
+	if _, err := MatchDSHInbox(list, "9999"); err == nil || !strings.Contains(err.Error(), "没有这个 DSH 会话") {
+		t.Fatalf("对不上应报错并列出在登记的会话：%v", err)
+	}
+	if _, err := MatchDSHInbox(list, "session-bbbb"); err == nil || !strings.Contains(err.Error(), "72") || !strings.Contains(err.Error(), "73") {
+		t.Fatalf("对上多个应报出候选：%v", err)
+	}
+}
+
+// sessionInbox：Pi 与 DSH 的收件地址优先（各自的桥起 bridge 时带着它），其次 Claude Code 的。
+func TestSessionInboxDSH(t *testing.T) {
+	dsh := func(k string) string {
+		return map[string]string{dshInboxEnv: "/tmp/dsh.sock", dshTokenEnv: "t-dsh"}[k]
+	}
+	in, err := sessionInbox("linux", dsh)
+	if err != nil || in.kind != kindDSH || in.endpoint != "/tmp/dsh.sock" || in.token != "t-dsh" {
+		t.Fatalf("DSH 环境：%v %+v", err, in)
+	}
+	if in, err := sessionInbox("linux", func(k string) string {
+		return map[string]string{piInboxEnv: "/tmp/pi.sock", piTokenEnv: "t-pi"}[k]
+	}); err != nil || in.kind != kindPi {
+		t.Fatalf("Pi 仍然优先按 Pi 认：%v %+v", err, in)
+	}
+	if _, err := sessionInbox("linux", func(string) string { return "" }); err == nil || !strings.Contains(err.Error(), dshInboxEnv) {
+		t.Fatalf("不在会话里应同时提到两套变量：%v", err)
+	}
+}
+
 // sessionInbox：Pi 的收件地址优先（扩展起的 bridge 带着它），其次 Claude Code 的，都没有就报错。
 func TestSessionInbox(t *testing.T) {
 	pi := func(k string) string {

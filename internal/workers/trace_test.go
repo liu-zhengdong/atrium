@@ -375,7 +375,7 @@ func TestTraceOpencodeLog(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := Trace{
-		Usage: Usage{Tokens: Tokens{Input: token(6200), Output: token(190), CacheRead: token(0), CacheWrite: token(0)}},
+		Usage: Usage{Tokens: Tokens{Input: token(6200), Output: token(190), CacheRead: token(0), CacheWrite: token(0)}, Cost: price(0), Currency: "USD", Source: "tool"},
 		Segments: []Segment{
 			{Cmds: []Command{
 				{Cmd: "ls internal", State: CmdOK, Out: "api\napp\ncli"},

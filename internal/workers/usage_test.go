@@ -74,10 +74,10 @@ func TestCharge(t *testing.T) {
 	}{
 		{"估算", base, r, "estimate", price(.00063)},
 		{"工具优先", Usage{Tokens: base.Tokens, Cost: price(.5), Currency: "USD"}, r, "tool", price(.5)},
-		{"工具零不免费", Usage{Tokens: base.Tokens, Cost: price(0)}, r, "estimate", price(.00063)},
+		{"工具报明确零", Usage{Tokens: base.Tokens, Cost: price(0)}, r, "tool", price(0)},
 		{"缺价", base, Rules{Billing: "metered"}, "", nil},
 		{"缺token", Usage{}, r, "", nil},
-		{"零花费无单价", Usage{Cost: price(0)}, Rules{}, "", nil},
+		{"零花费无单价", Usage{Cost: price(0)}, Rules{}, "tool", price(0)},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			u := Charge(c.u, c.r)
@@ -137,6 +137,36 @@ func TestUsageAggregation(t *testing.T) {
 	p.Feed(`{"type":"result","usage":{"input_tokens":12,"output_tokens":4,"cache_read_input_tokens":0,"cache_creation_input_tokens":0},"total_cost_usd":0}`)
 	if u := p.Trace().Usage; *u.Input != 12 || u.Cost != nil {
 		t.Fatal(u)
+	}
+}
+
+// pi 与 opencode 的 cost 字段明确报的零要保留（免费渠道真报 0）；字段缺席仍当没报。
+func TestUsageExplicitZero(t *testing.T) {
+	p := NewParser("pi")
+	p.Feed(`{"type":"message_end","message":{"role":"assistant","provider":"opencode-go","model":"glm-5.3-flash","usage":{"input":10,"output":4,"cost":{"total":0}}}}`)
+	p.Feed(`{"type":"message_end","message":{"role":"assistant","provider":"opencode-go","model":"glm-5.3-flash","usage":{"input":20,"output":6,"cost":{"total":0}}}}`)
+	if u := p.Trace().Usage; u.Cost == nil || *u.Cost != 0 || u.Source != "tool" || u.Currency != "USD" || *u.Input != 30 {
+		t.Fatal("明确报的零花费要保留", u)
+	}
+	p = NewParser("pi")
+	p.Feed(`{"type":"message_end","message":{"role":"assistant","usage":{"input":10,"output":4}}}`)
+	if u := p.Trace().Usage; u.Cost != nil || u.Source != "" {
+		t.Fatal("字段缺席仍当没报", u)
+	}
+	p = NewParser("opencode")
+	p.Feed(`{"type":"step_finish","part":{"reason":"stop","cost":0,"tokens":{"input":7,"output":2,"cache":{"read":0,"write":0}}}}`)
+	if u := p.Trace().Usage; u.Cost == nil || *u.Cost != 0 || u.Source != "tool" {
+		t.Fatal("明确报的零花费要保留", u)
+	}
+	p = NewParser("opencode")
+	p.Feed(`{"type":"step_finish","part":{"reason":"stop","cost":-1,"tokens":{"input":7,"output":2}}}`)
+	if u := p.Trace().Usage; u.Cost != nil {
+		t.Fatal("负数花费仍当没报", u)
+	}
+	p = NewParser("opencode")
+	p.Feed(`{"type":"step_finish","part":{"reason":"stop","tokens":{"input":7,"output":2}}}`)
+	if u := p.Trace().Usage; u.Cost != nil {
+		t.Fatal("字段缺席仍当没报", u)
 	}
 }
 

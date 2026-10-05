@@ -78,14 +78,11 @@ type Profile struct {
 
 var checkNameRE = regexp.MustCompile(`^[a-z_]+$`)
 
-// 各层名段的正则：工具名一段；模型段用 modelSeg（见 adapter.go），models、combos 里的模型
-// 都可带方括号档位后缀（GLM-5.3[1m]），两个入口同一套规则。
-var (
-	layerToolRE  = regexp.MustCompile(`^[\w.@-]+$`)
-	layerModelRE = regexp.MustCompile(`^` + modelSeg + `$`)
-)
+// layerToolRE 是工具名一段；模型段与执行者标识共用 modelRE（见 adapter.go），
+// provider 前缀（opencode-go/deepseek-v4-pro）与方括号档位后缀（GLM-5.3[1m]）都放行。
+var layerToolRE = regexp.MustCompile(`^[\w.@-]+$`)
 
-// CheckName 校验档案名：harness/<工具>、models/<模型>、combos/<工具>+<模型>（模型取最后一段，不带 provider 前缀）。
+// CheckName 校验档案名：harness/<工具>、models/<模型>、combos/<工具>+<模型>（模型与执行者标识同一套规则）。
 func CheckName(name string) error {
 	layer, rest, ok := strings.Cut(name, "/")
 	bad := api.Usage("档案名应为 harness/<工具>、models/<模型> 或 combos/<工具>+<模型>，收到 %q", name)
@@ -98,11 +95,11 @@ func CheckName(name string) error {
 			return nil
 		}
 	case "models":
-		if layerModelRE.MatchString(rest) {
+		if modelRE.MatchString(rest) {
 			return nil
 		}
 	case "combos":
-		if tool, model, ok := strings.Cut(rest, "+"); ok && layerToolRE.MatchString(tool) && layerModelRE.MatchString(model) {
+		if tool, model, ok := strings.Cut(rest, "+"); ok && layerToolRE.MatchString(tool) && modelRE.MatchString(model) {
 			return nil
 		}
 	}
